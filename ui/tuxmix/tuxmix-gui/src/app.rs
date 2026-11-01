@@ -11244,76 +11244,67 @@ fn echo_panel(state: &TuxMix, scale: f32) -> Element<'_, Message> {
 /// an output or a click anywhere else.
 fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let gap = theme::SPACE_SM * scale;
-    let bold = iced::Font {
-        weight: iced::font::Weight::Bold,
-        ..iced::Font::DEFAULT
+    let dest = match state.assign_menu {
+        AssignMenu::Outputs(d) => d.min(ASSIGN_DESTS.len() - 1),
+        AssignMenu::Destinations => 0,
+        AssignMenu::Closed => 0,
     };
-    let entry = |label: String, strong: bool, message: Message| -> Element<'static, Message> {
-        iced::widget::button(
-            text(label)
-                .size(theme::TEXT_MD * scale)
-                .font(if strong { bold } else { iced::Font::DEFAULT }),
-        )
-        .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-        .style(theme::ghost_button)
-        .on_press(message)
-        .into()
+    let caption = |label: &'static str| {
+        text(label)
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * scale)
     };
+    let field = |p: iced::widget::PickList<'static, String, Vec<String>, String, Message>| {
+        p.style(theme::pick_list)
+            .menu_style(theme::menu)
+            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+            .text_size(theme::TEXT_MD * scale)
+            .width(Length::Fill)
+    };
+
+    let dest_opts: Vec<String> = ASSIGN_DESTS.iter().map(|s| s.to_string()).collect();
+    let dest_sel = ASSIGN_DESTS[dest].to_string();
+    let dest_list = dest_opts.clone();
+    let dest_pick = field(pick_list(dest_opts, Some(dest_sel), move |label| {
+        let idx = dest_list.iter().position(|l| *l == label).unwrap_or(0);
+        Message::AssignDestinations(idx)
+    }));
 
     let labels = state.display_pair_labels();
     let order = state.device.output_display_order();
-    let mut cards = row![].spacing(gap).align_y(iced::Alignment::Start);
-
-    // Second level first: it sits to the left of the destination list.
-    if let AssignMenu::Outputs(dest) = state.assign_menu {
-        let current = state.assign.get(dest).copied().flatten();
-        let mut col = column![].spacing(0.0);
-        col = col.push(entry("None".to_string(), current.is_none(), Message::AssignOutput(dest, None)));
-        for (display, label) in labels.iter().enumerate() {
-            let internal = order.get(display).copied().unwrap_or(display);
-            col = col.push(entry(
-                label.clone(),
-                current == Some(internal),
-                Message::AssignOutput(dest, Some(internal)),
-            ));
+    let mut out_opts = vec!["None".to_string()];
+    out_opts.extend(labels.iter().cloned());
+    let current = state.assign.get(dest).copied().flatten();
+    let selected = current
+        .and_then(|pair| order.iter().position(|p| *p == pair))
+        .and_then(|i| labels.get(i).cloned())
+        .unwrap_or_else(|| "None".to_string());
+    let out_list = out_opts.clone();
+    let order_list = order.clone();
+    let out_pick = field(pick_list(out_opts, Some(selected), move |label| {
+        if label == "None" {
+            Message::AssignOutput(dest, None)
+        } else {
+            let idx = out_list.iter().position(|l| *l == label).unwrap_or(0);
+            Message::AssignOutput(dest, order_list.get(idx.saturating_sub(1)).copied())
         }
-        cards = cards.push(opaque(
-            container(col)
-                .padding(theme::SPACE_SM * scale)
-                .style(theme::dialog),
-        ));
-    }
+    }));
 
-    // First level: the destinations, each showing what it holds.
-    let mut col = column![].spacing(0.0);
-    for (dest, name) in ASSIGN_DESTS.iter().enumerate() {
-        // Hovering opens that destination's output list, so the whole menu
-        // reads at a glance; a click fixes it open until a leaf is chosen.
-        // The destination whose list is showing is highlighted, so the
-        // second level clearly belongs to it.
-        let active = matches!(state.assign_menu, AssignMenu::Outputs(d) if d == dest);
-        col = col.push(
-            iced::widget::mouse_area(
-                iced::widget::button(text(*name).size(theme::TEXT_MD * scale))
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                    .style(theme::toggle_button(active, theme::ACCENT))
-                    .on_press(Message::AssignDestinations(dest)),
-            )
-            .on_enter(Message::AssignDestinations(dest)),
-        );
-    }
-    cards = cards.push(opaque(
-        container(col)
-            .padding(theme::SPACE_SM * scale)
-            .style(theme::dialog),
-    ));
+    let body = column![
+        row![caption("Destination"), dest_pick]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        row![caption("Output"), out_pick]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fixed(240.0 * scale));
 
-    // The cards open immediately left of the assign button and over the
-    // Control Room channels, which they obscure rather than displace.  Each
-    // card is opaque on its own, so a press on either level reaches the
-    // menu entries; the click catcher is a sibling *behind* them, so only
-    // a press on the empty layer closes the menu.
+    // The panel opens immediately left of the assign button and over the
+    // Control Room channels.  The two fields are the toolkit's standard
+    // pick-list dropdowns, so their menus own their clicks; the sibling
+    // catcher below the panel closes the panel on any click outside it.
     stack(vec![
         mouse_area(
             iced::widget::Space::new()
@@ -11322,20 +11313,22 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
         )
         .on_press(Message::CloseAssign)
         .into(),
-        container(cards)
-            .align_x(iced::Alignment::End)
-            .align_y(iced::Alignment::Start)
-            .padding(iced::Padding {
-                top: 0.0,
-                // Inside the panel's own padding, the assign column's
-                // left edge.
-                right: theme::SPACE_SM * scale + CONTROL_ROOM_W * scale + gap,
-                bottom: 0.0,
-                left: 0.0,
-            })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
+        container(opaque(
+            container(body)
+                .padding(theme::SPACE_MD * scale)
+                .style(theme::dialog),
+        ))
+        .align_x(iced::Alignment::End)
+        .align_y(iced::Alignment::Start)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: theme::SPACE_SM * scale + CONTROL_ROOM_W * scale + theme::SPACE_SM * scale,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into(),
     ])
     .width(Length::Fill)
     .height(Length::Fill)
