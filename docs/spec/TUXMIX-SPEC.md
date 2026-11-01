@@ -616,17 +616,8 @@ Mute FX are stored in the device scene.
 
 ### 11.1 Assign
 
-`assign` opens a panel with two dropdowns:
-
-- **Destination** — Main Out, Main Out B, Phones 1..4, Cue/PFL to.
-- **Output** — None, then every hardware output in display order. The
-  currently assigned output is selected; None clears the destination.
-
-The destination dropdown shows which destination the output selection will
-apply to. Choosing an output applies it and closes the panel; choosing another
-destination keeps the panel open and updates the output list. The panel opens
-immediately left of the `assign` button and covers the section's channels
-while it is open. Clicking outside the panel or the `assign` button closes it.
+`assign` opens a two-level menu. The first level lists the monitoring
+destinations, each with the output it currently holds:
 
 | Destination | Device |
 |---|---|
@@ -634,6 +625,14 @@ while it is open. Clicking outside the panel or the `assign` button closes it.
 | Main Out B | the same bit, plus control-room state word `0x3d00 = 3` |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; the unit receives nothing |
+
+The menu opens immediately left of the `assign` button and covers the
+section's channels while it is open.
+
+Hovering or clicking a destination opens the second level beside it: every
+hardware output in order, `None` at the top, and the currently assigned output
+in bold. Choosing `None` clears that destination. The list closes when an
+output is chosen or a click lands outside it.
 
 The section carries its own `control room` title in the same line as the
 HARDWARE OUTPUTS label. The title starts at the section's leftmost channel,
