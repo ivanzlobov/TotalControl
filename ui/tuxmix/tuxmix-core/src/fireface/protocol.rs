@@ -593,6 +593,21 @@ mod tests {
     }
 
     #[test]
+    fn ucx_output_state_map_inverts_the_pair_map() {
+        for pair in 0..9 {
+            let dsp = ucx::output_pair_dsp(pair).unwrap();
+            for side in 0..2 {
+                let addr = ucx::channel_reg(ucx::output_channel(dsp + side), 0);
+                assert_eq!(
+                    ucx::output_index_from_state(addr),
+                    Some(pair * 2 + side),
+                    "pair {pair} side {side}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn meter_packet_parses() {
         let mut b = [0u8; 244];
         b[0..8].copy_from_slice(&(512u64 * 100 * 100).to_le_bytes());

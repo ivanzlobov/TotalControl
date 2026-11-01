@@ -4812,6 +4812,9 @@ mod tests {
     fn ucx_state_volume_addresses_map_to_phones_first_outputs() {
         assert_eq!(ucx::output_index_from_state(0x1800), Some(0));
         assert_eq!(ucx::output_index_from_state(0x1900), Some(1));
+        // Measured with the front encoder on L.5/L.6 (the AN5/6 pair).
+        assert_eq!(ucx::output_index_from_state(0x1600), Some(6));
+        assert_eq!(ucx::output_index_from_state(0x1700), Some(7));
         assert_eq!(ucx::output_index_from_state(0x1200), Some(2));
         assert_eq!(ucx::output_index_from_state(0x2300), Some(17));
         assert_eq!(ucx::output_index_from_state(0x1802), None);

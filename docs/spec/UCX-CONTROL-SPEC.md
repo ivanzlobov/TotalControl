@@ -146,8 +146,8 @@ stream live state changes.
 | `0x12a0`, `0x22a0` | selected-submix fader record |
 
 Input gains are reported when the physical encoder moves. Output-volume state
-is mapped to the Phones-first output order. The physical Phones encoder emits
-`0x1800` and `0x1900`.
+is mapped to the Phones-first output order. The encoder reports the `NN00` of
+the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
 
 Front-panel 48 V, Inst and Level changes write `NN08`/`NN09` on both sides of
 a linked pair and emit no state word.
@@ -421,8 +421,10 @@ Stereo, 48 V, Inst, AutoSet and Phase are per-channel states. Link state is
 | Mute | `NN02` | 0/1 |
 | Stereo mode | `NN04` | 0 mono / 1 stereo |
 
-The front-panel VOLUME encoder writes the assigned Main pair's `NN00`
-registers. Reassigning Main moves the encoder to the new pair.
+The front-panel VOLUME encoder writes the `NN00` registers of the output
+selected on the unit's display (`L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8`). The
+selection is independent of the Control Room Main and Phones assignments;
+`PH` always addresses channels 7/8.
 
 Balance writes the same value to both channels of a linked pair. It is
 independent of the pair volume.

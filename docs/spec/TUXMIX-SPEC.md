@@ -668,7 +668,8 @@ happens when assigning Main Out B or the Phones." Its `Names` view option is
 what lets the original name be shown again; TuxMix keeps the destination name
 while the channel is in the Control Room.
 
-Whether the front-panel volume knob follows a reassigned Main is unmeasured.
+The front-panel volume knob follows the output selected on the unit's display,
+not the Control Room Main assignment; `PH` always addresses channels 7/8.
 
 ## 12. Latency chain
 
