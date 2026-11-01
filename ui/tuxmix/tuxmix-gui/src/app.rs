@@ -5897,6 +5897,17 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             if dest >= state.assign.len() {
                 return Task::none();
             }
+            // A hardware output can only sit in one monitoring destination.
+            // Move it rather than showing the same channel in two Control
+            // Room slots; this is also what lets `None` return it to the
+            // Hardware Outputs row.
+            if let Some(pair) = pair {
+                for (i, slot) in state.assign.iter_mut().enumerate() {
+                    if i != dest && *slot == Some(pair) {
+                        *slot = None;
+                    }
+                }
+            }
             state.assign[dest] = pair;
             let result = match dest {
                 0 => state.device.set_main_out(pair),
@@ -11296,25 +11307,37 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
     );
 
     // The cards open immediately left of the assign button and over the
-    // Control Room channels, which they obscure rather than displace.
-    opaque(
+    // Control Room channels, which they obscure rather than displace.  The
+    // press catcher is a sibling *behind* the opaque cards, so a press on a
+    // menu entry reaches the entry; only a press on the empty layer closes
+    // the menu.  The cards are opaque as one row, including the gap between
+    // them, so moving between the two levels never hits the catcher.
+    stack(vec![
         mouse_area(
-            container(opaque(container(cards)))
-                .align_x(iced::Alignment::End)
-                .align_y(iced::Alignment::Start)
-                .padding(iced::Padding {
-                    top: 0.0,
-                    // Inside the panel's own padding, the assign column's
-                    // left edge.
-                    right: theme::SPACE_SM * scale + CONTROL_ROOM_W * scale + gap,
-                    bottom: 0.0,
-                    left: 0.0,
-                })
+            iced::widget::Space::new()
                 .width(Length::Fill)
                 .height(Length::Fill),
         )
-        .on_press(Message::CloseAssign),
-    )
+        .on_press(Message::CloseAssign)
+        .into(),
+        container(opaque(cards))
+            .align_x(iced::Alignment::End)
+            .align_y(iced::Alignment::Start)
+            .padding(iced::Padding {
+                top: 0.0,
+                // Inside the panel's own padding, the assign column's
+                // left edge.
+                right: theme::SPACE_SM * scale + CONTROL_ROOM_W * scale + gap,
+                bottom: 0.0,
+                left: 0.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Width of the Control Room section: its button column plus one strip per
@@ -12717,6 +12740,25 @@ mod tests {
         assert_eq!(state.assign_menu, AssignMenu::Destinations);
         let _ = update(&mut state, Message::CloseAssign);
         assert_eq!(state.assign_menu, AssignMenu::Closed);
+    }
+
+    #[test]
+    fn assign_output_moves_between_destinations_and_none_returns_it() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::AssignOutput(2, Some(3)));
+        assert_eq!(state.assign[2], Some(3));
+        // Moving the same output to Main Out B clears the Phones 1 slot.
+        let _ = update(&mut state, Message::AssignOutput(1, Some(3)));
+        assert_eq!(state.assign[1], Some(3));
+        assert_eq!(state.assign[2], None);
+        // None clears the slot, so the pair is no longer hidden from the
+        // Hardware Outputs row.
+        let _ = update(&mut state, Message::AssignOutput(1, None));
+        assert_eq!(state.assign[1], None);
+        assert!(
+            !state.assign.iter().flatten().any(|p| *p == 3),
+            "the pair must return to the Hardware Outputs row"
+        );
     }
 
     #[test]
