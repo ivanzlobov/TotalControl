@@ -11278,11 +11278,11 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
                 Message::AssignOutput(dest, Some(internal)),
             ));
         }
-        cards = cards.push(
+        cards = cards.push(opaque(
             container(col)
                 .padding(theme::SPACE_SM * scale)
                 .style(theme::dialog),
-        );
+        ));
     }
 
     // First level: the destinations, each showing what it holds.
@@ -11290,28 +11290,30 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
     for (dest, name) in ASSIGN_DESTS.iter().enumerate() {
         // Hovering opens that destination's output list, so the whole menu
         // reads at a glance; a click fixes it open until a leaf is chosen.
+        // The destination whose list is showing is highlighted, so the
+        // second level clearly belongs to it.
+        let active = matches!(state.assign_menu, AssignMenu::Outputs(d) if d == dest);
         col = col.push(
             iced::widget::mouse_area(
                 iced::widget::button(text(*name).size(theme::TEXT_MD * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                    .style(theme::ghost_button)
+                    .style(theme::toggle_button(active, theme::ACCENT))
                     .on_press(Message::AssignDestinations(dest)),
             )
             .on_enter(Message::AssignDestinations(dest)),
         );
     }
-    cards = cards.push(
+    cards = cards.push(opaque(
         container(col)
             .padding(theme::SPACE_SM * scale)
             .style(theme::dialog),
-    );
+    ));
 
     // The cards open immediately left of the assign button and over the
-    // Control Room channels, which they obscure rather than displace.  The
-    // press catcher is a sibling *behind* the opaque cards, so a press on a
-    // menu entry reaches the entry; only a press on the empty layer closes
-    // the menu.  The cards are opaque as one row, including the gap between
-    // them, so moving between the two levels never hits the catcher.
+    // Control Room channels, which they obscure rather than displace.  Each
+    // card is opaque on its own, so a press on either level reaches the
+    // menu entries; the click catcher is a sibling *behind* them, so only
+    // a press on the empty layer closes the menu.
     stack(vec![
         mouse_area(
             iced::widget::Space::new()
@@ -11320,7 +11322,7 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
         )
         .on_press(Message::CloseAssign)
         .into(),
-        container(opaque(cards))
+        container(cards)
             .align_x(iced::Alignment::End)
             .align_y(iced::Alignment::Start)
             .padding(iced::Padding {
