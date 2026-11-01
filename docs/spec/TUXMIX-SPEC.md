@@ -698,15 +698,6 @@ With the default 48-frame URB this gives 336 frames at 48 kHz and 576 frames
 at 96 kHz. The old 192-frame floor was smaller than the 204-frame output
 lead and underran at 96 and below.
 
-For 44.1 kHz:
-
-| Quantum | ALSA buffer | USB queue | Endpoint | Total |
-|---|---|---|---|---|
-| 48 | 4.4 ms | 2.2 ms | 1.1 ms | 7.6 ms |
-| 64 | 4.4 ms | 2.2 ms | 1.1 ms | 7.6 ms |
-| 96 | 4.4 ms | 2.2 ms | 1.1 ms | 7.6 ms |
-| 128 | 5.8 ms | 2.2 ms | 1.1 ms | 9.1 ms |
-
 On the UCX each URB carries up to eight 1 ms ISO packets of
 `ceil(rate / 8000)` frames. The queue is `nurbs + 1` URBs and the unit adds a
 60-frame output lead. With the default `urb_frames = 48` and `nurbs = 2`:
@@ -717,14 +708,27 @@ On the UCX each URB carries up to eight 1 ms ISO packets of
 | 96 kHz | 96 | 288 (3.0 ms) | 60 (0.63 ms) | 348 frames (3.63 ms) |
 | 192 kHz | 192 | 576 (3.0 ms) | 60 (0.31 ms) | 636 frames (3.31 ms) |
 
-The idle ring estimate is the formula above. The UC uses
+The Settings **Latency** line shows a round-trip estimate for the UCX:
+
+```text
+RTL ≈ USB queue + 60-frame lead + converter + graph period
+USB queue = (nurbs + 1) × frames_per_urb
+converter = 13 frames at 1x/2x, 12 at 4x
+```
+
+The estimate adds the converter and the graph period to the device side in
+the table. At 128 samples / 44.1 kHz it is 345 frames (7.8 ms). Measured
+loopback values were 314–334 frames (7.1–7.6 ms); the estimate is
+conservative by about 1.2 ms.
+
+The line shows the estimate and its four terms: USB queue, device lead,
+converter and graph period. The **Buffer size** picker's quantum is the
+graph period. The UC line remains a one-way output budget: ring, USB queue,
+endpoint and converter.
+
+The idle ring estimate is the buffer-sizing formula above. The UC uses
 `max(2 × quantum, ceil((nurbs + 2) × frames_per_urb / quantum) × quantum)`;
 the UCX also includes the output lead and its two-URB margin.
-
-The Settings **Latency** line shows the card ring buffer and, on the Fireface
-models, the USB queue and device lead (the UC reports the queued URBs as an
-endpoint; the UCX adds the 60-frame lead). The **Buffer size** picker shows
-the graph quantum.
 
 The RME Pro Audio nodes use polled scheduling, a graph-owned quantum and at
 least two ALSA periods. TuxMix's graph-quantum override reaches the card at

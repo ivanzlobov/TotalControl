@@ -109,6 +109,86 @@ probe. Its class driver has UAC feedback and no 60-frame vendor lead. The
 MR18 descriptor exposes a sync endpoint, so its feedback is explicit rather
 than implicit.
 
+### RME reported latency
+
+RME’s driver fields are per direction and count one host buffer. They are not
+the same budget as the Linux line above. For the UCX the manual gives:
+
+| Term | 1x / 2x | 4x |
+|---|---:|---:|
+| AD converter | 14 samples | 11 samples |
+| DA converter | 7 samples | 7 samples |
+| TotalMix FX | ~3 samples | ~3 samples |
+| Core Audio safety offset | 24 samples, USB | 24 samples |
+| Playback safety buffer | 32 samples, Windows USB; 32 macOS FireWire | same |
+
+```text
+Windows ASIO USB:
+  record   = buffer + AD
+  playback = buffer + DA + 32
+
+macOS Core Audio USB:
+  record   = buffer + AD + 24
+  playback = buffer + DA + 24
+  manual total = buffer + AD/DA + 2 × 24 + safety buffer
+```
+
+At 128 frames / 44.1 kHz the RME fields are 3.76 ms record and 3.61 ms
+playback; the manual’s one-buffer total is 4.47 ms. The TuxMix line for the
+same nominal buffer is 10.7 ms one-way output because it counts the full
+two-period ALSA ring (256 frames), the queued URBs (144 frames) and the
+60-frame device lead. The resulting ~3× ratio is a comparison to that
+conservative one-way budget, not a measured hardware ratio. Compare measured
+loopback RTL, or compare the same terms on both sides, before drawing a
+latency conclusion.
+
+A Linux PipeWire loopback at 128 / 44.1 kHz measured **314–334 frames
+(7.12–7.57 ms)** from the sink monitor to the source capture, depending on
+graph state; the clean initial captures were 314 frames. The Windows ASIO
+loopback measured **330 frames (7.48 ms)**. The real Linux RTL is therefore
+close to Windows at the same nominal buffer; the 10.7 ms one-way line and the
+21.4 ms round-trip model are worst-case budgets, not measured RTL.
+
+A Linux sweep at 44.1/48/96 kHz shows the delay is approximately
+`device path + quantum`, not `2 × quantum + constant`:
+
+```text
+RTL ≈ 24 × ceil(rate / 8000) + 60 + 13 + quantum
+device path ≈ 217 frames at 44.1/48 kHz
+            ≈ 361 frames at 96 kHz
+```
+
+The measured values are in the latency work note; the residual from that
+simple model reaches about 50 frames (1.2 ms), so a table and range are more
+reliable than a single formula.
+
+An automated Windows ASIO loopback in the VM measured 330 frames (7.48 ms)
+at 128 / 44.1 kHz against the driver-reported 329 frames (7.46 ms), so the
+RME reported round trip is accurate within one frame.
+
+The reported sweep at 44.1 kHz is exactly linear:
+
+| Buffer | Reported input | Reported output | Round trip | Time |
+|---:|---:|---:|---:|---:|
+| 48 | 76 | 93 | 169 | 3.83 ms |
+| 64 | 92 | 109 | 201 | 4.56 ms |
+| 96 | 124 | 141 | 265 | 6.01 ms |
+| 128 | 156 | 173 | 329 | 7.46 ms |
+| 256 | 284 | 301 | 585 | 13.27 ms |
+| 512 | 540 | 557 | 1097 | 24.88 ms |
+| 1024 | 1052 | 1069 | 2121 | 48.10 ms |
+
+```text
+reported input  = buffer + 28 frames
+reported output = buffer + 45 frames
+reported round trip = 2 × buffer + 73 frames
+```
+
+The macOS formula gives `2 × buffer + 69` frames. The per-direction split
+differs, but the round trip is within four frames. The physical loopback at
+1024 measured 2118 frames against 2121 reported; the VM's ASIO input callback
+can drop buffers, so the physical point is a few frames low.
+
 ## 4. Where the latency is spent
 
 1. **Host ring** — usually the largest term and controlled by the graph

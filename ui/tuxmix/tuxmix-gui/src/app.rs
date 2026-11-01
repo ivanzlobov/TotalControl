@@ -4522,10 +4522,11 @@ fn select_strip(state: &mut TuxMix, cid: ChannelId) {
 }
 
 pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
-    // The Assign cards close as soon as the user does anything else: a
-    // click outside them, a strip, a fader, a sidebar control — all arrive
-    // here as some other message. Periodic messages are exempt so the menu
-    // does not vanish on its own.
+    // The Assign cards close on an explicit close or an actual click
+    // elsewhere.  Hover messages, the periodic engine poll and the collapse
+    // animation tick must not close them: moving from the assign button to
+    // the card crosses the strip row and fires `StripHovered`, which used to
+    // collapse the menu before the pointer reached it.
     if !matches!(state.assign_menu, AssignMenu::Closed)
         && !matches!(
             message,
@@ -4535,6 +4536,14 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 | Message::CloseAssign
                 | Message::Tick
                 | Message::ModifiersChanged(_)
+                | Message::StripHovered(_)
+                | Message::CollapseTick
+                | Message::EnginePoll
+                | Message::EngineRead(..)
+                | Message::OscLog(_)
+                | Message::OscMeters
+                | Message::WindowResized(_)
+                | Message::WindowSize(..)
         )
     {
         state.assign_menu = AssignMenu::Closed;
@@ -7653,57 +7662,58 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
     .into()
 }
 
-/// The latency line.  While the card plays, it uses the card's actual ring
-/// buffer and the UC's USB queue from the module parameters.  When idle, it
-/// estimates the same chain from the graph quantum: one quantum is one ALSA
-/// period, and the card runs two periods.
+/// The latency line.  While the card plays, it uses the card's actual period
+/// and the USB queue from the module parameters.  The UCX line is a
+/// round-trip estimate; the UC line is a one-way output budget.
 fn latency_readout(state: &TuxMix, clock: PwClock) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let line = |s: String, c: Color| text(s).color(c).size(theme::TEXT_XS * scale);
     match state.card_stream {
         Some(card) => {
-            let mut col = column![line(
-                format!(
-                    "{:.1} ms buffer · {} samples at {}",
-                    card.buffer_ms(),
-                    card.buffer,
-                    rate_label(card.rate)
-                ),
-                theme::TEXT_PRIMARY,
-            )]
-            .spacing(theme::SPACE_TIGHT * scale);
+            let mut col = column![].spacing(theme::SPACE_TIGHT * scale);
             if state.device.is_uc_model() {
                 if let Some(queue) = state.driver_queue {
                     let (usb, endpoint) = uc_usb_frames(card.rate, queue);
-                    let converter = converter_frames(card.rate);
-                    let total = card.buffer + usb + endpoint + converter;
+                    let chain = LatencyChain {
+                        ring: card.buffer,
+                        period: card.period,
+                        usb,
+                        device: endpoint,
+                        converter: converter_frames(card.rate),
+                        rate: card.rate,
+                        device_label: "endpoint",
+                    };
+                    col = col.push(line(chain.summary(), theme::TEXT_PRIMARY));
+                    col = col.push(line(chain.breakdown(), theme::TEXT_SEC));
+                } else {
                     col = col.push(line(
-                        format!(
-                            "{:.1} ms USB + {:.1} ms endpoint + {:.1} ms converter ≈ {:.1} ms total",
-                            frames_ms(usb, card.rate),
-                            frames_ms(endpoint, card.rate),
-                            frames_ms(converter, card.rate),
-                            frames_ms(total, card.rate)
-                        ),
-                        theme::TEXT_SEC,
+                        ring_text(card.buffer, card.period, card.rate),
+                        theme::TEXT_PRIMARY,
                     ));
                 }
             } else if state.device.is_ucx_model() {
                 if let Some(queue) = state.driver_queue {
                     let (usb, lead) = ucx_usb_frames(card.rate, queue);
-                    let converter = converter_frames(card.rate);
-                    let total = card.buffer + usb + lead + converter;
+                    let rtl = RtlEstimate {
+                        usb,
+                        lead,
+                        converter: converter_frames(card.rate),
+                        graph: card.period,
+                        rate: card.rate,
+                    };
+                    col = col.push(line(rtl.summary(), theme::TEXT_PRIMARY));
+                    col = col.push(line(rtl.breakdown(), theme::TEXT_SEC));
+                } else {
                     col = col.push(line(
-                        format!(
-                            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter ≈ {:.1} ms total",
-                            frames_ms(usb, card.rate),
-                            frames_ms(lead, card.rate),
-                            frames_ms(converter, card.rate),
-                            frames_ms(total, card.rate)
-                        ),
-                        theme::TEXT_SEC,
+                        ring_text(card.buffer, card.period, card.rate),
+                        theme::TEXT_PRIMARY,
                     ));
                 }
+            } else {
+                col = col.push(line(
+                    ring_text(card.buffer, card.period, card.rate),
+                    theme::TEXT_PRIMARY,
+                ));
             }
             // Only when the user asked for a size and the card ignores it
             // (a fixed period in a WirePlumber rule); "Auto" follows clients.
@@ -7717,87 +7727,159 @@ fn latency_readout(state: &TuxMix, clock: PwClock) -> Element<'_, Message> {
         }
         None => {
             let rate = clock.effective_rate();
-            let quantum = clock.effective_quantum();
+            let quantum = clock.effective_quantum().max(1);
+            let minimum = state
+                .driver_queue
+                .map(|queue| {
+                    if state.device.is_uc_model() {
+                        uc_min_buffer_frames(rate, queue)
+                    } else if state.device.is_ucx_model() {
+                        ucx_min_buffer_frames(rate, queue)
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+            let periods = if minimum > 0 {
+                minimum.div_ceil(quantum).max(2)
+            } else {
+                2
+            };
+            let buffer = quantum.saturating_mul(periods);
             if state.device.is_uc_model() {
-                let mut periods = 2;
-                if let Some(queue) = state.driver_queue {
-                    let minimum = uc_min_buffer_frames(rate, queue);
-                    periods = minimum.div_ceil(quantum.max(1)).max(2);
-                }
-                let buffer = quantum.max(1).saturating_mul(periods);
-                let mut col = column![line(
-                    format!(
-                        "{:.1} ms buffer ({} × {}) at {}",
-                        frames_ms(buffer, rate),
-                        periods,
-                        quantum,
-                        rate_label(rate)
-                    ),
-                    theme::TEXT_PRIMARY,
-                )]
-                .spacing(theme::SPACE_TIGHT * scale);
                 if let Some(queue) = state.driver_queue {
                     let (usb, endpoint) = uc_usb_frames(rate, queue);
-                    let converter = converter_frames(rate);
-                    let total = buffer + usb + endpoint + converter;
-                    col = col.push(line(
-                        format!(
-                            "{:.1} ms USB + {:.1} ms endpoint + {:.1} ms converter ≈ {:.1} ms total",
-                            frames_ms(usb, rate),
-                            frames_ms(endpoint, rate),
-                            frames_ms(converter, rate),
-                            frames_ms(total, rate)
-                        ),
-                        theme::TEXT_SEC,
-                    ));
+                    let chain = LatencyChain {
+                        ring: buffer,
+                        period: quantum,
+                        usb,
+                        device: endpoint,
+                        converter: converter_frames(rate),
+                        rate,
+                        device_label: "endpoint",
+                    };
+                    return column![
+                        line(chain.summary(), theme::TEXT_PRIMARY),
+                        line(chain.breakdown(), theme::TEXT_SEC),
+                    ]
+                    .spacing(theme::SPACE_TIGHT * scale)
+                    .into();
                 }
-                col.into()
-            } else if state.device.is_ucx_model() {
-                let mut periods = 2;
-                if let Some(queue) = state.driver_queue {
-                    let minimum = ucx_min_buffer_frames(rate, queue);
-                    periods = minimum.div_ceil(quantum.max(1)).max(2);
-                }
-                let buffer = quantum.max(1).saturating_mul(periods);
-                let mut col = column![line(
-                    format!(
-                        "{:.1} ms buffer ({} × {}) at {}",
-                        frames_ms(buffer, rate),
-                        periods,
-                        quantum,
-                        rate_label(rate)
-                    ),
-                    theme::TEXT_PRIMARY,
-                )]
-                .spacing(theme::SPACE_TIGHT * scale);
+                return line(ring_text(buffer, quantum, rate), theme::TEXT_PRIMARY).into();
+            }
+            if state.device.is_ucx_model() {
                 if let Some(queue) = state.driver_queue {
                     let (usb, lead) = ucx_usb_frames(rate, queue);
-                    let converter = converter_frames(rate);
-                    let total = buffer + usb + lead + converter;
-                    col = col.push(line(
-                        format!(
-                            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter ≈ {:.1} ms total",
-                            frames_ms(usb, rate),
-                            frames_ms(lead, rate),
-                            frames_ms(converter, rate),
-                            frames_ms(total, rate)
-                        ),
-                        theme::TEXT_SEC,
-                    ));
+                    let rtl = RtlEstimate {
+                        usb,
+                        lead,
+                        converter: converter_frames(rate),
+                        graph: quantum,
+                        rate,
+                    };
+                    return column![
+                        line(rtl.summary(), theme::TEXT_PRIMARY),
+                        line(rtl.breakdown(), theme::TEXT_SEC),
+                    ]
+                    .spacing(theme::SPACE_TIGHT * scale)
+                    .into();
                 }
-                col.into()
-            } else {
-                line(
-                    format!(
-                        "{:.1} ms per buffer at {}",
-                        clock.latency_ms(),
-                        rate_label(rate)
-                    ),
-                    theme::TEXT_PRIMARY,
-                )
-                .into()
+                return line(ring_text(buffer, quantum, rate), theme::TEXT_PRIMARY).into();
             }
+            line(
+                format!("{:.1} ms per buffer", clock.latency_ms()),
+                theme::TEXT_PRIMARY,
+            )
+            .into()
         }
+    }
+}
+
+/// One-way output latency: ALSA ring, USB queue, device stage and output
+/// converter.  The ring total is the period count times the selected
+/// quantum, so a 128-sample quantum is a 256-frame ring at two periods.
+struct LatencyChain {
+    ring: u32,
+    period: u32,
+    usb: u32,
+    device: u32,
+    converter: u32,
+    rate: u32,
+    device_label: &'static str,
+}
+
+impl LatencyChain {
+    fn total(&self) -> u32 {
+        self.ring + self.usb + self.device + self.converter
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "{:.1} ms one-way output latency",
+            frames_ms(self.total(), self.rate)
+        )
+    }
+
+    fn breakdown(&self) -> String {
+        format!(
+            "{} + {:.1} ms USB + {:.1} ms {} + {:.1} ms converter",
+            ring_text(self.ring, self.period, self.rate),
+            frames_ms(self.usb, self.rate),
+            frames_ms(self.device, self.rate),
+            self.device_label,
+            frames_ms(self.converter, self.rate)
+        )
+    }
+}
+
+/// Round-trip estimate for the UCX: USB queue, device lead, converter and one
+/// graph period.  The measured values are in the latency work note; this
+/// estimate is conservative by about 1.2 ms.
+struct RtlEstimate {
+    usb: u32,
+    lead: u32,
+    converter: u32,
+    graph: u32,
+    rate: u32,
+}
+
+impl RtlEstimate {
+    fn total(&self) -> u32 {
+        self.usb + self.lead + self.converter + self.graph
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "{:.1} ms RTL estimate (±1.2 ms)",
+            frames_ms(self.total(), self.rate)
+        )
+    }
+
+    fn breakdown(&self) -> String {
+        format!(
+            "{:.1} ms USB + {:.1} ms device lead + {:.1} ms converter + {:.1} ms graph",
+            frames_ms(self.usb, self.rate),
+            frames_ms(self.lead, self.rate),
+            frames_ms(self.converter, self.rate),
+            frames_ms(self.graph, self.rate)
+        )
+    }
+}
+
+/// The ALSA ring as time and frames, with the period composition that
+/// explains a total larger than the selected quantum.
+fn ring_text(frames: u32, period: u32, rate: u32) -> String {
+    let periods = if period > 0 { frames / period } else { 0 };
+    if periods >= 2 && periods * period == frames {
+        format!(
+            "{:.1} ms ring ({} frames = {} × {})",
+            frames_ms(frames, rate),
+            frames,
+            periods,
+            period
+        )
+    } else {
+        format!("{:.1} ms ring ({} frames)", frames_ms(frames, rate), frames)
     }
 }
 
@@ -11445,8 +11527,8 @@ fn control_room_panel(
     // The Assign button opens the menu card beside the panel.
     let assign = iced::widget::button(
         row![
-            text("assign").size(theme::TEXT_XS * scale),
-            text("\u{25be}").size(theme::TEXT_XS * scale),
+            text("assign").size(theme::TEXT_MD * scale),
+            text("\u{25be}").size(theme::TEXT_MD * scale),
         ]
         .spacing(theme::SPACE_SM * scale),
     )
@@ -12349,9 +12431,9 @@ mod tests {
         apply_startup_sync, prefs_of, mute_armed, power_sum_output_meters,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
-        ucx_urb_frames, ucx_usb_frames, update, zoom, ChannelId, DeviceHandle,
+        ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
-        ZOOM_STEP,
+        ZOOM_STEP, AssignMenu,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
     };
@@ -12412,6 +12494,23 @@ mod tests {
         assert_eq!(converter_frames(48_000), 13);
         assert_eq!(converter_frames(96_000), 13);
         assert_eq!(converter_frames(192_000), 12);
+    }
+
+    #[test]
+    fn ucx_latency_line_is_an_rtl_estimate() {
+        let rtl = RtlEstimate {
+            usb: 144,
+            lead: 60,
+            converter: 13,
+            graph: 128,
+            rate: 44_100,
+        };
+        assert_eq!(rtl.total(), 345);
+        assert_eq!(rtl.summary(), "7.8 ms RTL estimate (±1.2 ms)");
+        assert_eq!(
+            rtl.breakdown(),
+            "3.3 ms USB + 1.4 ms device lead + 0.3 ms converter + 2.9 ms graph"
+        );
     }
 
     #[test]
@@ -12598,6 +12697,26 @@ mod tests {
         for level in &out[2..] {
             assert_eq!(*level, 0.0);
         }
+    }
+
+    #[test]
+    fn assign_menu_survives_hover_and_collapse_ticks() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::ToggleAssign);
+        assert_eq!(state.assign_menu, AssignMenu::Destinations);
+        let _ = update(
+            &mut state,
+            Message::StripHovered(Some(ChannelId::Input(0))),
+        );
+        assert_eq!(
+            state.assign_menu,
+            AssignMenu::Destinations,
+            "hovering the strip row must not close the menu"
+        );
+        let _ = update(&mut state, Message::CollapseTick);
+        assert_eq!(state.assign_menu, AssignMenu::Destinations);
+        let _ = update(&mut state, Message::CloseAssign);
+        assert_eq!(state.assign_menu, AssignMenu::Closed);
     }
 
     #[test]
