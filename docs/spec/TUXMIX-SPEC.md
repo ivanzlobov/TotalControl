@@ -359,12 +359,18 @@ pairs, `0x1808/0x1908` for Phones). Where one control drives a group, it
 writes each channel's own register. Rows a unit has no register for are absent
 rather than shown inert.
 
-Below the device group, the host engine group shows the PipeWire rate, buffer
-size and latency when the sound server owns the rate. It also shows the
-Fireface sink's host volume in percent and dB, with a `0 dB` action. The host
-volume is an attenuation before the interface, so it lowers the playback
-meters by the same amount; the interface's own faders remain the monitoring
-level.
+Below the device group, the host engine group shows the PipeWire rate,
+quantum and latency when the sound server owns the rate. `Quantum` is the
+graph quantum, one ALSA period; the `Latency` line shows the resulting ring,
+USB queue and device lead. It also shows the Fireface sink's host volume in
+percent and dB, with a `0 dB` action. The host volume is an attenuation before
+the interface, so it lowers the playback meters by the same amount; the
+interface's own faders remain the monitoring level.
+
+`Errors` counts the driver transport faults since the sheet opened or the
+last `reset`: empty-URB gaps, short packets, status and URB errors, and
+recoveries. A non-zero count is a transport fault; the row is absent when the
+backend does not expose counters.
 
 ## 5. Equalizer panel
 
@@ -797,7 +803,7 @@ not the Control Room Main assignment; `PH` always addresses channels 7/8.
 
 ## 13. Latency chain
 
-The Buffer size picker sets the PipeWire graph quantum, one ALSA period. The
+The Quantum picker sets the PipeWire graph quantum, one ALSA period. The
 driver keeps a ring of at least the two queued USB URBs plus two URBs of
 margin. At 1x rates that is 192 frames: four periods at 48 samples, three at
 64, and two at 96. At 128 samples the two periods give 256 frames.

@@ -351,11 +351,16 @@ separate files instead.
 ## 14. Latency
 
 The sidebar shows the round-trip latency estimate for the current sample
-rate and buffer size, and the **Buffer size** picker sets the PipeWire
-graph quantum in samples. The driver and the unit add a fixed amount of
+rate and buffer size, and the **Quantum** picker sets the PipeWire graph
+period in samples. The driver and the unit add a fixed amount of
 device-side latency on top of the buffer; the readout lists the estimate
 and its parts (USB queue, device lead, converters and graph period) so you
 can budget monitoring and recording latency.
+
+The **Errors** row counts driver transport faults since the device sheet
+opened or the last **reset**: empty USB-queue gaps, short packets, status
+and URB errors, and recoveries. A non-zero count means the USB transport is
+dropping or mis-timing packets; reset only clears the display baseline.
 
 ## 15. Where TuxMix keeps its data
 

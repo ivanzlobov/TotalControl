@@ -26,6 +26,7 @@ use tuxmix_core::{
     ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel,
     PlaybackChannel, OutputChannel, RmeDevice, Reverb, Scene, Sensitivity,
 };
+use tuxmix_core::fireface::abi::HwdepCounters;
 use tuxmix_core::channel::{EqBandType, InputEq};
 use tokio::sync::Notify;
 
@@ -165,6 +166,11 @@ impl Mirror {
 
     pub fn meter_bus(&self) -> Arc<Mutex<MeterSnapshot>> {
         Arc::clone(&self.meters)
+    }
+
+    /// Driver-side transport health as last reported by the service.
+    pub fn transport_counters(&self) -> Option<HwdepCounters> {
+        self.meters.lock().ok()?.counters
     }
 
     /// Apply a snapshot published by the service.  Returns false once the
@@ -1008,6 +1014,8 @@ pub struct MeterSnapshot {
     pub output_peaks: [f32; 18],
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
+    /// Driver transport health, when the backend exposes it.
+    pub counters: Option<HwdepCounters>,
     /// Whether anything is visibly moving.  The service derives this from
     /// the levels, the held peaks and the FX values; a canvas that sees
     /// `false` stops scheduling frames and waits for [`meter_stream`].
@@ -1191,6 +1199,7 @@ fn run(
     let mut last_panel_selection = device.panel_selection();
     let mut last_meter_active = false;
     let mut last_overload = [false; 2];
+    let mut last_counters = Instant::now() - Duration::from_secs(1);
     let mut peak_at = [[Instant::now(); 18]; 3];
 
     loop {
@@ -1258,6 +1267,12 @@ fn run(
             m.fx = fx;
             m.fx_overload = overload;
             m.at = Some(now);
+            // The transport counters are cumulative and change slowly; a
+            // quarter-second poll is enough for the device sheet.
+            if last_counters.elapsed() >= Duration::from_millis(250) {
+                last_counters = Instant::now();
+                m.counters = device.transport_counters();
+            }
             let active = meter_activity(&m);
             m.active = active;
             drop(m);

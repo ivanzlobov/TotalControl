@@ -155,6 +155,11 @@ pub trait ControlTransport: Send {
     fn wait(&self, timeout: Duration) -> Result<bool, Error>;
     fn read_event(&self) -> Result<Event, Error>;
     fn is_connected(&self) -> bool;
+
+    /// Transport health counters, when the backend has them.
+    fn counters(&self) -> Option<HwdepCounters> {
+        None
+    }
 }
 
 struct HwdepTransport {
@@ -198,6 +203,10 @@ impl ControlTransport for HwdepTransport {
 
     fn is_connected(&self) -> bool {
         self.hw.is_connected()
+    }
+
+    fn counters(&self) -> Option<HwdepCounters> {
+        self.hw.counters().ok()
     }
 }
 
@@ -901,6 +910,11 @@ impl Fireface {
         info: DeviceInfo,
     ) -> Result<Self, Error> {
         Self::from_transport_with_writer(transport, info, false)
+    }
+
+    /// Driver-side transport health, when the hwdep transport is in use.
+    pub fn transport_counters(&self) -> Option<HwdepCounters> {
+        self.transport.lock().ok().and_then(|t| t.counters())
     }
 
     fn from_transport_async(

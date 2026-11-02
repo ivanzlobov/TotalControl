@@ -92,7 +92,7 @@ pub struct HwdepEventHdr {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HwdepCounters {
     pub out_urbs: u32,
     pub out_gaps: u32,

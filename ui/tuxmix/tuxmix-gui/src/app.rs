@@ -1034,6 +1034,17 @@ impl DeviceHandle {
     /// Device-supplied hardware-output meters, already mapped to TuxMix's
     /// internal Phones-first output order.  `None` means the backend has
     /// no output meter stream and the GUI must compute them host-side.
+    /// Driver transport health, when the device service or a direct
+    /// Fireface handle can provide it.
+    pub fn transport_counters(&self) -> Option<tuxmix_core::fireface::abi::HwdepCounters> {
+        match self {
+            #[cfg(feature = "alsa")]
+            DeviceHandle::Fireface(d) => d.transport_counters(),
+            DeviceHandle::Mirror(d) => d.transport_counters(),
+            _ => None,
+        }
+    }
+
     pub fn device_output_meters(&self) -> Option<Vec<f32>> {
         match self {
             DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
@@ -2035,6 +2046,8 @@ pub enum Message {
     EngineRate(u32),
     /// Force PipeWire's quantum (buffer size in samples), `0` = default.
     EngineQuantum(u32),
+    /// Zero the transport-error display against the driver's current counters.
+    ResetTransportErrors,
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
     /// The graph clock, the card's own open stream (`None` = idle), whether
@@ -2443,6 +2456,10 @@ pub struct TuxMix {
     /// its rate and hardware period, which the sound server may pin
     /// regardless of the quantum. `None` while the card is idle.
     pub card_stream: Option<CardStream>,
+    /// Driver transport counters as last read, and the baseline they are
+    /// shown relative to (set on connect or by the reset button).
+    pub transport_counters: Option<tuxmix_core::fireface::abi::HwdepCounters>,
+    pub transport_baseline: Option<tuxmix_core::fireface::abi::HwdepCounters>,
     /// The Fireface PipeWire sink's volume (percent, dB), polled with the
     /// engine.  It is an attenuation *before* the device, so a sink below
     /// 0 dB makes the playback meters read low even for a full-scale file.
@@ -2894,6 +2911,8 @@ pub fn new_with_device(
         engine_force_rate: 0,
         engine_force_quantum: 0,
         card_stream: None,
+        transport_counters: None,
+        transport_baseline: None,
         host_volume: None,
         device_service: None,
         device_updates: None,
@@ -4560,6 +4579,7 @@ fn is_undoable(message: &Message) -> bool {
     !matches!(
         message,
         Message::Tick
+            | Message::ResetTransportErrors
             | Message::DeviceUpdated
             | Message::MeterWake
             | Message::SetView(_)
@@ -5008,6 +5028,16 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         // the canvases read the now-active snapshot and schedule a frame.
         Message::MeterWake => {}
         Message::Tick => {
+            // Driver transport health: cumulative counters, shown relative
+            // to the first reading of this connection (or the reset button).
+            let counters = state.device.transport_counters();
+            if counters.is_some() && state.transport_baseline.is_none() {
+                state.transport_baseline = counters;
+            }
+            if counters.is_none() {
+                state.transport_baseline = None;
+            }
+            state.transport_counters = counters;
             if state.notice.as_ref().is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR) {
                 state.notice = None;
             }
@@ -6473,6 +6503,9 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             }
         }
         Message::SetShowOriginalNames(on) => state.show_original_names = on,
+        Message::ResetTransportErrors => {
+            state.transport_baseline = state.transport_counters;
+        }
         Message::EngineRate(rate) => {
             // A simulated session changes its simulated clock only, and
             // never the remembered choice: that is applied to the real
@@ -8182,7 +8215,7 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
         );
     }
     body = body.push(
-        row![caption("Buffer size"), quantum_pick]
+        row![caption("Quantum"), quantum_pick]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
@@ -8191,6 +8224,45 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
+    if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
+        let delta = transport_delta(&now, &base);
+        let total = transport_error_total(&delta);
+        let colour = if total == 0 {
+            theme::TEXT_SEC
+        } else {
+            Color::from_rgb8(0xe0, 0x5a, 0x5a)
+        };
+        body = body.push(
+            row![
+                caption("Errors"),
+                text(total.to_string())
+                    .size(theme::TEXT_XS * ts)
+                    .color(colour),
+                iced::widget::Space::new().width(Length::Fill),
+                button(text("reset").size(theme::TEXT_XS * scale))
+                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .style(theme::ghost_button)
+                    .on_press(Message::ResetTransportErrors),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+        if total > 0 {
+            body = body.push(
+                text(format!(
+                    "gaps {} · short {} · status {} · urb {} · recoveries {} · dropped {}",
+                    delta.out_gaps,
+                    delta.out_shorts,
+                    delta.out_status_errors,
+                    delta.urb_errors,
+                    delta.recoveries,
+                    delta.events_dropped
+                ))
+                .size(theme::TEXT_XS * scale)
+                .color(theme::TEXT_SEC),
+            );
+        }
+    }
     if let Some((percent, db)) = state.host_volume {
         let colour = if db < -0.5 {
             theme::YSIM
@@ -8216,6 +8288,33 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
     body.spacing(theme::SPACE_MD * scale)
     .width(Length::Fill)
     .into()
+}
+
+/// Per-field difference of two cumulative driver counter readings.
+fn transport_delta(
+    now: &tuxmix_core::fireface::abi::HwdepCounters,
+    base: &tuxmix_core::fireface::abi::HwdepCounters,
+) -> tuxmix_core::fireface::abi::HwdepCounters {
+    use tuxmix_core::fireface::abi::HwdepCounters;
+    HwdepCounters {
+        out_urbs: now.out_urbs.saturating_sub(base.out_urbs),
+        out_gaps: now.out_gaps.saturating_sub(base.out_gaps),
+        out_shorts: now.out_shorts.saturating_sub(base.out_shorts),
+        out_status_errors: now
+            .out_status_errors
+            .saturating_sub(base.out_status_errors),
+        urb_errors: now.urb_errors.saturating_sub(base.urb_errors),
+        recoveries: now.recoveries.saturating_sub(base.recoveries),
+        events_dropped: now.events_dropped.saturating_sub(base.events_dropped),
+        meter_urbs: now.meter_urbs.saturating_sub(base.meter_urbs),
+        state_urbs: now.state_urbs.saturating_sub(base.state_urbs),
+        status_urbs: now.status_urbs.saturating_sub(base.status_urbs),
+    }
+}
+
+/// Audio-transport errors in a counter delta (event-queue drops excluded).
+fn transport_error_total(d: &tuxmix_core::fireface::abi::HwdepCounters) -> u32 {
+    d.out_gaps + d.out_shorts + d.out_status_errors + d.urb_errors + d.recoveries
 }
 
 /// The latency line.  While the card plays, it uses the card's actual period
@@ -13361,6 +13460,41 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(updated, "the mirror follows the service snapshot");
+    }
+
+    #[test]
+    fn transport_counter_deltas_saturate_and_total_only_audio_errors() {
+        use super::{transport_delta, transport_error_total};
+        use tuxmix_core::fireface::abi::HwdepCounters;
+        let base = HwdepCounters {
+            out_urbs: 100,
+            out_gaps: 1,
+            out_shorts: 2,
+            out_status_errors: 3,
+            urb_errors: 4,
+            recoveries: 5,
+            events_dropped: 6,
+            ..HwdepCounters::default()
+        };
+        let now = HwdepCounters {
+            out_urbs: 120,
+            out_gaps: 3,
+            out_shorts: 2,
+            out_status_errors: 5,
+            urb_errors: 4,
+            recoveries: 5,
+            events_dropped: 9,
+            ..HwdepCounters::default()
+        };
+        let d = transport_delta(&now, &base);
+        assert_eq!(d.out_urbs, 20);
+        assert_eq!(d.out_gaps, 2);
+        assert_eq!(d.out_shorts, 0);
+        assert_eq!(d.out_status_errors, 2);
+        assert_eq!(transport_error_total(&d), 4);
+        // A reset/restart baseline can be newer than the reading.
+        let back = transport_delta(&base, &now);
+        assert_eq!(back.out_gaps, 0);
     }
 
     #[test]
