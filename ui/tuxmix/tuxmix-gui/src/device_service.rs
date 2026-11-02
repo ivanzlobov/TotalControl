@@ -54,6 +54,14 @@ pub struct DeviceInfo {
     pub is_ucx: bool,
     pub is_uc_family: bool,
     pub is_mock: bool,
+    pub kind: crate::app::DeviceKind,
+    pub target: crate::app::DeviceTarget,
+    pub card_id: &'static str,
+    pub firmware: Option<u32>,
+    pub serial: Option<String>,
+    pub rate_follows: bool,
+    pub has_sensitivity: bool,
+    pub outputs_one_per_pair: bool,
 }
 
 /// The channel model as the UI should draw it.  Replaced wholesale when the
@@ -77,15 +85,29 @@ pub struct Mirror {
     scene: Scene,
     info: DeviceInfo,
     commands: Sender<Command>,
+    meters: Arc<Mutex<MeterSnapshot>>,
 }
 
 impl Mirror {
-    pub fn new(initial: Snapshot, commands: Sender<Command>) -> Self {
+    pub fn new(
+        initial: Snapshot,
+        commands: Sender<Command>,
+        meters: Arc<Mutex<MeterSnapshot>>,
+    ) -> Self {
         Self {
             scene: initial.scene,
             info: initial.info,
             commands,
+            meters,
         }
+    }
+
+    pub fn meters(&self) -> MeterSnapshot {
+        *self.meters.lock().unwrap()
+    }
+
+    pub fn meter_bus(&self) -> Arc<Mutex<MeterSnapshot>> {
+        Arc::clone(&self.meters)
     }
 
     /// Apply a snapshot published by the service.  Returns false once the
@@ -128,6 +150,66 @@ impl Mirror {
 
     fn run(&self, command: impl FnOnce(&mut DeviceHandle) + Send + 'static) {
         let _ = self.commands.send(Command::Run(Box::new(command)));
+    }
+
+    pub fn set_line_in_ref(&self, code: u16) {
+        self.run(move |d| {
+            let _ = d.set_line_in_ref(code);
+        });
+    }
+
+    pub fn set_line_out_ref(&self, code: u16) {
+        self.run(move |d| {
+            let _ = d.set_line_out_ref(code);
+        });
+    }
+
+    pub fn set_phones_ref(&self, code: u16) {
+        self.run(move |d| {
+            let _ = d.set_phones_ref(code);
+        });
+    }
+
+    pub fn set_line_in_ref_58(&self, code: u16) {
+        self.run(move |d| {
+            let _ = d.set_line_in_ref_58(code);
+        });
+    }
+
+    pub fn set_spdif_professional(&self, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_spdif_professional(on);
+        });
+    }
+
+    pub fn set_word_clock_single_speed(&self, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_word_clock_single_speed(on);
+        });
+    }
+
+    pub fn set_word_clock_termination(&self, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_word_clock_termination(on);
+        });
+    }
+
+    pub fn set_input_ms_proc(&self, idx: usize, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_input_ms_proc(idx, on);
+        });
+    }
+
+    pub fn set_playback_ms_proc(&self, idx: usize, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_playback_ms_proc(idx, on);
+        });
+    }
+
+    pub fn set_talkback(&self, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_talkback(on);
+        });
     }
 }
 
@@ -865,6 +947,11 @@ impl DeviceService {
         self.commands.clone()
     }
 
+    /// The shared meter bus, for a `Mirror` and the fader canvases.
+    pub fn meter_bus(&self) -> Arc<Mutex<MeterSnapshot>> {
+        Arc::clone(&self.meters)
+    }
+
     /// The current meter snapshot.
     pub fn meters(&self) -> MeterSnapshot {
         *self.meters.lock().unwrap()
@@ -905,6 +992,14 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
         is_ucx: device.is_ucx_model(),
         is_uc_family: device.is_uc_family(),
         is_mock: device.is_mock(),
+        kind: device.kind(),
+        target: device.target(),
+        card_id: device.card_id(),
+        firmware: device.firmware(),
+        serial: device.serial().map(str::to_owned),
+        rate_follows: device.rate_follows_sound_server(),
+        has_sensitivity: device.has_sensitivity_control(),
+        outputs_one_per_pair: device.outputs_one_per_pair(),
     }
 }
 
@@ -1060,7 +1155,11 @@ mod tests {
     fn a_mirror_applies_updates_and_sends_commands() {
         let mut service = DeviceService::spawn(mock());
         let updates = service.take_updates().expect("the update receiver");
-        let mut mirror = super::Mirror::new(service.snapshot(), service.command_sender());
+        let mut mirror = super::Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
         assert!(!mirror.outputs().is_empty());
         assert_eq!(mirror.info().output_pair_count, mirror.outputs().len() / 2);
 

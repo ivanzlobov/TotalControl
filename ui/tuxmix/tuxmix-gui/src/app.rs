@@ -304,6 +304,8 @@ pub enum DeviceHandle {
     /// with the device in proprietary mode this is the path that
     /// actually works.
     Usb(BabyfaceProUsb),
+    /// A UI-side copy of a device owned by the device service.
+    Mirror(crate::device_service::Mirror),
 }
 
 impl DeviceHandle {
@@ -343,6 +345,7 @@ macro_rules! delegate {
     ($self:expr, $method:ident($($arg:expr),*)) => { match $self {
         DeviceHandle::Mock(d) => d.$method($($arg),*),
         DeviceHandle::Usb(d) => d.$method($($arg),*),
+        DeviceHandle::Mirror(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
         DeviceHandle::Real(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
@@ -355,6 +358,7 @@ macro_rules! delegate {
     ($self:expr, $method:ident) => { match $self {
         DeviceHandle::Mock(d) => d.$method(),
         DeviceHandle::Usb(d) => d.$method(),
+        DeviceHandle::Mirror(d) => d.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Real(d) => d.$method(),
         #[cfg(feature = "alsa")]
@@ -787,6 +791,7 @@ impl DeviceHandle {
                 }
             }
             DeviceHandle::Usb(_) => DeviceKind::Babyface,
+            DeviceHandle::Mirror(d) => d.info().kind,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => DeviceKind::Babyface,
             #[cfg(feature = "alsa")]
@@ -806,6 +811,7 @@ impl DeviceHandle {
     pub fn card_id(&self) -> &'static str {
         match self {
             DeviceHandle::Mock(_) | DeviceHandle::Usb(_) => "BabyfacePro",
+            DeviceHandle::Mirror(d) => d.info().card_id,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => "BabyfacePro",
             #[cfg(feature = "alsa")]
@@ -884,6 +890,7 @@ impl DeviceHandle {
             DeviceHandle::Usb(_) | DeviceHandle::Real(_) => {
                 DeviceTarget::kind_only(DeviceKind::Babyface)
             }
+            DeviceHandle::Mirror(d) => d.info().target.clone(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Ucx(_) => DeviceTarget::kind_only(DeviceKind::Ucx),
             #[cfg(feature = "alsa")]
@@ -920,6 +927,7 @@ impl DeviceHandle {
         let n = self.inputs().len();
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.input_meter(i)).collect(),
+            DeviceHandle::Mirror(d) => d.meters().inputs.to_vec(),
             DeviceHandle::Usb(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
@@ -935,6 +943,7 @@ impl DeviceHandle {
         let n = self.playbacks().len();
         match self {
             DeviceHandle::Mock(d) => (0..n).map(|i| d.playback_meter(i)).collect(),
+            DeviceHandle::Mirror(d) => d.meters().playbacks.to_vec(),
             // Playback meters come from the OUT stream — not wired yet.
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => vec![0.0; n],
@@ -953,6 +962,7 @@ impl DeviceHandle {
     /// Device-side SW-playback meters (UCX IF1 0x85), if available.
     pub fn device_playback_meters(&self) -> Option<Vec<f32>> {
         match self {
+            DeviceHandle::Mirror(d) => Some(d.meters().playbacks.to_vec()),
             #[cfg(feature = "alsa")]
             DeviceHandle::Ucx(d) => d.device_playback_meters(),
             #[cfg(feature = "alsa")]
@@ -999,6 +1009,9 @@ impl DeviceHandle {
 
     /// UCX FX bus meters: `[send, return]`.
     pub fn fx_meters(&self) -> Option<[f32; 2]> {
+        if let DeviceHandle::Mirror(d) = self {
+            return Some(d.meters().fx);
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.fx_meters();
@@ -1020,6 +1033,7 @@ impl DeviceHandle {
     /// no output meter stream and the GUI must compute them host-side.
     pub fn device_output_meters(&self) -> Option<Vec<f32>> {
         match self {
+            DeviceHandle::Mirror(d) => Some(d.meters().outputs.to_vec()),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.output_meters_internal(true),
             _ => None,
@@ -1046,6 +1060,9 @@ impl DeviceHandle {
     /// True when the backend has its own playback meter source, so the
     /// PipeWire sink tap is unnecessary.
     pub fn has_device_playback_meters(&self) -> bool {
+        if let DeviceHandle::Mirror(_) = self {
+            return true;
+        }
         #[cfg(feature = "alsa")]
         if matches!(self, DeviceHandle::Ucx(_) | DeviceHandle::Uc(_)) {
             return true;
@@ -1075,6 +1092,7 @@ impl DeviceHandle {
     pub fn has_input_meter(&self, idx: usize) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
+            DeviceHandle::Mirror(d) => idx < d.inputs().len(),
             DeviceHandle::Usb(_) => idx < 4,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
@@ -1095,6 +1113,7 @@ impl DeviceHandle {
     pub fn has_playback_meters(&self) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
+            DeviceHandle::Mirror(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Ucx,
             _ => false,
@@ -1139,7 +1158,11 @@ impl DeviceHandle {
         out
     }
     pub fn is_mock(&self) -> bool {
-        matches!(self, DeviceHandle::Mock(_))
+        match self {
+            DeviceHandle::Mock(_) => true,
+            DeviceHandle::Mirror(d) => d.info().is_mock,
+            _ => false,
+        }
     }
     /// UC parameters that can be read back at connect.  `None` for
     /// backends without this readback path.
@@ -1152,6 +1175,9 @@ impl DeviceHandle {
     }
 
     pub fn firmware(&self) -> Option<u32> {
+        if let DeviceHandle::Mirror(d) = self {
+            return d.info().firmware;
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return Some(d.firmware());
@@ -1160,6 +1186,9 @@ impl DeviceHandle {
     }
 
     pub fn serial(&self) -> Option<&str> {
+        if let DeviceHandle::Mirror(d) = self {
+            return d.info().serial.as_deref();
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return Some(d.serial());
@@ -1168,6 +1197,10 @@ impl DeviceHandle {
     }
 
     pub fn set_line_in_ref(&mut self, code: u16) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_line_in_ref(code);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_line_in_ref(code);
@@ -1176,6 +1209,10 @@ impl DeviceHandle {
     }
 
     pub fn set_line_out_ref(&mut self, code: u16) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_line_out_ref(code);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_line_out_ref(code);
@@ -1184,6 +1221,10 @@ impl DeviceHandle {
     }
 
     pub fn set_phones_ref(&mut self, code: u16) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_phones_ref(code);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_phones_ref(code);
@@ -1192,6 +1233,10 @@ impl DeviceHandle {
     }
 
     pub fn set_line_in_ref_58(&mut self, code: u16) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_line_in_ref_58(code);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_line_in_ref_58(code);
@@ -1201,6 +1246,10 @@ impl DeviceHandle {
     }
 
     pub fn set_spdif_professional(&mut self, on: bool) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_spdif_professional(on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_spdif_professional(on);
@@ -1212,6 +1261,10 @@ impl DeviceHandle {
     }
 
     pub fn set_word_clock_single_speed(&mut self, on: bool) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_word_clock_single_speed(on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_word_clock_single_speed(on);
@@ -1223,6 +1276,10 @@ impl DeviceHandle {
     }
 
     pub fn set_word_clock_termination(&mut self, on: bool) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_word_clock_termination(on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_word_clock_termination(on);
@@ -1234,6 +1291,10 @@ impl DeviceHandle {
     }
 
     pub fn set_input_ms_proc(&mut self, idx: usize, on: bool) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_input_ms_proc(idx, on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_input_ms_proc(idx, on);
@@ -1249,6 +1310,10 @@ impl DeviceHandle {
         idx: usize,
         on: bool,
     ) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_playback_ms_proc(idx, on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_playback_ms_proc(idx, on);
@@ -1260,6 +1325,10 @@ impl DeviceHandle {
     }
 
     pub fn set_talkback(&mut self, on: bool) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_talkback(on);
+            return Ok(());
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
             return d.set_talkback(on);
@@ -1312,6 +1381,7 @@ impl DeviceHandle {
     pub fn needs_scene_restore(&self) -> bool {
         match self {
             DeviceHandle::Usb(_) => true,
+            DeviceHandle::Mirror(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => true,
             _ => false,
@@ -1328,6 +1398,9 @@ impl DeviceHandle {
     /// and buffer size: true for the kernel driver (PipeWire opens the
     /// card), false for the USB backend, which streams the device itself.
     pub fn rate_follows_sound_server(&self) -> bool {
+        if let DeviceHandle::Mirror(d) = self {
+            return d.info().rate_follows;
+        }
         #[cfg(feature = "alsa")]
         if matches!(
             self,
@@ -1350,6 +1423,7 @@ impl DeviceHandle {
     pub fn has_sensitivity_control(&self) -> bool {
         match self {
             DeviceHandle::Mock(_) | DeviceHandle::Usb(_) => true,
+            DeviceHandle::Mirror(d) => d.info().has_sensitivity,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => true,
             #[cfg(feature = "alsa")]
@@ -1373,6 +1447,7 @@ impl DeviceHandle {
     pub fn panel_selection(&self) -> Option<(bool, usize, usize)> {
         match self {
             DeviceHandle::Mock(_) => None,
+            DeviceHandle::Mirror(_) => None,
             DeviceHandle::Usb(d) => Some(d.panel_selection()),
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => d.panel_selection(),
@@ -1389,6 +1464,7 @@ impl DeviceHandle {
     pub fn is_uc_model(&self) -> bool {
         match self {
             DeviceHandle::Mock(d) => d.is_uc(),
+            DeviceHandle::Mirror(d) => d.info().is_uc,
             #[cfg(feature = "alsa")]
             DeviceHandle::Uc(_) => true,
             #[cfg(feature = "alsa")]
@@ -1401,6 +1477,7 @@ impl DeviceHandle {
     pub fn is_ucx_model(&self) -> bool {
         match self {
             DeviceHandle::Mock(d) => d.is_ucx(),
+            DeviceHandle::Mirror(d) => d.info().is_ucx,
             #[cfg(feature = "alsa")]
             DeviceHandle::Ucx(_) => true,
             #[cfg(feature = "alsa")]
@@ -1414,6 +1491,7 @@ impl DeviceHandle {
     pub fn is_uc_family(&self) -> bool {
         match self {
             DeviceHandle::Mock(d) => d.is_uc() || d.is_ucx(),
+            DeviceHandle::Mirror(d) => d.info().is_uc_family,
             #[cfg(feature = "alsa")]
             DeviceHandle::Uc(_) | DeviceHandle::Ucx(_) | DeviceHandle::Fireface(_) => true,
             _ => false,
@@ -2342,6 +2420,13 @@ pub struct TuxMix {
     /// engine.  It is an attenuation *before* the device, so a sink below
     /// 0 dB makes the playback meters read low even for a full-scale file.
     pub host_volume: Option<(u32, f32)>,
+    /// The device service, when the split is enabled.
+    pub device_service: Option<crate::device_service::DeviceService>,
+    pub device_updates:
+        Option<std::sync::mpsc::Receiver<crate::device_service::Snapshot>>,
+    /// Shared meter values for the canvases (stage 3).
+    pub meter_bus:
+        Option<std::sync::Arc<std::sync::Mutex<crate::device_service::MeterSnapshot>>>,
     /// The kernel driver's period floor (`urb_frames` for the UC), read at
     /// launch: which buffer sizes the card can actually run. `None` when
     /// unknown (no kernel driver), taken as the default 32.
@@ -2662,7 +2747,7 @@ pub fn new_with_device(
         pw_meter::PlaybackTap::start()
     };
 
-    TuxMix {
+    let mut state = TuxMix {
         device,
         device_target,
         connected,
@@ -2781,10 +2866,36 @@ pub fn new_with_device(
         engine_force_quantum: 0,
         card_stream: None,
         host_volume: None,
+        device_service: None,
+        device_updates: None,
+        meter_bus: None,
         // The mock stands for the stock driver.
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
+    };
+
+    if crate::device_service::requested() {
+        // Stage 2c: move the device onto the service thread and draw from
+        // the mirror.  The mock placeholder is dropped immediately.
+        let placeholder = DeviceHandle::Mock(
+            MockBabyfacePro::open().expect("placeholder mock"),
+        );
+        let device = std::mem::replace(&mut state.device, placeholder);
+        let mut service = crate::device_service::DeviceService::spawn(device);
+        let updates = service.take_updates();
+        let snapshot = service.snapshot();
+        let mirror = crate::device_service::Mirror::new(
+            snapshot,
+            service.command_sender(),
+            service.meter_bus(),
+        );
+        state.meter_bus = Some(service.meter_bus());
+        state.device = DeviceHandle::Mirror(mirror);
+        state.device_updates = updates;
+        state.device_service = Some(service);
     }
+
+    state
 }
 
 /// The persisted subset of `state` (see `prefs.rs`).
@@ -4816,6 +4927,13 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             return iced::window::set_mode(id, mode);
         }
         Message::Tick => {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
             if state.notice.as_ref().is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR) {
                 state.notice = None;
             }
