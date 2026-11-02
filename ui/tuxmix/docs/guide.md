@@ -4,6 +4,8 @@ The details behind the [README](../README.md): views, background mode, how
 TuxMix fits into the Linux audio stack, the workspace layout and the
 project status.
 
+The full end-user manual lives at [`../../../docs/TUXMIX_Manual.md`](../../../docs/TUXMIX_Manual.md).
+
 - [Views](#views)
 - [Running in the background](#running-in-the-background)
 - [The Linux audio stack](#the-linux-audio-stack)

@@ -9,6 +9,8 @@ The authoritative specification is in [`spec/`](spec/README.md):
 - [TotalMix FX OSC control specification](spec/OSC-CONTROL-SPEC.md)
 - [Babyface Pro control specification](spec/BABYFACE-PRO-CONTROL-SPEC.md)
 - [TuxMix control-surface specification](spec/TUXMIX-SPEC.md)
+- [TuxMix user manual](TUXMIX_Manual.md) — end-user documentation; the
+  specifications above are for developers.
 
 OSC enablement and network configuration are in
 [OSC-SETUP.md](OSC-SETUP.md).

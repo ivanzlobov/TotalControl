@@ -220,6 +220,45 @@ pub fn fireface_source_name() -> Option<String> {
     fireface_node("sources", "pro-input-0")
 }
 
+/// The host (PipeWire/Pulse) volume of the RME Pro Audio sink, as percent
+/// and dB.  This is a separate attenuation before the device: a sink at
+/// 35 % feeds the interface at -27 dB even when the player sends a
+/// full-scale CD.  Shown in the device sheet so the meters make sense.
+pub fn fireface_sink_volume() -> Option<(u32, f32)> {
+    let name = fireface_sink_name()?;
+    let out = Command::new("pactl")
+        .args(["get-sink-volume", &name])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.split('/');
+    let _channel = parts.next()?;
+    let percent = parts.next()?.trim().trim_end_matches('%').trim().parse().ok()?;
+    let db = parts
+        .next()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    Some((percent, db))
+}
+
+/// Set the RME Pro Audio sink to unity (0 dB, 100 %).  The interface's own
+/// faders remain the monitoring level.
+pub fn set_fireface_sink_unity() -> bool {
+    let Some(name) = fireface_sink_name() else {
+        return false;
+    };
+    Command::new("pactl")
+        .args(["set-sink-volume", &name, "100%"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn set_suspended(command: &str, node: &str, suspended: bool) -> bool {
     Command::new("pactl")
         .args([command, node, if suspended { "1" } else { "0" }])

@@ -1,7 +1,8 @@
 # TuxMix control surface specification
 
 This document defines the TuxMix user interface for the Fireface UC and UCX,
-the model behind it and the panel behaviour.
+the model behind it and the panel behaviour. It is the developer reference;
+the end-user manual is `docs/TUXMIX_Manual.md`.
 
 ## 1. Mixer layout
 
@@ -40,7 +41,7 @@ A full strip contains:
 - channel name and type;
 - pan or balance knob;
 - mute and solo; outputs use mute and cue;
-- level fader and meter;
+- level fader and a peak meter with peak hold;
 - a right-hand column in fixed order: Trim, settings gear, EQ, Dynamics;
 - the channel's active panel, when open.
 
@@ -129,6 +130,9 @@ applies to Dynamics, Auto Level, Reverb and Echo.
 
 - Related controls and values share a row or column. A control under another
   control uses the same column width and alignment.
+- A column of knobs shares one vertical centre line. A secondary readout such
+  as the Echo BPM sits at the underside or the right of its knob without
+  moving the knob off that line.
 - Ordinary nouns in slideouts are lowercase: `gain`, `attack`, `compressor`,
   `auto level`.
 - The minimum gap between distinct controls is `theme::SPACE_TIGHT`
@@ -162,6 +166,14 @@ There are two sizing families, one per surface:
 |---|---|
 | Channel strip (`M`/`S`/`CUE`, tabs, collapse, submix box) | 18 px |
 | Settings slideout (buttons and dropdowns) | 24 px |
+
+Standard controls use one width per stack or panel: a single button spans it;
+a pair in one row splits it with one gap. Menu rows share the menu width.
+Slideout tabs (`T`, gear, `EQ`, `D`), the channel minimize button and compact
+navigation and utility buttons keep their own fixed or label-sized size. A
+strip's `M`/`S` pair (hardware inputs and software playback) or `M`/`CUE` pair
+(hardware outputs, including Control Room channels) shares the strip's control
+width; an output never shows `M` alone.
 
 - The strip's submix box spans the strip width at the strip height, with the
   bus name vertically centred at the left and the arrow at the right.
@@ -214,7 +226,9 @@ Empty rows keep the height of the control the grid reserves for them.
   with the M/S encoder (`L' = (L + R) / 2`, `R' = (L - R) / 2`); software
   playback rewrites the matrix only. A mono input pair cannot enable it.
 - One control spans the panel content width; two controls share it with one
-  gap, so a single button and a phase pair end at the same right edge.
+  gap, so their combined width equals a single control. `stereo`, `48V`,
+  `autoset`, `no trim`, `loopback` and a phase pair therefore all end at the
+  same right edge.
 - Knobs keep one fixed column at the right: gain, width, send FX and return
   FX share a vertical centre line. `send`/`FX` and `return`/`FX` break over
   two lines to keep the label column narrow.
@@ -307,7 +321,11 @@ writes each channel's own register. Rows a unit has no register for are absent
 rather than shown inert.
 
 Below the device group, the host engine group shows the PipeWire rate, buffer
-size and latency when the sound server owns the rate.
+size and latency when the sound server owns the rate. It also shows the
+Fireface sink's host volume in percent and dB, with a `0 dB` action. The host
+volume is an attenuation before the interface, so it lowers the playback
+meters by the same amount; the interface's own faders remain the monitoring
+level.
 
 ## 4. Equalizer panel
 
@@ -452,9 +470,10 @@ Other types leave the band empty.
 
 The four knobs share one vertical centre line. The delay knob shows the
 delay time inside it; the BPM readout sits at its underside/right without
-moving the knob. `HC` sits left of a compact high-cut box, and the box value
-is centred. The FX `in`/`out` meters sit to the right of the knob column and
-show an overload segment at the top when the peak reaches full scale.
+moving the knob. `HC` sits left of a compact high-cut box; the box is only
+as wide as its value, and the value text is centred. The FX `in`/`out` meters
+sit to the right of the knob column, wider than a strip meter, and show an
+overload segment at the top when the peak reaches full scale.
 
 | Control | Range |
 |---|---|
@@ -598,7 +617,8 @@ Hardware-output pairs link with the output stereo words. Mute, FX return,
 low cut, EQ, dynamics and AutoLevel copy from left to right. The two channel
 volumes encode the pair level and balance. The output reference level is a
 line-output group value, not a per-pair link value. Phase L and Phase R keep
-independent states across every transition.
+independent states across every transition. A pair assigned to the Control
+Room is always linked and never splits.
 
 ## 11. Control Room
 
@@ -615,6 +635,11 @@ smaller type tier. The stack runs, top to bottom:
 
 Dim, Recall and Speaker B use the UCX control-room registers. Mono and
 Mute FX are stored in the device scene.
+
+Control Room channels are always stereo. An assigned pair is linked and
+cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
+and does nothing; a split pair is linked when it is assigned. `Set all
+channels mono` leaves the assigned pairs linked.
 
 ### 11.1 Assign
 

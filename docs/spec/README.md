@@ -14,3 +14,6 @@ control protocols and the TuxMix control surface.
 These documents are present-tense and describe the current system.  Reference
 and working material live in [`../archive/`](../archive/).  Open questions and
 capture requests live in [`../work/`](../work/).
+
+The end-user manual is [`../TUXMIX_Manual.md`](../TUXMIX_Manual.md); it is not
+part of the specification.

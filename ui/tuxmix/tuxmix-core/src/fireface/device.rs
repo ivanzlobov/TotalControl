@@ -210,6 +210,11 @@ struct MeterBank {
     playback: [u64; 18],
     pre_fader: [u64; 18],
     post_fader: [u64; 18],
+    inputs_a_peak: [u32; 18],
+    inputs_b_peak: [u32; 18],
+    playback_peak: [u32; 18],
+    pre_fader_peak: [u32; 18],
+    post_fader_peak: [u32; 18],
     fx_in: u64,
     fx_out: u64,
     fx_peak_in: u32,
@@ -219,11 +224,21 @@ struct MeterBank {
 impl MeterBank {
     fn apply(&mut self, p: &MeterPacket) {
         match p.kind {
-            MeterKind::InputsA => self.inputs_a.copy_from_slice(&p.power[..18]),
-            MeterKind::InputsB => self.inputs_b.copy_from_slice(&p.power[..18]),
-            MeterKind::Playback => self.playback.copy_from_slice(&p.power[..18]),
+            MeterKind::InputsA => {
+                self.inputs_a.copy_from_slice(&p.power[..18]);
+                self.inputs_a_peak.copy_from_slice(&p.peak);
+            }
+            MeterKind::InputsB => {
+                self.inputs_b.copy_from_slice(&p.power[..18]);
+                self.inputs_b_peak.copy_from_slice(&p.peak);
+            }
+            MeterKind::Playback => {
+                self.playback.copy_from_slice(&p.power[..18]);
+                self.playback_peak.copy_from_slice(&p.peak);
+            }
             MeterKind::OutputsPreFader => {
                 self.pre_fader.copy_from_slice(&p.power[..18]);
+                self.pre_fader_peak.copy_from_slice(&p.peak);
                 self.fx_in = p.fx_power[0];
                 self.fx_out = p.fx_power[1];
                 self.fx_peak_in = p.fx_peak[0];
@@ -231,6 +246,7 @@ impl MeterBank {
             }
             MeterKind::OutputsPostFader => {
                 self.post_fader.copy_from_slice(&p.power[..18]);
+                self.post_fader_peak.copy_from_slice(&p.peak);
                 self.fx_in = p.fx_power[0];
                 self.fx_out = p.fx_power[1];
                 self.fx_peak_in = p.fx_peak[0];
@@ -244,14 +260,35 @@ impl MeterBank {
         db_to_linear(protocol::power_dbfs(p))
     }
 
+    fn fx_peak_level(&self, out: bool) -> f32 {
+        let p = if out {
+            self.fx_peak_out
+        } else {
+            self.fx_peak_in
+        };
+        db_to_linear(protocol::peak_dbfs(p))
+    }
+
     fn input(&self, i: usize) -> f32 {
         let p = self.inputs_a.get(i).copied().unwrap_or(0)
             .max(self.inputs_b.get(i).copied().unwrap_or(0));
         db_to_linear(protocol::power_dbfs(p))
     }
 
+    fn input_peak(&self, i: usize) -> f32 {
+        let p = self.inputs_a_peak.get(i).copied().unwrap_or(0)
+            .max(self.inputs_b_peak.get(i).copied().unwrap_or(0));
+        db_to_linear(protocol::peak_dbfs(p))
+    }
+
     fn playback(&self, i: usize) -> f32 {
         db_to_linear(protocol::power_dbfs(self.playback.get(i).copied().unwrap_or(0)))
+    }
+
+    fn playback_peak(&self, i: usize) -> f32 {
+        db_to_linear(protocol::peak_dbfs(
+            self.playback_peak.get(i).copied().unwrap_or(0),
+        ))
     }
 
     fn output(&self, i: usize, post: bool) -> f32 {
@@ -261,6 +298,15 @@ impl MeterBank {
             self.pre_fader.get(i).copied().unwrap_or(0)
         };
         db_to_linear(protocol::power_dbfs(p))
+    }
+
+    fn output_peak(&self, i: usize, post: bool) -> f32 {
+        let p = if post {
+            self.post_fader_peak.get(i).copied().unwrap_or(0)
+        } else {
+            self.pre_fader_peak.get(i).copied().unwrap_or(0)
+        };
+        db_to_linear(protocol::peak_dbfs(p))
     }
 }
 
@@ -1568,12 +1614,11 @@ impl Fireface {
         let reg = ucx::matrix_reg(dsp_output, source);
         let value = ucx::matrix_gain(linear);
         self.write_word(reg, value)?;
-        // TotalMix keeps a second copy of every playback fader at +0x180
-        // (`0x4020` → `0x41A0`, `0x4061` → `0x41E1`). Writing it keeps the
-        // unit's own mirror in step (measured H86).
-        if matches!(source, Source::Playback(_)) {
-            self.write_word(reg.wrapping_add(0x180), value)?;
-        }
+        // One coefficient, one cell. The address six output blocks later
+        // (reg + 0x180) is another output's own matrix cell — e.g.
+        // 0x4020 is AN 1/2 and 0x41A0 is Phones — so it must not be
+        // written here; doing so replaced Phones' playback send with
+        // AN 1/2's on every scene apply.
         Ok(())
     }
 
@@ -2376,6 +2421,60 @@ impl Fireface {
                     .map(|i| self.meters.output(i, post))
                     .collect(),
             ),
+            Model::Uc => None,
+        }
+    }
+
+    /// Device peak words, in the same channel order as the power meters.
+    /// A mixer meter is a peak meter: the power word is mean square (RMS),
+    /// which reads several dB lower than the peak for music.
+    pub fn input_peaks(&self) -> Option<Vec<f32>> {
+        match self.model {
+            Model::Ucx => Some(
+                (0..self.inputs.len())
+                    .map(|i| self.meters.input_peak(i))
+                    .collect(),
+            ),
+            Model::Uc => None,
+        }
+    }
+
+    pub fn playback_peaks(&self) -> Option<Vec<f32>> {
+        match self.model {
+            Model::Ucx => Some(
+                (0..self.playbacks.len())
+                    .map(|i| self.meters.playback_peak(i))
+                    .collect(),
+            ),
+            Model::Uc => None,
+        }
+    }
+
+    pub fn output_peaks(&self, post: bool) -> Option<Vec<f32>> {
+        match self.model {
+            Model::Ucx => Some(
+                (0..self.outputs.len())
+                    .map(|i| self.meters.output_peak(i, post))
+                    .collect(),
+            ),
+            Model::Uc => None,
+        }
+    }
+
+    pub fn output_peaks_internal(&self, post: bool) -> Option<Vec<f32>> {
+        let raw = self.output_peaks(post)?;
+        Some(reorder_output_meters(
+            &raw,
+            self.spec.profile.output_order,
+        ))
+    }
+
+    pub fn fx_peaks(&self) -> Option<[f32; 2]> {
+        match self.model {
+            Model::Ucx => Some([
+                self.meters.fx_peak_level(false),
+                self.meters.fx_peak_level(true),
+            ]),
             Model::Uc => None,
         }
     }
@@ -4789,6 +4888,26 @@ mod tests {
     }
 
     #[test]
+    fn ucx_meter_peaks_are_full_scale_amplitude() {
+        let mut bank = MeterBank::default();
+        let mut p = MeterPacket {
+            kind: MeterKind::Playback,
+            power: [0; 20],
+            peak: [0; 18],
+            fx_power: [0; 2],
+            fx_peak: [0; 2],
+        };
+        // Peak full scale is 2^27; -20 dBFS is one tenth of it.
+        p.peak[0] = (1 << 27) / 10;
+        let a = (1u64 << 23) / 10;
+        p.power[0] = 512 * a * a / 2;
+        bank.apply(&p);
+        assert!((bank.playback_peak(0) - 0.1).abs() < 0.002);
+        // The power word stays the mean-square reading, below the peak.
+        assert!(bank.playback(0) < bank.playback_peak(0));
+    }
+
+    #[test]
     fn ucx_poll_events_sends_the_if1_heartbeat() {
         let (mut dev, writes) = open(Model::Ucx);
         dev.poll_events().unwrap();
@@ -5786,8 +5905,34 @@ mod tests {
         assert!(w.contains(&Write::Words(vec![(0x41A1, ms)])));
         assert!(w.contains(&Write::Words(vec![(0x41E0, ms)])));
         assert!(w.contains(&Write::Words(vec![(0x41E1, neg)])));
-        // Playback coefficients keep their +0x180 mirror.
-        assert!(w.contains(&Write::Words(vec![(0x4320, ms)])));
+        // No +0x180 "copy": 0x4320 is ADAT 3/4's own cell.
+        assert!(!w.contains(&Write::Words(vec![(0x4320, ms)])));
+    }
+
+    #[test]
+    fn ucx_scene_apply_keeps_each_playback_send_in_its_own_output_cell() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        // Playback 1/2 sends loud into Phones (internal pair 0, DSP 6) and
+        // quieter into ADAT 3/4 (internal pair 6, DSP 12).
+        for ch in 0..2 {
+            scene.playbacks[ch].volumes[0] = 1.0;
+            scene.playbacks[ch].volumes[6] = 0.25;
+        }
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let words = written_words(&writes);
+        let last = |addr: u16| {
+            words
+                .iter()
+                .rev()
+                .find(|(a, _)| *a == addr)
+                .map(|(_, v)| *v)
+        };
+        // The last write to each cell is that output's own coefficient, not
+        // a neighbouring output's "copy".
+        assert_eq!(last(0x41A0), Some(ucx::matrix_gain(1.0)));
+        assert_eq!(last(0x4320), Some(ucx::matrix_gain(0.25)));
     }
 
     #[test]

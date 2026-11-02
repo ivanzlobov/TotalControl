@@ -370,9 +370,9 @@ the affected sends:
   The equal-power law is `theta = (1 - w) * pi / 4`, `a = G * cos(theta)`,
   `b = G * sin(theta)`, where `G` is the send gain of each source. One
   routing writes `(dsp L, src L) = a`, `(dsp L, src R) = b`,
-  `(dsp R, src L) = b`, `(dsp R, src R) = a`; the playback sources also
-  write their `+0x180` copy. The `0x44xx` anchors are the same matrix
-  family with the ADAT 7/8 submix (DSP outputs 16/17) selected.
+  `(dsp R, src L) = b`, `(dsp R, src R) = a`. Each send occupies one
+  matrix cell; no second copy is written. The `0x44xx` anchors are the
+  same matrix family with the ADAT 7/8 submix (DSP outputs 16/17) selected.
 - **MS Proc on software playback** — the playback's send words
   (`0x4020…`, `0x4120…`, `0x41A0…` families).  On hardware inputs MS Proc
   writes `NN05` on both channels and the same send recompute.  With source
@@ -722,7 +722,9 @@ peak == 0   = below range
 
 Input meters use the larger of input A and input B. Playback meters use the
 playback page. Hardware-output meters use the post-fader page, reordered from
-DSP order to the Phones-first output order.
+DSP order to the Phones-first output order. TuxMix's meters use the peak
+word; the power word is mean square and reads several dB below the peak for
+music.
 
 ## 14. State and scenes
 

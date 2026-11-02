@@ -26,12 +26,17 @@ fn hash_of(f: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u6
 /// and the tick is fast enough (30 Hz, `app::TICK_ACTIVE`) that it still
 /// reads as motion; the cap's easing after an outside change keeps its own
 /// short animation.
-const INTERPOLATE_METERS: bool = false;
+/// Meters interpolate between tick keyframes in their own canvas, which
+/// asks for extra redraws only while it is still catching up.  The view
+/// itself does not need to be rebuilt for that, so a live signal no longer
+/// forces the whole mixer to redraw at the meter rate.
+const INTERPOLATE_METERS: bool = true;
 
-/// How long a meter keyframe transition takes to visually settle — matches
-/// `app.rs`'s `Tick` interval, since that's how often a new keyframe
-/// (`MeterFrame`) arrives.
-const METER_INTERP_MS: f32 = 50.0;
+/// How long a meter keyframe transition takes to visually settle.  It is
+/// deliberately a little longer than the idle tick (`TICK_IDLE`, 100 ms) so
+/// consecutive keyframes overlap and the canvas redraws continuously while
+/// a signal is live.
+const METER_INTERP_MS: f32 = 120.0;
 
 /// A meter's ease-out keyframe pair — the ballistics in `app.rs` only
 /// compute a new value once per `Tick` (50ms), which reads as a stair-step
@@ -320,6 +325,12 @@ pub struct State {
     ruler_key: std::cell::Cell<u64>,
     track_cache: canvas::Cache,
     track_key: std::cell::Cell<u64>,
+    /// The meter's static chrome: the dark well behind the level and the
+    /// N/A dashes. Cached like the ruler and track so a live signal only
+    /// re-tessellates nothing — the level itself is drawn with plain
+    /// rectangles.
+    meter_cache: canvas::Cache,
+    meter_key: std::cell::Cell<u64>,
     dragging: bool,
     last_click: Option<Instant>,
     /// Last cursor Y seen during an active drag. Each move applies the
@@ -530,7 +541,36 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let (track_x, meter_x) = self.layout_x(bounds.width);
-        let mut layers: Vec<Geometry> = Vec::with_capacity(3);
+        let mut layers: Vec<Geometry> = Vec::with_capacity(4);
+
+        // Static layer 0: the meter's dark well and (when unmetered) the
+        // N/A dashes. Only the level changes per tick, and it is drawn with
+        // plain rectangles in the dynamic layer below.
+        if self.show_meter {
+            let (meter_rect, _) = meter_column(meter_x, bounds.height, self.scale);
+            let key = hash_of(|h| {
+                (
+                    bounds.width.to_bits(),
+                    bounds.height.to_bits(),
+                    self.scale.to_bits(),
+                )
+                    .hash(h);
+                meter_x.to_bits().hash(h);
+                (self.meter_available, self.meter2_available, self.meter2.is_some()).hash(h);
+            });
+            if state.meter_key.replace(key) != key {
+                state.meter_cache.clear();
+            }
+            layers.push(state.meter_cache.draw(renderer, bounds.size(), |frame| {
+                draw_meter_chrome(
+                    frame,
+                    meter_rect,
+                    self.scale,
+                    self.meter_available,
+                    self.meter2.map(|_| self.meter2_available),
+                );
+            }));
+        }
 
         // Dynamic layer: the level (and the label, on the cells that have
         // one). Redrawn every time.
@@ -710,6 +750,64 @@ const FILL_ALPHA: f32 = 0.92;
 /// placed edge to edge (user-confirmed against the reference, having
 /// caught this session's own earlier gap where a linked pair silently
 /// only ever showed its left/even channel's level).
+/// Splits the meter column into one full-width bar, or two thin bars for a
+/// linked stereo pair.
+fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
+    if !second {
+        return (r, None);
+    }
+    let gap = 1.0 * scale;
+    let half_w = ((r.width - gap) / 2.0).max(0.0);
+    (
+        Rectangle::new(r.position(), Size::new(half_w, r.height)),
+        Some(Rectangle::new(
+            Point::new(r.x + half_w + gap, r.y),
+            Size::new(half_w, r.height),
+        )),
+    )
+}
+
+/// The static part of a meter: its dark well and, on a backend without a
+/// meter for this channel, the N/A dashes.  Cached per fader; the moving
+/// level and peak are drawn with plain rectangles on the dynamic layer.
+fn draw_meter_chrome(
+    frame: &mut Frame,
+    r: Rectangle,
+    scale: f32,
+    available: bool,
+    second_available: Option<bool>,
+) {
+    let (left, right) = meter_split(r, scale, second_available.is_some());
+    draw_meter_bar_chrome(frame, left, scale, available);
+    if let (Some(r2), Some(available2)) = (right, second_available) {
+        draw_meter_bar_chrome(frame, r2, scale, available2);
+    }
+}
+
+fn draw_meter_bar_chrome(frame: &mut Frame, r: Rectangle, scale: f32, available: bool) {
+    frame.fill(
+        &Path::new(|b| {
+            b.rounded_rectangle(r.position(), r.size(), (METER_RADIUS * scale).into())
+        }),
+        Color::from_rgb8(0x08, 0x08, 0x0a),
+    );
+    if !available {
+        let dash_w = r.width * 0.5;
+        let dash_h = 2.0 * scale;
+        let dash_x = r.x + (r.width - dash_w) / 2.0;
+        let count = ((r.height / (dash_h * 2.5)).floor() as usize).max(1);
+        for i in 0..count {
+            let dash_y = r.y + r.height * (i as f32 + 0.5) / count as f32;
+            frame.fill_rectangle(
+                Point::new(dash_x, dash_y - dash_h / 2.0),
+                Size::new(dash_w, dash_h),
+                Color::from_rgb8(0x3a, 0x3a, 0x3e),
+            );
+        }
+    }
+}
+
+/// Draws the moving part of one or two meter bars.
 fn draw_meter(
     frame: &mut Frame,
     r: Rectangle,
@@ -719,19 +817,11 @@ fn draw_meter(
     available: bool,
     right: Option<(f32, f32, bool)>,
 ) {
-    let Some((level2, peak2, available2)) = right else {
-        draw_meter_bar(frame, r, level, peak, scale, available);
-        return;
-    };
-    let gap = 1.0 * scale;
-    let half_w = ((r.width - gap) / 2.0).max(0.0);
-    let left_rect = Rectangle::new(r.position(), Size::new(half_w, r.height));
-    let right_rect = Rectangle::new(
-        Point::new(r.x + half_w + gap, r.y),
-        Size::new(half_w, r.height),
-    );
-    draw_meter_bar(frame, left_rect, level, peak, scale, available);
-    draw_meter_bar(frame, right_rect, level2, peak2, scale, available2);
+    let (left, right_rect) = meter_split(r, scale, right.is_some());
+    draw_meter_bar(frame, left, level, peak, scale, available);
+    if let (Some(r2), Some((level2, peak2, available2))) = (right_rect, right) {
+        draw_meter_bar(frame, r2, level2, peak2, scale, available2);
+    }
 }
 
 fn draw_meter_bar(
@@ -742,51 +832,24 @@ fn draw_meter_bar(
     scale: f32,
     available: bool,
 ) {
+    if !available {
+        // The dark well and the N/A dashes are static and come from
+        // `draw_meter_chrome`.
+        return;
+    }
     let l = level.clamp(0.0, 1.0);
     let fill_w = r.width;
-    let radius = METER_RADIUS * scale;
     let clip_h = CLIP_H * scale;
 
-    // Background/fill are measured against the *full* `r`, exactly like
+    // The fill is measured against the *full* `r`, exactly like
     // `draw_ruler`'s ticks and the fader cap next to it — previously
     // this track was inset by the clip-LED's reserved strip, so a
     // signal's fill top landed a few px below its own ruler gridline at
-    // every dB value, worst right at 0 dBFS (fixed as its own residual,
-    // right after the linear-vs-tapered curve fix below fixed the
-    // *shape* of that same mismatch). The clip LED is drawn last (see
-    // below) and fully opaque, so it still reads as a distinct control
-    // sitting on top of the meter, not blended into it — it just no
-    // longer reserves its own dead strip that the fill could never
-    // reach.
-    frame.fill(
-        &Path::new(|b| b.rounded_rectangle(r.position(), r.size(), radius.into())),
-        Color::from_rgb8(0x08, 0x08, 0x0a),
-    );
-
-    if !available {
-        // A handful of short dashes down the middle of the track, in a
-        // dim neutral gray — reads as "N/A" without needing text layout
-        // inside a canvas this narrow.
-        let dash_w = fill_w * 0.5;
-        let dash_h = 2.0 * scale;
-        let dash_x = r.x + (fill_w - dash_w) / 2.0;
-        let count = ((r.height / (dash_h * 2.5)).floor() as usize).max(1);
-        for i in 0..count {
-            let dash_y = r.y + r.height * (i as f32 + 0.5) / count as f32;
-            frame.fill(
-                &Path::new(|b| {
-                    b.rounded_rectangle(
-                        Point::new(dash_x, dash_y - dash_h / 2.0),
-                        Size::new(dash_w, dash_h),
-                        (dash_h / 2.0).into(),
-                    )
-                }),
-                Color::from_rgb8(0x3a, 0x3a, 0x3e),
-            );
-        }
-        return;
-    }
-
+    // every dB value, worst right at 0 dBFS. The clip LED is drawn last
+    // (see below) and fully opaque, so it still reads as a distinct
+    // control sitting on top of the meter, not blended into it — it
+    // just no longer reserves its own dead strip that the fill could
+    // never reach.
     if l > 0.0 {
         // `l` is linear amplitude (1.0 = 0 dBFS), but the ruler's
         // ticks — and the fader track right next to this column — are
@@ -807,11 +870,9 @@ fn draw_meter_bar(
             let zone_bottom = r.y + r.height - r.height * db_to_t(lower_db);
             let zone_top = (r.y + r.height - r.height * db_to_t(upper_db)).max(top);
             if zone_top < zone_bottom {
-                frame.fill(
-                    &Path::rectangle(
-                        Point::new(r.x, zone_top),
-                        Size::new(fill_w, zone_bottom - zone_top),
-                    ),
+                frame.fill_rectangle(
+                    Point::new(r.x, zone_top),
+                    Size::new(fill_w, zone_bottom - zone_top),
                     Color {
                         a: FILL_ALPHA,
                         ..color
@@ -829,11 +890,9 @@ fn draw_meter_bar(
     if p > l + 0.002 {
         let peak_y = r.y + r.height - r.height * vol_to_t(p);
         let h = (1.5 * scale).max(1.0);
-        frame.fill(
-            &Path::rectangle(
-                Point::new(r.x, (peak_y - h / 2.0).max(r.y)),
-                Size::new(fill_w, h),
-            ),
+        frame.fill_rectangle(
+            Point::new(r.x, (peak_y - h / 2.0).max(r.y)),
+            Size::new(fill_w, h),
             Color {
                 a: 0.9,
                 ..theme::TEXT_PRIMARY
@@ -871,16 +930,7 @@ fn draw_meter_bar(
             },
         );
     }
-    frame.fill(
-        &Path::new(|b| {
-            b.rounded_rectangle(
-                clip_rect.position(),
-                clip_rect.size(),
-                (clip_h / 2.0).into(),
-            )
-        }),
-        clip_color,
-    );
+    frame.fill_rectangle(clip_rect.position(), clip_rect.size(), clip_color);
 }
 
 /// The narrow recessed channel a compact (no-meter) fader slides in — one
@@ -1190,7 +1240,7 @@ mod tests {
             "mid-transition — should still be settling"
         );
         assert!(
-            !f.is_settling(f.since + Duration::from_millis(60)),
+            !f.is_settling(f.since + Duration::from_millis(METER_INTERP_MS as u64 + 10)),
             "past the interp window — should have stopped requesting redraws"
         );
     }
@@ -1204,8 +1254,11 @@ mod tests {
             since: Instant::now(),
         };
         assert_eq!(f.at(f.since), 0.0);
-        assert_eq!(f.at(f.since + Duration::from_millis(50)), 1.0);
-        let mid = f.at(f.since + Duration::from_millis(25));
+        assert_eq!(
+            f.at(f.since + Duration::from_millis(METER_INTERP_MS as u64)),
+            1.0
+        );
+        let mid = f.at(f.since + Duration::from_millis((METER_INTERP_MS / 2.0) as u64));
         assert!(
             (mid - 0.5).abs() < 0.01,
             "expected ~0.5 at the midpoint, got {mid}"

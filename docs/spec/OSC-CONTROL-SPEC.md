@@ -563,8 +563,10 @@ Matrix cells are:
 `source` is 0..17 for hardware inputs and `0x20..0x31` for software playback.
 The value is 15-bit signed with a coarse-scale flag in bit 15.
 
-Playback sends use the `0x4020` and `0x41A0` families. The playback FX send
-uses `0x47A0 + 2 × channel` and its `+0x41` mirror.
+Playback sends use the `0x4020` and `0x41A0` families, which are different
+output rows (`0x4020` is AN 1/2 and `0x41A0` is Phones), not copies of one
+another. The playback FX send uses `0x47A0 + 2 × channel` and its `+0x41`
+mirror.
 
 ### 12.5 IF1 word
 

@@ -963,6 +963,40 @@ impl DeviceHandle {
         }
     }
 
+    /// Peak words for the same channels as `input_meters`.  `None` when
+    /// the backend only reports mean power.
+    pub fn input_peaks(&self) -> Option<Vec<f32>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.input_peaks();
+        }
+        None
+    }
+
+    pub fn device_playback_peaks(&self) -> Option<Vec<f32>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.playback_peaks();
+        }
+        None
+    }
+
+    pub fn device_output_peaks(&self) -> Option<Vec<f32>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.output_peaks_internal(true);
+        }
+        None
+    }
+
+    pub fn fx_peaks(&self) -> Option<[f32; 2]> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.fx_peaks();
+        }
+        None
+    }
+
     /// UCX FX bus meters: `[send, return]`.
     pub fn fx_meters(&self) -> Option<[f32; 2]> {
         #[cfg(feature = "alsa")]
@@ -1903,9 +1937,16 @@ pub enum Message {
     EngineQuantum(u32),
     /// Periodic re-read of the PipeWire clock (another app may change it).
     EnginePoll,
-    /// The graph clock, the card's own open stream (`None` = idle), and
-    /// whether a Fireface playback sink is running.
-    EngineRead(Option<PwClock>, Option<CardStream>, bool),
+    /// The graph clock, the card's own open stream (`None` = idle), whether
+    /// a Fireface playback sink is running, and the host sink's volume.
+    EngineRead(
+        Option<PwClock>,
+        Option<CardStream>,
+        bool,
+        Option<(u32, f32)>,
+    ),
+    /// Set the Fireface PipeWire sink to unity (0 dB, 100 %).
+    HostVolumeUnity,
 }
 
 /// The two inline text fields a strip can open.
@@ -2297,6 +2338,10 @@ pub struct TuxMix {
     /// its rate and hardware period, which the sound server may pin
     /// regardless of the quantum. `None` while the card is idle.
     pub card_stream: Option<CardStream>,
+    /// The Fireface PipeWire sink's volume (percent, dB), polled with the
+    /// engine.  It is an attenuation *before* the device, so a sink below
+    /// 0 dB makes the playback meters read low even for a full-scale file.
+    pub host_volume: Option<(u32, f32)>,
     /// The kernel driver's period floor (`urb_frames` for the UC), read at
     /// launch: which buffer sizes the card can actually run. `None` when
     /// unknown (no kernel driver), taken as the default 32.
@@ -2735,6 +2780,7 @@ pub fn new_with_device(
         engine_force_rate: 0,
         engine_force_quantum: 0,
         card_stream: None,
+        host_volume: None,
         // The mock stands for the stock driver.
         driver_floor: simulated.then_some(32),
         driver_queue: simulated.then_some((48, 2)),
@@ -3087,6 +3133,7 @@ pub fn apply_startup_sync(state: &mut TuxMix) {
                 // `apply_scene` normalizes old scenes into the live channel
                 // topology.  Keep that normalized view as the host scene so
                 // the next auto-save cannot write stale names/order back.
+                enforce_control_room_stereo(state);
                 state.host_scene = Some(state.device.capture_scene());
                 if state.always_init_device {
                     // "Always use TuxMix settings" skips the dialog, so the
@@ -3142,6 +3189,7 @@ pub fn apply_startup_sync(state: &mut TuxMix) {
         if let Err(e) = state.device.apply_scene(&scene) {
             eprintln!("auto scene load failed: {e:?}");
         } else {
+            enforce_control_room_stereo(state);
             state.host_scene = Some(state.device.capture_scene());
         }
     }
@@ -3303,6 +3351,19 @@ fn is_control_room_cid(state: &TuxMix, cid: ChannelId) -> bool {
         return false;
     };
     state.is_output_assigned(i / 2)
+}
+
+/// Control Room pairs cannot be unlinked. Every assigned pair is linked
+/// before a message is handled and after a scene is applied, so no
+/// interaction, recall or external client can leave one split.
+fn enforce_control_room_stereo(state: &mut TuxMix) {
+    let pairs = state.device.output_pair_count();
+    let assigned: Vec<usize> = state.assigned_pairs().collect();
+    for pair in assigned {
+        if pair < pairs && !state.device.output_linked(pair) {
+            let _ = state.device.set_output_linked(pair, true);
+        }
+    }
 }
 
 /// The name a strip shows: the user's label unless "show original names"
@@ -4623,6 +4684,9 @@ fn select_strip(state: &mut TuxMix, cid: ChannelId) {
 }
 
 pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
+    // A Control Room pair can never be unlinked; correct the model before
+    // the message below acts on it.
+    enforce_control_room_stereo(state);
     // The Assign cards close on an explicit close or an actual click
     // elsewhere.  Hover messages, the periodic engine poll and the collapse
     // animation tick must not close them: moving from the assign button to
@@ -4823,6 +4887,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                                 if let Err(e) = state.device.apply_scene(&scene) {
                                     fail(state, "apply_scene", &e);
                                 } else {
+                                    enforce_control_room_stereo(state);
                                     state.host_scene = Some(state.device.capture_scene());
                                 }
                                 if state.device.is_uc_model() {
@@ -4892,7 +4957,11 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             }
             let input_trims: Vec<f32> =
                 state.device.inputs().iter().map(|c| c.trim).collect();
-            let in_levels = trim_meter_levels(&state.device.input_meters(), &input_trims);
+            let raw_input = state
+                .device
+                .input_peaks()
+                .unwrap_or_else(|| state.device.input_meters());
+            let in_levels = trim_meter_levels(&raw_input, &input_trims);
             for (i, m) in state.input_meters.iter_mut().enumerate() {
                 m.step_elapsed(in_levels.get(i).copied().unwrap_or(0.0));
             }
@@ -4901,7 +4970,10 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             // device too when it supplies them; otherwise fall back to the
             // host-side matrix sum used by the ALSA/mock backends.
             let (pb_levels, device_output) =
-                if let Some(pb) = state.device.device_playback_meters() {
+                if let Some(pb) = state.device.device_playback_peaks() {
+                    state.playback_tap_channels = state.device.playbacks().len();
+                    (pb, state.device.device_output_peaks())
+                } else if let Some(pb) = state.device.device_playback_meters() {
                     state.playback_tap_channels = state.device.playbacks().len();
                     (pb, state.device.device_output_meters())
                 } else {
@@ -4934,22 +5006,19 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             for (i, m) in state.output_meters.iter_mut().enumerate() {
                 m.step_elapsed(out_levels.get(i).copied().unwrap_or(0.0));
             }
-            let fx_levels = state.device.fx_meters().unwrap_or([0.0, 0.0]);
+            let fx_levels = state
+                .device
+                .fx_peaks()
+                .or_else(|| state.device.fx_meters())
+                .unwrap_or([0.0, 0.0]);
             for (i, m) in state.fx_meters.iter_mut().enumerate() {
                 m.step_elapsed(fx_levels[i]);
             }
             state.fx_overload = state.device.fx_overload().unwrap_or([false, false]);
-            // A live signal keeps the UI on the fast tick (and the fade
-            // after it, `ACTIVE_FOR`); silence lets it go idle.
-            const LIVE: f32 = 0.002;
-            if in_levels
-                .iter()
-                .chain(pb_levels.iter())
-                .chain(out_levels.iter())
-                .any(|l| *l > LIVE)
-            {
-                state.last_activity = Instant::now();
-            }
+            // Meter motion does not need the whole view rebuilt: the
+            // fader canvases interpolate between these keyframes and ask
+            // for their own redraws (see `widgets::fader`).  The idle tick
+            // therefore keeps polling levels while the UI stays at rest.
             // Persist the mixer state (debounced 3 s) for the backend that
             // has no gain/volume readback (USB); this is its restore source
             // for the next open (loaded in `new()`). ALSA backends read the
@@ -5605,7 +5674,14 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             }
             notify_osc_bool(state, format!("/output/{i}/loopback"), on);
         }
-        Message::StereoLinkChanged(cid, linked) => {            let _ = match cid {
+        Message::StereoLinkChanged(cid, linked) => {
+            // A Control Room pair never splits, whichever client asks.
+            let linked = if is_control_room_cid(state, cid) {
+                true
+            } else {
+                linked
+            };
+            let _ = match cid {
                 ChannelId::Input(i) => state.device.set_input_pair_linked(i / 2, linked),
                 ChannelId::Playback(i) => state.device.set_playback_linked(i / 2, linked),
                 ChannelId::Output(i) => state.device.set_output_linked(i / 2, linked),
@@ -6046,6 +6122,14 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 }
             }
             state.assign[dest] = pair;
+            // A Control Room channel is always stereo: linking here, before
+            // the slot animation measures the pair, makes a split pair join
+            // as the single stereo strip it will be in the Control Room.
+            if let Some(pair) = pair {
+                if let Err(e) = state.device.set_output_linked(pair, true) {
+                    fail(state, "assign stereo", &e);
+                }
+            }
             let old_outputs: [Option<usize>; OUTPUT_DESTS] =
                 std::array::from_fn(|i| old_assign[i]);
             let new_outputs: [Option<usize>; OUTPUT_DESTS] =
@@ -6128,7 +6212,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 if let Err(e) = state.device.apply_scene(&scene) {
                     fail(state, "undo", &e);
                 } else {
-                    state.host_scene = Some(scene);
+                    enforce_control_room_stereo(state);
+                    state.host_scene = Some(state.device.capture_scene());
                 }
             }
         }
@@ -6144,7 +6229,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 if let Err(e) = state.device.apply_scene(&scene) {
                     fail(state, "redo", &e);
                 } else {
-                    state.host_scene = Some(scene);
+                    enforce_control_room_stereo(state);
+                    state.host_scene = Some(state.device.capture_scene());
                 }
             }
         }
@@ -6291,6 +6377,13 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 state.card_stream = pw_clock::card_stream(state.device.card_id());
             }
         }
+        Message::HostVolumeUnity => {
+            if pw_clock::set_fireface_sink_unity() {
+                state.host_volume = pw_clock::fireface_sink_volume();
+                state.notice =
+                    Some(("Host volume set to 0 dB".into(), Instant::now()));
+            }
+        }
         Message::EnginePoll => {
             // Off the UI thread: both the graph read and the `pactl`
             // probe spawn processes (~10 ms).  Capture what the async
@@ -6303,18 +6396,27 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 async move {
                     let sink_running =
                         follows && !is_mock && pw_clock::fireface_sink_running();
+                    let host_volume = if follows && !is_mock {
+                        pw_clock::fireface_sink_volume()
+                    } else {
+                        None
+                    };
                     (
                         pw_clock::read(),
                         pw_clock::card_stream(card_id),
                         sink_running,
+                        host_volume,
                     )
                 },
-                |(clock, stream, sink_running)| {
-                    Message::EngineRead(clock, stream, sink_running)
+                |(clock, stream, sink_running, host_volume)| {
+                    Message::EngineRead(clock, stream, sink_running, host_volume)
                 },
             );
         }
-        Message::EngineRead(clock, stream, sink_running) => {
+        Message::EngineRead(clock, stream, sink_running, host_volume) => {
+            if host_volume.is_some() {
+                state.host_volume = host_volume;
+            }
             if state.device.rate_follows_sound_server() {
                 let sink_started = sink_running && !state.last_sink_running;
                 let new_rate = stream.map(|s| s.rate);
@@ -6462,7 +6564,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 if let Err(e) = state.device.apply_scene(&scene) {
                     fail(state, "snapshot", &e);
                 } else {
-                    state.host_scene = Some(scene);
+                    enforce_control_room_stereo(state);
+                    state.host_scene = Some(state.device.capture_scene());
                 }
             }
             notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
@@ -6628,6 +6731,7 @@ fn switch_device(state: &mut TuxMix, target: DeviceTarget) -> Result<(), String>
     state.last_sink_running = false;
     state.last_card_rate = None;
     apply_prefs(state, prefs);
+    enforce_control_room_stereo(state);
     state.sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
@@ -6635,6 +6739,7 @@ fn switch_device(state: &mut TuxMix, target: DeviceTarget) -> Result<(), String>
         if let Some(scene) = load_scene_for_current(state) {
             state.host_scene = Some(scene.clone());
             if state.device.apply_scene(&scene).is_ok() {
+                enforce_control_room_stereo(state);
                 state.host_scene = Some(state.device.capture_scene());
             }
         }
@@ -6703,34 +6808,50 @@ fn panel_fingerprint(state: &TuxMix) -> f64 {
         + if state.device.settings().dim { 7777.0 } else { 0.0 }
 }
 
-/// The tick while something is moving (meters, a drag, the front panel):
-/// 30 Hz. Meters redraw on it and no longer in between (see
-/// `widgets::fader::INTERPOLATE_METERS`), so it is also their frame rate.
+/// The tick while something is being dragged or animated: 30 Hz.
 const TICK_ACTIVE: Duration = Duration::from_millis(33);
+/// The tick while only live meters are moving: 25 Hz.  The full view is
+/// rebuilt on every tick, so this is the difference between ~37 % and ~25 %
+/// of a core on a busy mixer; 25 Hz still reads as smooth VU motion.
+const TICK_METERS: Duration = Duration::from_millis(40);
+/// The tick while the window is hidden in the tray: 4 Hz.  Nothing on
+/// screen can change, but the front panel, connection probe and autosave
+/// still need to run.
+const TICK_HIDDEN: Duration = Duration::from_millis(250);
 /// The tick at rest. Every tick rebuilds and redraws the whole view, so at
 /// rest it only has to keep the slow chores alive (connection probe,
 /// auto-save, the front panel); anything that changes the screen switches
-/// back to `TICK_ACTIVE` at once.
+/// back to a faster tick at once.
 const TICK_IDLE: Duration = Duration::from_millis(100);
 /// How long after the last change the tick stays fast: longer than the
 /// meters' release, so a fading peak is drawn to the end.
 const ACTIVE_FOR: Duration = Duration::from_millis(1500);
 
-/// Whether the screen has anything moving, i.e. the tick should be fast.
-fn is_active(state: &TuxMix) -> bool {
-    state.last_activity.elapsed() < ACTIVE_FOR
-        || state.pending_resize_width.is_some()
+/// A drag or a layout animation needs the 30 Hz tick; live meters only
+/// need the meter tick.  Keeping these separate stops a mixer that is
+/// merely showing levels from paying the interaction frame rate.
+fn needs_fast_redraw(state: &TuxMix) -> bool {
+    state.pending_resize_width.is_some()
         || !state.collapse_anim.is_empty()
         || !state.flyout_anim.is_empty()
         || !state.stereo_anim.is_empty()
         || state.fx_anim.is_some()
         || state.drag_range.is_some()
-        || state.notice.is_some()
+}
+
+/// Whether the screen has anything moving, i.e. the tick should be faster
+/// than idle.
+fn is_active(state: &TuxMix) -> bool {
+    state.last_activity.elapsed() < ACTIVE_FOR || state.notice.is_some()
 }
 
 pub fn tick_interval(state: &TuxMix) -> Duration {
-    if is_active(state) {
+    if state.window_hidden {
+        TICK_HIDDEN
+    } else if needs_fast_redraw(state) {
         TICK_ACTIVE
+    } else if is_active(state) {
+        TICK_METERS
     } else {
         TICK_IDLE
     }
@@ -7824,6 +7945,28 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
     );
+    if let Some((percent, db)) = state.host_volume {
+        let colour = if db < -0.5 {
+            theme::YSIM
+        } else {
+            theme::TEXT_PRIMARY
+        };
+        body = body.push(
+            row![
+                caption("Host volume"),
+                text(format!("{percent}% ({db:.1} dB)"))
+                    .size(theme::TEXT_XS * ts)
+                    .color(colour),
+                iced::widget::Space::new().width(Length::Fill),
+                button(text("0 dB").size(theme::TEXT_XS * scale))
+                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                    .style(theme::ghost_button)
+                    .on_press(Message::HostVolumeUnity),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    }
     body.spacing(theme::SPACE_MD * scale)
     .width(Length::Fill)
     .into()
@@ -8657,7 +8800,9 @@ fn strip_params<'a>(
         }
         ChannelId::Output(i) => {
             let ch = &state.device.outputs()[i];
-            let linked = state.device.output_linked(i / 2);
+            // A Control Room channel is always stereo, whatever the stored
+            // link state says; every assigned pair is linked on assignment.
+            let linked = state.device.output_linked(i / 2) || is_control_room_cid(state, cid);
             let left = i & !1;
             let right = left + 1;
             // Output balance is implicit in the two channel levels.  The
@@ -8716,7 +8861,7 @@ fn strip_params<'a>(
                 has_dynamics: caps.dynamics && ch.dynamics.is_some(),
                 dynamics_on: ch.dynamics.is_some_and(|d| d.on),
                 loopback: ch.loopback,
-                stereo_linked: state.device.output_linked(i / 2),
+                stereo_linked: linked,
                 mute: ch.mute,
                 solo: ch.solo,
 
@@ -9216,25 +9361,34 @@ fn settings_popover(state: &TuxMix, cid: ChannelId, width: f32, scale: f32) -> E
     // A playback pair's link is its hardware stereo split (the pair goes
     // split-mono into AN1/2), an RME-protocol register: in Class Compliant
     // mode the switch is shown but inert, saying why.
-    let can_toggle = !matches!(cid, ChannelId::Playback(_)) || p.stereo_split_supported;
-    let tip = match (cid, can_toggle) {
-        (ChannelId::Playback(_), false) if state.device.class_compliant() => {
-            "Splitting a playback pair needs the RME protocol (not in Class Compliant mode)"
+    // A Control Room channel is always stereo: its pair cannot be split, so
+    // the control stays engaged and inert (the locked style keeps the lit
+    // outline rather than the disabled dimming).
+    let cr = is_control_room_cid(state, cid);
+    let can_toggle =
+        !cr && (!matches!(cid, ChannelId::Playback(_)) || p.stereo_split_supported);
+    let tip = if cr {
+        "Control Room channels are always stereo"
+    } else {
+        match (cid, can_toggle) {
+            (ChannelId::Playback(_), false) if state.device.class_compliant() => {
+                "Splitting a playback pair needs the RME protocol (not in Class Compliant mode)"
+            }
+            (ChannelId::Playback(_), false) => {
+                "Splitting a playback pair is not supported by this backend"
+            }
+            (ChannelId::Playback(_), true) => {
+                "Stereo: one strip for the pair. Off: two mono strips, split L/R into AN1/2"
+            }
+            _ => "Stereo: one strip for the pair. Off: the two channels as separate strips",
         }
-        (ChannelId::Playback(_), false) => {
-            "Splitting a playback pair is not supported by this backend"
-        }
-        (ChannelId::Playback(_), true) => {
-            "Stereo: one strip for the pair. Off: two mono strips, split L/R into AN1/2"
-        }
-        _ => "Stereo: one strip for the pair. Off: the two channels as separate strips",
     };
     let stereo = hint(
         button(strip::centered_label("STEREO", theme::TEXT_SM * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
-                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
-            .style(theme::stereo_button(p.stereo_linked))
+            .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+            .style(theme::stereo_button_state(p.stereo_linked || cr, cr))
             .on_press_maybe(
                 can_toggle.then_some(Message::StereoLinkChanged(cid, !p.stereo_linked)),
             ),
@@ -9708,7 +9862,7 @@ fn settings_popover(state: &TuxMix, cid: ChannelId, width: f32, scale: f32) -> E
                 scale,
             )
         };
-        if p.stereo_linked {
+        if p.stereo_linked || cr {
             let left = out & !1;
             let right = left + 1;
             let left_on = state
@@ -11685,7 +11839,10 @@ fn apply_reset_mix(state: &mut TuxMix, kind: ResetMix) {
                 let _ = state.device.set_input_pair_linked(pair, inputs_linked);
             }
             for pair in 0..pairs {
-                let _ = state.device.set_output_linked(pair, outputs_linked);
+                // Control Room channels are always stereo, so "Set all
+                // channels mono" leaves the assigned pairs linked.
+                let linked = outputs_linked || state.is_output_assigned(pair);
+                let _ = state.device.set_output_linked(pair, linked);
             }
             state.notice = Some((
                 "Channel stereo/mono reset".into(),
@@ -11799,6 +11956,12 @@ fn control_room_panel(
         params.name_custom = true;
         params.name_locked = true;
         params.renameable = false;
+        // A linked output pair shows both channels' meters, like the
+        // Hardware Outputs row does.
+        if state.device.output_linked(pair) {
+            params.meter2 = state.output_meters.get(pair * 2 + 1).map(MeterAnim::frame);
+            params.meter2_available = output_meter_available(state, pair * 2 + 1);
+        }
         let strip_w = strip::STRIP_W * scale;
         let mut item: Element<'_, Message> = strip::strip(finish_params(state, params));
         // A slideout always opens to the right of its channel. The Control
@@ -12881,7 +13044,7 @@ mod tests {
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
-        is_control_room_cid,
+        is_control_room_cid, strip_params, ResetMix,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
     };
@@ -13208,6 +13371,36 @@ mod tests {
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn control_room_channels_are_always_stereo() {
+        let mut state = new(true, None, None);
+        // Split a pair, then assign it: assigning links it again.
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), false),
+        );
+        assert!(!state.device.output_linked(0));
+        let _ = update(&mut state, Message::AssignOutput(0, Some(0)));
+        assert!(
+            state.device.output_linked(0),
+            "a pair assigned to the Control Room is stereo"
+        );
+        // The strip and its Settings panel report it as linked.
+        let p = strip_params(&state, ChannelId::Output(0), state.sel_out);
+        assert!(p.stereo_linked);
+        // A split request from any client is refused while assigned.
+        let _ = update(
+            &mut state,
+            Message::StereoLinkChanged(ChannelId::Output(0), false),
+        );
+        assert!(state.device.output_linked(0));
+        // Reset Mix "Set all channels mono" leaves the Control Room pair
+        // linked and splits the unassigned pairs.
+        let _ = update(&mut state, Message::ResetMix(ResetMix::AllMono));
+        assert!(state.device.output_linked(0));
+        assert!(!state.device.output_linked(2));
     }
 
     #[test]
@@ -14597,37 +14790,52 @@ mod tests {
 
     #[test]
     fn the_tick_slows_down_at_rest_and_speeds_up_on_any_activity() {
-        use super::{tick_interval, TICK_ACTIVE, TICK_IDLE};
+        use super::{tick_interval, TICK_ACTIVE, TICK_HIDDEN, TICK_IDLE, TICK_METERS};
         let mut state = new(true, None, None);
         state.last_activity = Instant::now() - Duration::from_secs(10);
         assert_eq!(tick_interval(&state), TICK_IDLE, "nothing happened for a while");
 
         // The user doing anything wakes it, even a message that changes
-        // nothing visible (it costs one fast second).
+        // nothing visible.  With no drag or animation that is the meter
+        // rate, not the interaction rate.
         let _ = update(&mut state, Message::ToggleSidebarPanel(sidebar::Panel::Groups));
-        assert_eq!(tick_interval(&state), TICK_ACTIVE);
+        assert_eq!(tick_interval(&state), TICK_METERS);
 
         // Background polls do not count as activity.
         state.last_activity = Instant::now() - Duration::from_secs(10);
         let _ = update(&mut state, Message::EnginePoll);
-        let _ = update(&mut state, Message::EngineRead(None, None, false));
+        let _ = update(&mut state, Message::EngineRead(None, None, false, None));
         assert_eq!(tick_interval(&state), TICK_IDLE);
 
-        // A pending window resize and a running collapse animation keep it fast.
+        // A pending window resize and a running collapse animation keep it
+        // at the interaction rate.
         state.pending_resize_width = Some(1200.0);
         assert_eq!(tick_interval(&state), TICK_ACTIVE);
+        state.pending_resize_width = None;
+        state.drag_range = Some((ChannelId::Input(0), 0.0, 1.0));
+        assert_eq!(tick_interval(&state), TICK_ACTIVE);
+
+        // A hidden tray window only needs housekeeping.
+        state.drag_range = None;
+        state.window_hidden = true;
+        assert_eq!(tick_interval(&state), TICK_HIDDEN);
     }
 
     #[test]
-    fn a_live_signal_keeps_the_tick_fast_and_silence_releases_it() {
-        // The mock generates levels, so a Tick sees a live signal.
+    fn live_meters_do_not_force_the_view_tick() {
+        // The mock generates levels, so a Tick sees a live signal.  Meter
+        // keyframes are interpolated by the fader canvases; they must not
+        // wake the whole-view rebuild.
+        use super::{tick_interval, TICK_IDLE};
         let mut state = new(true, None, None);
         state.last_activity = Instant::now() - Duration::from_secs(10);
+        let before = state.last_activity;
         let _ = update(&mut state, Message::Tick);
-        assert!(
-            state.last_activity.elapsed() < Duration::from_secs(1),
-            "meters moving count as activity"
+        assert_eq!(
+            state.last_activity, before,
+            "meter motion belongs to the canvas, not to the view tick"
         );
+        assert_eq!(tick_interval(&state), TICK_IDLE);
     }
 
     #[test]

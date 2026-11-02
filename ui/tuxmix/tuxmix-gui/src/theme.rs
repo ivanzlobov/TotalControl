@@ -476,6 +476,27 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     outline_toggle(active, PHANTOM)
 }
 
+/// `stereo_button` with a locked form.  A Control Room channel's pair is
+/// always stereo, so its control is permanently engaged and not pressable;
+/// the locked style ignores the disabled state so the orange outline and
+/// label stay lit instead of dimming.
+pub fn stereo_button_state(
+    active: bool,
+    locked: bool,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    let engaged = outline_toggle(active, PHANTOM);
+    move |theme, status| {
+        engaged(
+            theme,
+            if locked {
+                button::Status::Active
+            } else {
+                status
+            },
+        )
+    }
+}
+
 /// A bare glyph button for the strip's settings gear.  It keeps the
 /// original button's hit area and size but drops the filled pill, border
 /// and shadow, so the gear reads as an icon rather than a labelled control.
