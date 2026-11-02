@@ -21,3 +21,10 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Release-optimised with symbols, for `perf`/profiling runs.  The shipped
+# release profile above is still the one used for final CPU numbers.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
