@@ -45,7 +45,7 @@ Hardware Outputs row; it holds your monitoring destinations (see
 [section 10](#10-control-room)).
 
 The right sidebar holds the device card (rate, buffer), Undo/Redo, global
-mute and solo, the FX switch, group and snapshot controls and layout. It
+mute and solo, the FX knob, group and snapshot controls and layout. It
 stays visible as the window narrows and can be collapsed.
 
 When the channels do not all fit, one slider at the lower right scrolls all
@@ -242,8 +242,9 @@ A change to any knob updates the whole dynamics block of that channel.
 
 ## 9. FX: sends, reverb and echo
 
-The `FX` button in the top bar opens the FX column, when the unit has an FX
-bus. Every input and playback strip can send to it:
+The `FX` knob in the right sidebar opens the FX column, when the unit has an
+FX bus. It lights while the column is out. Every input and playback strip can
+send to it:
 
 - the thin fader at the top of the strip (or `send FX` in the Settings
   panel) is the send level; its rail fills orange when raised;

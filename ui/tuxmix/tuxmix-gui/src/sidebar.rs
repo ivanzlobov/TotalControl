@@ -29,8 +29,11 @@
 //! * Rows inside a panel are `SPACE_TIGHT` apart, panels are twice that
 //!   (see `panel`), and the whole column is one scrollable strip.
 
+use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Color, Element, Length};
+use iced::{
+    mouse, Alignment, Color, Element, Length, Point, Rectangle, Renderer, Theme,
+};
 
 use tuxmix_core::{ChannelId, RmeDevice};
 
@@ -662,16 +665,25 @@ fn msf_row(state: &TuxMix, scale: f32) -> Element<'_, Message> {
     r.into()
 }
 
-/// The FX switch on its own line under the masters, where TotalMix keeps
+/// The FX knob on its own line under the masters, where TotalMix keeps
 /// it: the Reverb/Echo column slides out between the mixer and this panel,
-/// and the button lights while it is there.
+/// and the knob lights while it is there.
 fn fx_row(state: &TuxMix, scale: f32) -> Element<'_, Message> {
     let open = state.show_fx_panel;
+    let knob = Canvas::new(FxKnob { open, scale })
+        .width(Length::Fixed(38.0 * scale))
+        .height(Length::Fixed(38.0 * scale));
+    let label = text("FX")
+        .size(theme::TEXT_XS * scale)
+        .color(if open { theme::TEXT_PRIMARY } else { theme::TEXT_SEC });
     hint(
-        button(text("FX").size(theme::TEXT_SM * scale).center())
-            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .style(theme::toggle_button(open, theme::ACCENT))
-            .on_press(Message::ToggleFxPanel),
+        mouse_area(
+            column![knob, label]
+                .spacing(theme::SPACE_TIGHT * scale)
+                .align_x(Alignment::Center)
+                .width(Length::Fill),
+        )
+        .on_press(Message::ToggleFxPanel),
         if open {
             "Hide the Reverb and Echo panel"
         } else {
@@ -680,6 +692,88 @@ fn fx_row(state: &TuxMix, scale: f32) -> Element<'_, Message> {
         scale,
     )
     .into()
+}
+
+/// The small rotary FX toggle.  Closed points down-left, open up-right;
+/// the ring and pointer take the full accent while the column is out.
+struct FxKnob {
+    open: bool,
+    scale: f32,
+}
+
+impl canvas::Program<Message> for FxKnob {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut (),
+        _event: &canvas::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        None
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if cursor.is_over(bounds) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+        let radius = bounds.width.min(bounds.height) / 2.0 - 1.5;
+        let ring = if self.open {
+            theme::ACCENT
+        } else {
+            Color::from_rgb8(0x4a, 0x4c, 0x53)
+        };
+        frame.fill(
+            &Path::circle(center, radius),
+            Color::from_rgb8(0x14, 0x15, 0x18),
+        );
+        frame.stroke(
+            &Path::circle(center, radius),
+            Stroke::default()
+                .with_color(ring)
+                .with_width((1.5 * self.scale).max(1.0)),
+        );
+        let angle: f32 = if self.open { -0.55 } else { 2.35 };
+        let end = Point::new(
+            center.x + angle.cos() * radius * 0.62,
+            center.y + angle.sin() * radius * 0.62,
+        );
+        frame.stroke(
+            &Path::line(center, end),
+            Stroke::default()
+                .with_color(if self.open {
+                    theme::ACCENT
+                } else {
+                    theme::TEXT_SEC
+                })
+                .with_width((2.0 * self.scale).max(1.0)),
+        );
+        frame.fill(
+            &Path::circle(center, (2.0 * self.scale).max(1.0)),
+            Color::from_rgb8(0x6a, 0x6c, 0x74),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 /// A short tooltip under a sidebar control, in the same chip as the panel

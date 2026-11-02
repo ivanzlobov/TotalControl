@@ -21,7 +21,7 @@ mixer area, one horizontal slider scrolls the three rows together. The slider
 sits in the main area, immediately left of the right sidebar.
 
 The right sidebar contains the device card, Undo/Redo, global mute/solo, the
-FX switch, group and snapshot controls, and layout. It stays in the layout as
+FX knob, group and snapshot controls, and layout. It stays in the layout as
 the window narrows. Its default width is 200 px; it accepts resizing and has
 its own collapse toggle.
 
@@ -455,8 +455,9 @@ Each knob writes the complete dynamics block for its channel.
 
 ## 7. FX panel
 
-The FX panel is a column between the mixer rows and the sidebar, toggled by
-the `FX` button in the top bar and shown only on a backend with the FX bus.
+The FX panel is a column between the mixer rows and the right sidebar,
+toggled by the `FX` knob in that sidebar and shown only on a backend with
+the FX bus.  The knob lights while the column is out.
 Reverb sits above Echo in one 180 px column.
 
 The column opens and closes with the same constant-speed width tween as the

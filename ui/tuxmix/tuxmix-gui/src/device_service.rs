@@ -86,6 +86,12 @@ pub struct DeviceInfo {
     pub canonical_model: String,
     pub capabilities: tuxmix_core::DeviceCapabilities,
     pub protocol_features: bool,
+    pub low_cut_supported: bool,
+    pub phase_supported: bool,
+    pub output_balance_supported: bool,
+    pub loopback_supported: bool,
+    pub stereo_split_supported: bool,
+    pub matrix_uses_display_order: bool,
     pub output_pair_count: usize,
     pub output_display_order: Vec<usize>,
     pub is_uc: bool,
@@ -293,6 +299,46 @@ impl RmeDevice for Mirror {
 
     fn model_name(&self) -> &str {
         &self.info.model_name
+    }
+
+    fn capabilities(&self) -> tuxmix_core::DeviceCapabilities {
+        self.info.capabilities
+    }
+
+    fn protocol_features(&self) -> bool {
+        self.info.protocol_features
+    }
+
+    fn canonical_model(&self) -> &str {
+        &self.info.canonical_model
+    }
+
+    fn low_cut_supported(&self) -> bool {
+        self.info.low_cut_supported
+    }
+
+    fn phase_supported(&self) -> bool {
+        self.info.phase_supported
+    }
+
+    fn output_balance_supported(&self) -> bool {
+        self.info.output_balance_supported
+    }
+
+    fn loopback_supported(&self) -> bool {
+        self.info.loopback_supported
+    }
+
+    fn stereo_split_supported(&self) -> bool {
+        self.info.stereo_split_supported
+    }
+
+    fn matrix_uses_display_order(&self) -> bool {
+        self.info.matrix_uses_display_order
+    }
+
+    fn output_display_order(&self) -> Vec<usize> {
+        self.info.output_display_order.clone()
     }
 
     fn is_connected(&self) -> bool {
@@ -1104,6 +1150,12 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
         canonical_model: device.canonical_model().to_string(),
         capabilities: device.capabilities(),
         protocol_features: device.protocol_features(),
+        low_cut_supported: device.low_cut_supported(),
+        phase_supported: device.phase_supported(),
+        output_balance_supported: device.output_balance_supported(),
+        loopback_supported: device.loopback_supported(),
+        stereo_split_supported: device.stereo_split_supported(),
+        matrix_uses_display_order: device.matrix_uses_display_order(),
         output_pair_count: device.output_pair_count(),
         output_display_order: device.output_display_order(),
         is_uc: device.is_uc_model(),
@@ -1353,6 +1405,21 @@ mod tests {
     }
 
     #[test]
+    fn the_mirror_forwards_the_captured_capabilities() {
+        let device = mock();
+        let caps = device.capabilities();
+        let order = device.output_display_order();
+        let model = device.canonical_model().to_string();
+        let service = DeviceService::spawn(device);
+        let info = service.snapshot().info;
+        assert_eq!(info.capabilities, caps);
+        assert!(info.capabilities.fx, "the UCX mock has an FX bus");
+        assert_eq!(info.output_display_order, order);
+        assert_eq!(info.canonical_model, model);
+        service.stop();
+    }
+
+    #[test]
     fn a_live_signal_marks_the_meter_bus_active() {
         let service = DeviceService::spawn(mock());
         assert!(
@@ -1438,3 +1505,4 @@ mod tests {
         service.stop();
     }
 }
+
