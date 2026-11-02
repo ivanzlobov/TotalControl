@@ -577,8 +577,12 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
                 let mut bus_live = false;
                 if let Some((bus, slot)) = &self.bus {
-                    bus_live = self.show_meter;
                     let snapshot = *bus.lock().unwrap();
+                    // The service stops writing visible movement once every
+                    // level and held peak has fallen below the floor.  The
+                    // last frame still runs: it draws the settled values and
+                    // then stops scheduling.
+                    bus_live = self.show_meter && snapshot.active;
                     let trim = trim_factor(self.meter_trim);
                     let (left, left_peak, mut right) =
                         bus_levels(&snapshot, *slot, self.meter2.is_some());
@@ -602,10 +606,13 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                         entry.right = None;
                     }
                 }
+                // With a bus the display comes from the shared snapshot;
+                // the view-fed meter (and its interpolation) is only the
+                // direct-backend fallback.
                 let mut still_animating = INTERPOLATE_METERS
                     && self.show_meter
-                    && self.meter.is_settling(*now)
-                    && !bus_live;
+                    && self.bus.is_none()
+                    && self.meter.is_settling(*now);
 
                 if !state.dragging {
                     let display = state
@@ -1266,6 +1273,7 @@ impl<Message> canvas::Program<Message> for VuMeter {
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
                 if let Some((bus, slot)) = &self.bus {
                     let snapshot = *bus.lock().unwrap();
+                    let active = snapshot.active;
                     let trim = trim_factor(self.meter_trim);
                     let (left, peak, _) = bus_levels(&snapshot, *slot, false);
                     let left = left * trim;
@@ -1275,9 +1283,11 @@ impl<Message> canvas::Program<Message> for VuMeter {
                         right: None,
                     });
                     entry.left = advance_bus(entry.left, left, peak, *now);
-                    return Some(canvas::Action::request_redraw_at(
-                        *now + Duration::from_millis(METER_FRAME_MS),
-                    ));
+                    return active.then(|| {
+                        canvas::Action::request_redraw_at(
+                            *now + Duration::from_millis(METER_FRAME_MS),
+                        )
+                    });
                 }
                 (INTERPOLATE_METERS && self.level.is_settling(*now))
                     .then_some(canvas::Action::request_redraw())
@@ -1368,9 +1378,15 @@ impl<Message> canvas::Program<Message> for FxMeter {
     ) -> Option<canvas::Action<Message>> {
         match event {
             canvas::Event::Window(window::Event::RedrawRequested(now)) if self.bus.is_some() => {
-                Some(canvas::Action::request_redraw_at(
-                    *now + Duration::from_millis(METER_FRAME_MS),
-                ))
+                let active = self
+                    .bus
+                    .as_ref()
+                    .is_some_and(|(bus, _)| bus.lock().unwrap().active);
+                active.then(|| {
+                    canvas::Action::request_redraw_at(
+                        *now + Duration::from_millis(METER_FRAME_MS),
+                    )
+                })
             }
             _ => None,
         }
@@ -1463,6 +1479,44 @@ mod tests {
         // point is these two agree.
         let expected = db_to_t(20.0 * 0.5f32.log10());
         assert!((t - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn an_idle_meter_bus_stops_scheduling_frames() {
+        // The service clears `active` once every level and held peak has
+        // fallen below the floor.  The canvas must then stop asking for
+        // frames instead of redrawing the window forever in silence.
+        let bus = Arc::new(Mutex::new(MeterSnapshot::default()));
+        let meter = VuMeter {
+            level: MeterFrame::still(0.0),
+            scale: 1.0,
+            available: true,
+            bus: Some((Arc::clone(&bus), BusSlot::Input(0))),
+            meter_trim: 0.0,
+        };
+        let mut state = None;
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 100.0));
+        let now = Instant::now();
+        let event = canvas::Event::Window(window::Event::RedrawRequested(now));
+
+        let idle = canvas::Program::<()>::update(
+            &meter,
+            &mut state,
+            &event,
+            bounds,
+            mouse::Cursor::Unavailable,
+        );
+        assert!(idle.is_none(), "no frames while the bus is idle");
+
+        bus.lock().unwrap().active = true;
+        let live = canvas::Program::<()>::update(
+            &meter,
+            &mut state,
+            &event,
+            bounds,
+            mouse::Cursor::Unavailable,
+        );
+        assert!(live.is_some(), "activity schedules the next frame");
     }
 
     #[test]

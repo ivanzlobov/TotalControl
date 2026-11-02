@@ -1692,6 +1692,10 @@ pub enum Message {
     /// subscription fires only when the service actually published one, so
     /// an idle mixer is not rebuilt at the meter rate.
     DeviceUpdated,
+    /// Meter activity started after silence.  The message carries nothing;
+    /// it only asks for the frame in which the canvases see `active` again
+    /// and resume scheduling their own 30 fps frames.
+    MeterWake,
     SetView(View),
     /// The source channel picked in the Quick Control view — always an
     /// `Input`/`Playback` id, never `Output` (see `quick_channel_options`,
@@ -4550,6 +4554,8 @@ fn is_undoable(message: &Message) -> bool {
     !matches!(
         message,
         Message::Tick
+            | Message::DeviceUpdated
+            | Message::MeterWake
             | Message::SetView(_)
             | Message::ToggleMatrixMono
             | Message::QuickChannelSelected(_)
@@ -4851,6 +4857,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 | Message::AssignCueTarget(_)
                 | Message::PointerPressed
                 | Message::Tick
+                | Message::DeviceUpdated
+                | Message::MeterWake
                 | Message::ModifiersChanged(_)
                 | Message::StripHovered(_)
                 | Message::CollapseTick
@@ -4970,6 +4978,9 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 }
             }
         }
+        // No model change: the message itself produces the redraw in which
+        // the canvases read the now-active snapshot and schedule a frame.
+        Message::MeterWake => {}
         Message::Tick => {
             if state.notice.as_ref().is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR) {
                 state.notice = None;
@@ -7049,6 +7060,13 @@ pub fn subscription(state: &TuxMix) -> Subscription<Message> {
         subs.push(
             Subscription::run(crate::device_service::update_stream)
                 .map(|_| Message::DeviceUpdated),
+        );
+        // Meter canvases schedule their own frames while a signal is
+        // visible.  When every level and held peak has fallen, they stop;
+        // this edge is what starts them again on the next transient.
+        subs.push(
+            Subscription::run(crate::device_service::meter_stream)
+                .map(|_| Message::MeterWake),
         );
     }
     // Another app (or `pw-metadata` by hand) can change the graph clock;
@@ -13973,6 +13991,17 @@ mod tests {
         assert!(
             state.undo_stack.is_empty(),
             "Tick/hover are UI-only and shouldn't be undoable steps"
+        );
+    }
+
+    #[test]
+    fn service_edges_do_not_grow_the_undo_stack() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::DeviceUpdated);
+        let _ = update(&mut state, Message::MeterWake);
+        assert!(
+            state.undo_stack.is_empty(),
+            "a model snapshot or meter wake is not a user edit"
         );
     }
 

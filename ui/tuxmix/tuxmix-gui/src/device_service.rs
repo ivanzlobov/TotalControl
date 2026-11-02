@@ -41,6 +41,24 @@ fn snapshot_notify() -> Arc<Notify> {
     Arc::clone(SNAPSHOT_NOTIFY.get_or_init(|| Arc::new(Notify::new())))
 }
 
+/// Wakes the UI subscription when meter activity starts after silence.  A
+/// meter frame itself never publishes a message; this edge only tells an
+/// idle UI to draw the first frame of a new burst.
+static METER_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
+
+fn meter_notify() -> Arc<Notify> {
+    Arc::clone(METER_NOTIFY.get_or_init(|| Arc::new(Notify::new())))
+}
+
+/// The meter-wake stream consumed by `app::subscription`.  It yields once
+/// when the service sees the first activity after an idle period.
+pub fn meter_stream() -> impl iced::futures::Stream<Item = ()> {
+    iced::futures::stream::unfold(meter_notify(), |notify| async move {
+        notify.notified().await;
+        Some(((), notify))
+    })
+}
+
 /// The model-update stream consumed by `app::subscription`.  It yields only
 /// when the service has actually published a snapshot.
 pub fn update_stream() -> impl iced::futures::Stream<Item = ()> {
@@ -944,7 +962,29 @@ pub struct MeterSnapshot {
     pub output_peaks: [f32; 18],
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
+    /// Whether anything is visibly moving.  The service derives this from
+    /// the levels, the held peaks and the FX values; a canvas that sees
+    /// `false` stops scheduling frames and waits for [`meter_stream`].
+    pub active: bool,
     pub at: Option<Instant>,
+}
+
+/// A level or held peak above this keeps the meter canvases animating.
+/// The visible meter floor is -60 dB (0.001); the threshold sits a little
+/// below it so a decaying peak stops shortly after it leaves the scale.
+const METER_ACTIVE_FLOOR: f32 = 0.0005;
+
+/// Whether the meter snapshot has anything worth drawing.  `at` is not a
+/// change signal: it advances every device packet even in silence.
+fn meter_activity(m: &MeterSnapshot) -> bool {
+    let hot = |values: &[f32]| values.iter().any(|v| *v > METER_ACTIVE_FLOOR);
+    hot(&m.inputs)
+        || hot(&m.playbacks)
+        || hot(&m.outputs)
+        || hot(&m.input_peaks)
+        || hot(&m.playback_peaks)
+        || hot(&m.output_peaks)
+        || hot(&m.fx)
 }
 
 /// A running device service.
@@ -1097,6 +1137,8 @@ fn run(
     let mut last_model = snapshot.lock().unwrap().scene.clone();
     let mut last_hw_volume = device.hardware_volume();
     let mut last_panel_selection = device.panel_selection();
+    let mut last_meter_active = false;
+    let mut last_overload = [false; 2];
     let mut peak_at = [[Instant::now(); 18]; 3];
 
     loop {
@@ -1164,6 +1206,18 @@ fn run(
             m.fx = fx;
             m.fx_overload = overload;
             m.at = Some(now);
+            let active = meter_activity(&m);
+            m.active = active;
+            drop(m);
+            // Only edges wake the UI: while a burst is running the canvases
+            // schedule their own frames.  A latched overload flag must not
+            // keep the loop alive, so overload changes are their own edge.
+            let overload_changed = overload != last_overload;
+            if (active && !last_meter_active) || overload_changed {
+                meter_notify().notify_one();
+            }
+            last_meter_active = active;
+            last_overload = overload;
         }
 
         // The model changes rarely (a control command, a front-panel move,
@@ -1296,6 +1350,35 @@ mod tests {
         );
         assert!(service.meters().inputs.iter().any(|v| *v >= 0.0));
         service.stop();
+    }
+
+    #[test]
+    fn a_live_signal_marks_the_meter_bus_active() {
+        let service = DeviceService::spawn(mock());
+        assert!(
+            wait_for(|| service.meters().active),
+            "the mock's live levels mark the bus active"
+        );
+        service.stop();
+    }
+
+    #[test]
+    fn meter_activity_ignores_silence_and_follows_levels_peaks_and_overload() {
+        let mut m = super::MeterSnapshot::default();
+        assert!(!super::meter_activity(&m), "silence is idle");
+        m.inputs[0] = super::METER_ACTIVE_FLOOR * 0.5;
+        assert!(!super::meter_activity(&m), "below the floor is idle");
+        m.inputs[0] = super::METER_ACTIVE_FLOOR * 2.0;
+        assert!(super::meter_activity(&m), "a level wakes the bus");
+        m.inputs[0] = 0.0;
+        m.output_peaks[17] = 0.01;
+        assert!(super::meter_activity(&m), "a held peak keeps it awake");
+        m.output_peaks[17] = 0.0;
+        m.fx_overload[1] = true;
+        assert!(
+            !super::meter_activity(&m),
+            "a latched overload is a static indicator, not ongoing movement"
+        );
     }
 
     #[test]

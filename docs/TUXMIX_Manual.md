@@ -100,7 +100,9 @@ monitoring. A linked output pair shows two meter bars, one per channel.
 The meters are read from the interface stream independently of the rest of the
 window. Moving a fader, opening a panel or scrolling does not interrupt or
 freeze them. A short transient lights the peak marker even when it falls
-between two screen frames.
+between two screen frames. When every meter has been quiet for a moment they
+stop redrawing, so an idle mixer stays still; the next signal wakes them
+immediately and the held peak still catches a transient shorter than a frame.
 
 ## 4. How the mixer works: submixes
 

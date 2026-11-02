@@ -205,7 +205,7 @@ channel model and does not perform a transport call on the UI thread.
 | User edit | UI command queue to the device thread | on interaction |
 | Model snapshot | device thread to the UI mirror | when the model changes, at most 50 ms |
 | Meter frame | device thread to a shared meter snapshot | every device meter packet (about 120 Hz) |
-| Meter redraw | fader canvas reads the meter snapshot | 30 fps, scheduled by the canvas |
+| Meter redraw | fader canvas reads the meter snapshot | 30 fps while the snapshot is active |
 | Housekeeping tick | UI | 1 s |
 
 The model snapshot is the only input to the visible model.  The UI drains a
@@ -218,6 +218,13 @@ in its own canvas `draw`.  A canvas schedules its next frame itself, so a
 meter frame produces no UI message and no view rebuild.  The peak marker holds
 for one second and then falls at 20 dB/s while the service polls at the device
 rate, so a transient between two drawn frames is still shown.
+
+The snapshot is active while a level, a held peak or an FX value is above the
+bottom of the meter scale.  While it is idle the canvases schedule no frames
+and the window stays static.  A rising edge from the service, or a change of
+the FX overload state, wakes the UI with one message; that frame reads the new
+values and the canvases resume their 30 fps loop.  The wake carries no meter
+data.
 
 A dragged fader, knob or FX fader draws its local drag position immediately and
 sends the command in parallel; the next snapshot confirms the value.  Discrete
