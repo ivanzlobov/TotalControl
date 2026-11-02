@@ -195,7 +195,39 @@ collapses the strip, and on a Matrix cell toggles the cell between off and
 unity. Ordinary push buttons act once per click and have no separate double
 click.
 
-## 3. Settings panel
+## 3. Device service and meter path
+
+The device handle is owned by a service thread.  The UI keeps a mirror of the
+channel model and does not perform a transport call on the UI thread.
+
+| Flow | Direction | Cadence |
+|---|---|---|
+| User edit | UI command queue to the device thread | on interaction |
+| Model snapshot | device thread to the UI mirror | when the model changes, at most 50 ms |
+| Meter frame | device thread to a shared meter snapshot | every device meter packet (about 120 Hz) |
+| Meter redraw | fader canvas reads the meter snapshot | 30 fps, scheduled by the canvas |
+| Housekeeping tick | UI | 1 s |
+
+The model snapshot is the only input to the visible model.  The UI drains a
+snapshot when the service signals one; it does not poll the model at the meter
+rate.
+
+Meters bypass the view.  The service writes level and peak-hold values to the
+shared snapshot; each strip fader, collapsed-strip meter and FX meter reads it
+in its own canvas `draw`.  A canvas schedules its next frame itself, so a
+meter frame produces no UI message and no view rebuild.  The peak marker holds
+for one second and then falls at 20 dB/s while the service polls at the device
+rate, so a transient between two drawn frames is still shown.
+
+A dragged fader, knob or FX fader draws its local drag position immediately and
+sends the command in parallel; the next snapshot confirms the value.  Discrete
+controls redraw from the next snapshot, at most 50 ms away.
+
+The one-second tick carries connection probing, auto-save, OSC and the
+front-panel poll.  It is not an interaction clock.  Setting
+`TUXMIX_DEVICE_SERVICE=0` returns the device to the UI thread for comparison.
+
+## 4. Settings panel
 
 The panel follows the channel type.
 
@@ -327,7 +359,7 @@ volume is an attenuation before the interface, so it lowers the playback
 meters by the same amount; the interface's own faders remain the monitoring
 level.
 
-## 4. Equalizer panel
+## 5. Equalizer panel
 
 EQ and low cut are available on every hardware input and every hardware
 output. The EQ trigger appears on both rows; playback strips have no EQ.
@@ -380,7 +412,7 @@ A slideout has no close button; the strip tab that opened it closes it again.
 When vertical space is tight, a knob label may sit over the unused bottom
 margin of its knob, with the panel background behind the label.
 
-## 5. Dynamics panel
+## 6. Dynamics panel
 
 A **D** tab opens on every hardware input and every hardware output. Playback
 strips have no Dynamics.
@@ -414,7 +446,7 @@ green. The shared Gain/Attack/Release and Auto Level knobs use white.
 
 Each knob writes the complete dynamics block for its channel.
 
-## 6. FX panel
+## 7. FX panel
 
 The FX panel is a column between the mixer rows and the sidebar, toggled by
 the `FX` button in the top bar and shown only on a backend with the FX bus.
@@ -493,7 +525,7 @@ register, `60000 / bpm`.
 Each hardware output has an **FX Return** knob in its Settings panel,
 −65..+6 dB. A linked pair writes both channels.
 
-## 7. Output balance
+## 8. Output balance
 
 Hardware output strips include a balance knob, −100..+100. The linked fader
 is the louder channel (the pair level). On the UCX the knob writes the output
@@ -503,7 +535,7 @@ those volumes. A split/re-link round trip therefore preserves the pair level
 and balance. A split pair keeps two independent volumes and hides the balance
 knob.
 
-## 8. Pan and balance
+## 9. Pan and balance
 
 A split input or software-playback strip exposes pan into the selected
 submix; the knob writes the source's matrix cells for that submix. On a
@@ -566,7 +598,7 @@ Control Room destinations (Main, Speaker B, Phones) are ordinary output buses
 with their assignment controls. Cue/PFL to selects which monitoring output
 carries the Cue signal; it is not a channel.
 
-## 9. Motion
+## 10. Motion
 
 All strip panels open and close with a width tween at a constant 1 px/ms;
 a wider panel takes longer instead of sliding faster:
@@ -586,7 +618,7 @@ Assignment add, clear and replace move at the same 1 px/ms speed. A
 destination change that keeps the Control Room channel count unchanged does
 not animate.
 
-## 10. Stereo link
+## 11. Stereo link
 
 Linking an input pair uses the left channel as the reference for mute, solo,
 phantom, Inst, Level, reference level and AutoSet. It also copies the left
@@ -620,7 +652,7 @@ line-output group value, not a per-pair link value. Phase L and Phase R keep
 independent states across every transition. A pair assigned to the Control
 Room is always linked and never splits.
 
-## 11. Control Room
+## 12. Control Room
 
 The Control Room panel is flush with the mixer's right edge beside the FX
 column. Its button stack is one channel wide; every button in the stack has
@@ -755,7 +787,7 @@ from a scene or from preferences at startup.
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.
 
-## 12. Latency chain
+## 13. Latency chain
 
 The Buffer size picker sets the PipeWire graph quantum, one ALSA period. The
 driver keeps a ring of at least the two queued USB URBs plus two URBs of
@@ -819,7 +851,7 @@ least two ALSA periods. TuxMix's graph-quantum override reaches the card at
 48, 64, 96 and 128 samples. The low-latency rule is
 `ui/tuxmix/tools/alsa/wireplumber-uc.conf`.
 
-## 13. State and persistence
+## 14. State and persistence
 
 A scene stores:
 
@@ -932,7 +964,7 @@ RME's corresponding scopes are:
 | Layout Preset | Channel visibility and MIDI/OSC remote exclusions; stored in a Workspace |
 | Workspace | Complete session: current mix, snapshots, Layout Presets, groups, names and GUI state |
 
-## 14. Control invariants
+## 15. Control invariants
 
 - Every channel control has a defined effect in the mixer model and its device
   path.

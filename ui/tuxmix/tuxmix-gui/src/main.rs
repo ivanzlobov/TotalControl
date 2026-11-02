@@ -189,6 +189,10 @@ fn main() -> iced::Result {
             }
             app::apply_startup_sync(&mut state);
             app::restore_engine(&mut state);
+            // Startup sync needs the direct handle: it drains the UCX state
+            // stream and reads the unit before the mirror exists.  Move the
+            // handle to the service only once that is done.
+            app::maybe_attach_device_service(&mut state);
             if let Some(view) = start_view {
                 state.view = view;
             }

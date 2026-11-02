@@ -201,10 +201,14 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                 if !state.dragging {
                     return None;
                 }
+                let released = state
+                    .drag_t
+                    .map(|t| self.t_to_value(t))
+                    .unwrap_or(self.value);
                 state.dragging = false;
                 state.drag_pos = None;
                 state.drag_t = None;
-                state.display = Some(MeterFrame::still(self.value));
+                state.display = Some(MeterFrame::still(released));
                 None
             }
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -249,6 +253,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                         prev: display.at(*now),
                         value: self.value,
                         peak: self.value,
+                        peak_since: *now,
                         since: *now,
                     };
                 }
@@ -271,7 +276,10 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let display_value = if state.dragging {
-            self.value
+            state
+                .drag_t
+                .map(|t| self.t_to_value(t))
+                .unwrap_or(self.value)
         } else {
             state.display.map(|d| d.at(Instant::now())).unwrap_or(self.value)
         };

@@ -97,6 +97,11 @@ meter reads correspondingly low. The device sheet shows the host volume and
 has a `0 dB` button; set it to unity and use the interface's own faders for
 monitoring. A linked output pair shows two meter bars, one per channel.
 
+The meters are read from the interface stream independently of the rest of the
+window. Moving a fader, opening a panel or scrolling does not interrupt or
+freeze them. A short transient lights the peak marker even when it falls
+between two screen frames.
+
 ## 4. How the mixer works: submixes
 
 The mixer is a set of buses, one per hardware output. Selecting an output

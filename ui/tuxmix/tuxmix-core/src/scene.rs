@@ -94,7 +94,7 @@ pub fn auto_scene_written_by_other(our_last_json: Option<&str>) -> Option<Scene>
 
 /// A snapshot of the full device state, serializable for
 /// save/restore (scenes / presets).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     /// Name of the scene (user-defined).
     pub name: String,

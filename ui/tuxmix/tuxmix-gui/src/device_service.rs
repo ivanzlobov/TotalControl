@@ -18,7 +18,7 @@
 #![allow(dead_code)]
 
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -27,8 +27,28 @@ use tuxmix_core::{
     PlaybackChannel, OutputChannel, RmeDevice, Reverb, Scene, Sensitivity,
 };
 use tuxmix_core::channel::{EqBandType, InputEq};
+use tokio::sync::Notify;
 
 use crate::app::DeviceHandle;
+
+/// Wakes the UI subscription when a model snapshot is published.  The
+/// snapshot itself travels through the `std` channel on `DeviceService`;
+/// this is only the "there is something to drain" edge, so an idle mixer
+/// does not rebuild its view at the polling rate.
+static SNAPSHOT_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
+
+fn snapshot_notify() -> Arc<Notify> {
+    Arc::clone(SNAPSHOT_NOTIFY.get_or_init(|| Arc::new(Notify::new())))
+}
+
+/// The model-update stream consumed by `app::subscription`.  It yields only
+/// when the service has actually published a snapshot.
+pub fn update_stream() -> impl iced::futures::Stream<Item = ()> {
+    iced::futures::stream::unfold(snapshot_notify(), |notify| async move {
+        notify.notified().await;
+        Some(((), notify))
+    })
+}
 
 /// A command sent from the UI to the device service.
 pub enum Command {
@@ -62,6 +82,11 @@ pub struct DeviceInfo {
     pub rate_follows: bool,
     pub has_sensitivity: bool,
     pub outputs_one_per_pair: bool,
+    /// Per-input meter availability on the backend that was captured.
+    pub input_meters: Vec<bool>,
+    /// The backend supplies its own software-playback metering, so the
+    /// PipeWire sink tap is not needed.
+    pub device_playback_meters: bool,
 }
 
 /// The channel model as the UI should draw it.  Replaced wholesale when the
@@ -72,6 +97,8 @@ pub struct Snapshot {
     pub scene: Scene,
     pub info: DeviceInfo,
     pub connected: bool,
+    pub hardware_volume: Option<f32>,
+    pub panel_selection: Option<(bool, usize, usize)>,
     pub at: Instant,
 }
 
@@ -86,6 +113,9 @@ pub struct Mirror {
     info: DeviceInfo,
     commands: Sender<Command>,
     meters: Arc<Mutex<MeterSnapshot>>,
+    connected: bool,
+    hardware_volume: Option<f32>,
+    panel_selection: Option<(bool, usize, usize)>,
 }
 
 impl Mirror {
@@ -99,6 +129,9 @@ impl Mirror {
             info: initial.info,
             commands,
             meters,
+            connected: initial.connected,
+            hardware_volume: initial.hardware_volume,
+            panel_selection: initial.panel_selection,
         }
     }
 
@@ -115,6 +148,9 @@ impl Mirror {
     pub fn update(&mut self, snapshot: Snapshot) -> bool {
         self.scene = snapshot.scene;
         self.info = snapshot.info;
+        self.connected = snapshot.connected;
+        self.hardware_volume = snapshot.hardware_volume;
+        self.panel_selection = snapshot.panel_selection;
         true
     }
 
@@ -136,6 +172,14 @@ impl Mirror {
 
     pub fn info(&self) -> &DeviceInfo {
         &self.info
+    }
+
+    pub fn hardware_volume(&self) -> Option<f32> {
+        self.hardware_volume
+    }
+
+    pub fn panel_selection(&self) -> Option<(bool, usize, usize)> {
+        self.panel_selection
     }
 
     pub fn set_volume(&self, channel: ChannelId, output: usize, value: f32) -> bool {
@@ -211,6 +255,17 @@ impl Mirror {
             let _ = d.set_talkback(on);
         });
     }
+
+    /// Push the local settings block to the service.  Link groupings and
+    /// the Control Room mono flag are host-model settings with no dedicated
+    /// trait setter; without this the next service snapshot would replace
+    /// the local edit with the old value.
+    pub fn sync_settings(&self) {
+        let settings = self.scene.settings.clone();
+        self.run(move |d| {
+            *d.settings_mut() = settings;
+        });
+    }
 }
 
 impl RmeDevice for Mirror {
@@ -220,6 +275,14 @@ impl RmeDevice for Mirror {
 
     fn model_name(&self) -> &str {
         &self.info.model_name
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected
+    }
+
+    fn begin_metering(&mut self) {
+        self.run(|d| d.begin_metering());
     }
 
     fn output_pair_count(&self) -> usize {
@@ -872,7 +935,15 @@ pub struct MeterSnapshot {
     pub inputs: [f32; 18],
     pub playbacks: [f32; 18],
     pub outputs: [f32; 18],
+    /// Peak-hold values for the same channels, held for a second and then
+    /// falling at 20 dB/s while the service polls at the device rate.  A
+    /// canvas may only draw 30 frames a second; these catch transients
+    /// that fall between those frames.
+    pub input_peaks: [f32; 18],
+    pub playback_peaks: [f32; 18],
+    pub output_peaks: [f32; 18],
     pub fx: [f32; 2],
+    pub fx_overload: [bool; 2],
     pub at: Option<Instant>,
 }
 
@@ -885,11 +956,16 @@ pub struct DeviceService {
     join: Option<JoinHandle<()>>,
 }
 
-/// Temporary stage-2 switch.  The running UI still uses the device directly
-/// until the command path and snapshot reads are wired; when that lands,
-/// `TUXMIX_DEVICE_SERVICE=1` will select the service for a live comparison.
+/// Whether the device service owns the device.  The running application
+/// defaults to it; `TUXMIX_DEVICE_SERVICE=0` selects the old direct path.
+/// Unit tests stay on the direct path unless they call
+/// `attach_device_service` themselves, so the suite does not spawn a
+/// service thread per case.
 pub fn requested() -> bool {
-    std::env::var_os("TUXMIX_DEVICE_SERVICE").is_some()
+    match std::env::var_os("TUXMIX_DEVICE_SERVICE") {
+        Some(value) => value != "0" && value != "false",
+        None => !cfg!(test),
+    }
 }
 
 impl DeviceService {
@@ -901,6 +977,8 @@ impl DeviceService {
             scene: initial,
             info,
             connected: device.is_connected(),
+            hardware_volume: device.hardware_volume(),
+            panel_selection: device.panel_selection(),
             at: Instant::now(),
         }));
         let meters = Arc::new(Mutex::new(MeterSnapshot::default()));
@@ -1000,6 +1078,10 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
         rate_follows: device.rate_follows_sound_server(),
         has_sensitivity: device.has_sensitivity_control(),
         outputs_one_per_pair: device.outputs_one_per_pair(),
+        input_meters: (0..device.inputs().len())
+            .map(|i| device.has_input_meter(i))
+            .collect(),
+        device_playback_meters: device.has_device_playback_meters(),
     }
 }
 
@@ -1012,6 +1094,10 @@ fn run(
 ) {
     let mut last_scene = Instant::now();
     let mut last_connected = device.is_connected();
+    let mut last_model = snapshot.lock().unwrap().scene.clone();
+    let mut last_hw_volume = device.hardware_volume();
+    let mut last_panel_selection = device.panel_selection();
+    let mut peak_at = [[Instant::now(); 18]; 3];
 
     loop {
         // The timeout paces the polling loop at about 120 Hz while still
@@ -1034,11 +1120,35 @@ fn run(
         // Meters are published independently of the model snapshot and of
         // the UI's view tick.
         {
-            let mut m = meters.lock().unwrap();
+            let now = Instant::now();
             let inputs = device.input_meters();
-            let playbacks = device.device_playback_meters().unwrap_or_default();
-            let outputs = device.device_output_meters().unwrap_or_default();
+            let playbacks = device
+                .device_playback_meters()
+                .unwrap_or_else(|| device.playback_meters());
+            let mut outputs = device.device_output_meters().unwrap_or_default();
+            let input_peaks = device.input_peaks().unwrap_or_else(|| inputs.clone());
+            let playback_peaks = device
+                .device_playback_peaks()
+                .unwrap_or_else(|| playbacks.clone());
+            let mut output_peaks = device
+                .device_output_peaks()
+                .unwrap_or_else(|| outputs.clone());
+            // A muted output reads zero even if a backend's post-fader
+            // packet is taken before its mute stage, preserving the
+            // direct-path display.
+            for (i, channel) in device.outputs().iter().enumerate() {
+                if channel.mute {
+                    if let Some(level) = outputs.get_mut(i) {
+                        *level = 0.0;
+                    }
+                    if let Some(peak) = output_peaks.get_mut(i) {
+                        *peak = 0.0;
+                    }
+                }
+            }
             let fx = device.fx_meters().unwrap_or([0.0, 0.0]);
+            let overload = device.fx_overload().unwrap_or([false, false]);
+            let mut m = meters.lock().unwrap();
             for (slot, value) in m.inputs.iter_mut().zip(inputs) {
                 *slot = value;
             }
@@ -1048,8 +1158,12 @@ fn run(
             for (slot, value) in m.outputs.iter_mut().zip(outputs) {
                 *slot = value;
             }
+            hold_peaks(&mut m.input_peaks, &input_peaks, &mut peak_at[0], now);
+            hold_peaks(&mut m.playback_peaks, &playback_peaks, &mut peak_at[1], now);
+            hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
             m.fx = fx;
-            m.at = Some(Instant::now());
+            m.fx_overload = overload;
+            m.at = Some(now);
         }
 
         // The model changes rarely (a control command, a front-panel move,
@@ -1057,20 +1171,53 @@ fn run(
         if last_scene.elapsed() >= Duration::from_millis(50) {
             last_scene = Instant::now();
             let connected = device.is_connected();
-            let update = {
-                let mut s = snapshot.lock().unwrap();
-                if connected != last_connected || s.at.elapsed() >= Duration::from_millis(50) {
-                    s.scene = device.capture_scene();
+            let scene = device.capture_scene();
+            let hardware_volume = device.hardware_volume();
+            let panel_selection = device.panel_selection();
+            if scene != last_model
+                || connected != last_connected
+                || hardware_volume != last_hw_volume
+                || panel_selection != last_panel_selection
+            {
+                last_model = scene.clone();
+                last_connected = connected;
+                last_hw_volume = hardware_volume;
+                last_panel_selection = panel_selection;
+                let update = {
+                    let mut s = snapshot.lock().unwrap();
+                    s.scene = scene;
                     s.connected = connected;
+                    s.hardware_volume = hardware_volume;
+                    s.panel_selection = panel_selection;
                     s.at = Instant::now();
-                    last_connected = connected;
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            };
-            if let Some(update) = update {
+                    s.clone()
+                };
                 let _ = updates.send(update);
+                snapshot_notify().notify_one();
+            }
+        }
+    }
+}
+
+/// Hold each channel's peak for one second, then fall at 20 dB/s.  The
+/// service sees every device packet, so a transient shorter than a canvas
+/// frame still reaches the needle.
+fn hold_peaks(
+    peaks: &mut [f32; 18],
+    fresh: &[f32],
+    peak_at: &mut [Instant; 18],
+    now: Instant,
+) {
+    for (i, slot) in peaks.iter_mut().enumerate() {
+        let value = fresh.get(i).copied().unwrap_or(0.0).max(0.0);
+        if value >= *slot {
+            *slot = value;
+            peak_at[i] = now;
+        } else {
+            let held = now.duration_since(peak_at[i]).as_secs_f32();
+            if held > 1.0 {
+                let decayed = *slot * 10f32.powf(-(held - 1.0));
+                *slot = decayed.max(value);
             }
         }
     }
@@ -1149,6 +1296,24 @@ mod tests {
         );
         assert!(service.meters().inputs.iter().any(|v| *v >= 0.0));
         service.stop();
+    }
+
+    #[test]
+    fn peak_hold_keeps_a_transient_and_then_falls() {
+        let start = Instant::now();
+        let mut peaks = [0.0; 18];
+        let mut at = [start; 18];
+        super::hold_peaks(&mut peaks, &[0.8], &mut at, start);
+        assert!((peaks[0] - 0.8).abs() < 1e-6);
+
+        // The bar may be at zero between frames; the peak is still held.
+        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(900));
+        assert!((peaks[0] - 0.8).abs() < 1e-6);
+
+        // After the one-second hold it falls at 20 dB/s (a factor of ten
+        // per second).
+        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(1900));
+        assert!((peaks[0] - 0.8 * 0.1f32.powf(0.9)).abs() < 1e-4);
     }
 
     #[test]

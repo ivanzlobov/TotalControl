@@ -962,7 +962,10 @@ impl DeviceHandle {
     /// Device-side SW-playback meters (UCX IF1 0x85), if available.
     pub fn device_playback_meters(&self) -> Option<Vec<f32>> {
         match self {
-            DeviceHandle::Mirror(d) => Some(d.meters().playbacks.to_vec()),
+            DeviceHandle::Mirror(d) if d.info().device_playback_meters => {
+                Some(d.meters().playbacks.to_vec())
+            }
+            DeviceHandle::Mirror(_) => None,
             #[cfg(feature = "alsa")]
             DeviceHandle::Ucx(d) => d.device_playback_meters(),
             #[cfg(feature = "alsa")]
@@ -1060,8 +1063,8 @@ impl DeviceHandle {
     /// True when the backend has its own playback meter source, so the
     /// PipeWire sink tap is unnecessary.
     pub fn has_device_playback_meters(&self) -> bool {
-        if let DeviceHandle::Mirror(_) = self {
-            return true;
+        if let DeviceHandle::Mirror(d) = self {
+            return d.info().device_playback_meters;
         }
         #[cfg(feature = "alsa")]
         if matches!(self, DeviceHandle::Ucx(_) | DeviceHandle::Uc(_)) {
@@ -1092,7 +1095,7 @@ impl DeviceHandle {
     pub fn has_input_meter(&self, idx: usize) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
-            DeviceHandle::Mirror(d) => idx < d.inputs().len(),
+            DeviceHandle::Mirror(d) => d.info().input_meters.get(idx).copied().unwrap_or(false),
             DeviceHandle::Usb(_) => idx < 4,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
@@ -1113,7 +1116,7 @@ impl DeviceHandle {
     pub fn has_playback_meters(&self) -> bool {
         match self {
             DeviceHandle::Mock(_) => true,
-            DeviceHandle::Mirror(_) => true,
+            DeviceHandle::Mirror(d) => d.info().device_playback_meters || d.info().is_mock,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Ucx,
             _ => false,
@@ -1353,9 +1356,20 @@ impl DeviceHandle {
         Ok(())
     }
 
+    /// Send a host-only settings edit to the device service.  No-op on the
+    /// direct backends, which already hold the edit.
+    pub fn sync_settings_to_device(&self) {
+        if let DeviceHandle::Mirror(d) = self {
+            d.sync_settings();
+        }
+    }
+
     /// Physical Phones hardware volume (linear 0..1), if the backend has a
     /// real front-panel readback.  Only the UCX IF1 reader provides it.
     pub fn hardware_volume(&self) -> Option<f32> {
+        if let DeviceHandle::Mirror(d) = self {
+            return d.hardware_volume();
+        }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Ucx(d) | DeviceHandle::Uc(d) = self {
             return d.hardware_volume();
@@ -1447,7 +1461,7 @@ impl DeviceHandle {
     pub fn panel_selection(&self) -> Option<(bool, usize, usize)> {
         match self {
             DeviceHandle::Mock(_) => None,
-            DeviceHandle::Mirror(_) => None,
+            DeviceHandle::Mirror(d) => d.panel_selection(),
             DeviceHandle::Usb(d) => Some(d.panel_selection()),
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => d.panel_selection(),
@@ -1674,6 +1688,10 @@ impl AssignAnim {
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
+    /// A model snapshot is waiting on the device service channel.  The
+    /// subscription fires only when the service actually published one, so
+    /// an idle mixer is not rebuilt at the meter rate.
+    DeviceUpdated,
     SetView(View),
     /// The source channel picked in the Quick Control view — always an
     /// `Input`/`Playback` id, never `Output` (see `quick_channel_options`,
@@ -2608,6 +2626,7 @@ impl MeterAnim {
             prev: self.prev_value,
             value: self.value,
             peak: self.peak,
+            peak_since: self.last_step_at,
             since: self.last_step_at,
         }
     }
@@ -2747,7 +2766,7 @@ pub fn new_with_device(
         pw_meter::PlaybackTap::start()
     };
 
-    let mut state = TuxMix {
+    let state = TuxMix {
         device,
         device_target,
         connected,
@@ -2874,28 +2893,43 @@ pub fn new_with_device(
         driver_queue: simulated.then_some((48, 2)),
     };
 
-    if crate::device_service::requested() {
-        // Stage 2c: move the device onto the service thread and draw from
-        // the mirror.  The mock placeholder is dropped immediately.
-        let placeholder = DeviceHandle::Mock(
-            MockBabyfacePro::open().expect("placeholder mock"),
-        );
-        let device = std::mem::replace(&mut state.device, placeholder);
-        let mut service = crate::device_service::DeviceService::spawn(device);
-        let updates = service.take_updates();
-        let snapshot = service.snapshot();
-        let mirror = crate::device_service::Mirror::new(
-            snapshot,
-            service.command_sender(),
-            service.meter_bus(),
-        );
-        state.meter_bus = Some(service.meter_bus());
-        state.device = DeviceHandle::Mirror(mirror);
-        state.device_updates = updates;
-        state.device_service = Some(service);
-    }
-
     state
+}
+
+/// Attach the service for the running application.  Kept separate from
+/// `new_with_device` because startup sync (scene readback, mismatch check,
+/// meter tap) must run on the direct handle first.
+pub(crate) fn maybe_attach_device_service(state: &mut TuxMix) {
+    if crate::device_service::requested() {
+        attach_device_service(state);
+    }
+}
+
+/// Move the device onto the service thread and leave a mirror in its
+/// place.  Split from `new_with_device` so the boundary can be exercised
+/// without touching the process environment.
+pub(crate) fn attach_device_service(state: &mut TuxMix) {
+    if state.device_service.is_some() {
+        return;
+    }
+    // The mock placeholder is dropped immediately; it only satisfies the
+    // type until the service has taken the real handle.
+    let placeholder = DeviceHandle::Mock(
+        MockBabyfacePro::open().expect("placeholder mock"),
+    );
+    let device = std::mem::replace(&mut state.device, placeholder);
+    let mut service = crate::device_service::DeviceService::spawn(device);
+    let updates = service.take_updates();
+    let snapshot = service.snapshot();
+    let mirror = crate::device_service::Mirror::new(
+        snapshot,
+        service.command_sender(),
+        service.meter_bus(),
+    );
+    state.meter_bus = Some(service.meter_bus());
+    state.device = DeviceHandle::Mirror(mirror);
+    state.device_updates = updates;
+    state.device_service = Some(service);
 }
 
 /// The persisted subset of `state` (see `prefs.rs`).
@@ -3047,6 +3081,7 @@ pub fn apply_prefs(state: &mut TuxMix, prefs: crate::prefs::Prefs) {
     } else {
         prefs.sync_direction.unwrap_or(SyncDirection::DeviceToGui)
     };
+    state.device.sync_settings_to_device();
 }
 
 /// A linked pair is represented by its left/even strip.  Move a saved
@@ -4926,7 +4961,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             };
             return iced::window::set_mode(id, mode);
         }
-        Message::Tick => {
+        Message::DeviceUpdated => {
             if let (Some(rx), DeviceHandle::Mirror(m)) =
                 (&mut state.device_updates, &mut state.device)
             {
@@ -4934,6 +4969,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                     m.update(snapshot);
                 }
             }
+        }
+        Message::Tick => {
             if state.notice.as_ref().is_some_and(|(_, at)| at.elapsed() > NOTICE_FOR) {
                 state.notice = None;
             }
@@ -4991,10 +5028,10 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                     };
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
-                        state.device_target = Some(fresh.target());
                         state.prefs_dirty = true;
-                        state.device = fresh;
-                        state.connected = true;
+                        replace_device_handle(state, fresh);
+                        state.device_target = Some(state.device.target());
+                        state.connected = state.device.is_connected();
                         state.show_device_panel = false;
                         if state.device.needs_scene_restore()
                             || state.sync_direction == SyncDirection::GuiToDevice
@@ -6654,6 +6691,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         }
         Message::ControlRoomMono(on) => {
             state.device.settings_mut().mono = on;
+            state.device.sync_settings_to_device();
             notify_osc_bool(state, "/mono", on);
         }
         Message::ControlRoomMuteFx(on) => {
@@ -6781,12 +6819,23 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
     Task::none()
 }
 
+/// Swap in a newly opened device.  When the device service owns the
+/// handle, stop the old thread, clear its bus and start a service for the
+/// new unit before any caller touches the model.
+fn replace_device_handle(state: &mut TuxMix, new: DeviceHandle) {
+    let use_service = state.device_service.is_some() || crate::device_service::requested();
+    state.device_service = None;
+    state.device_updates = None;
+    state.meter_bus = None;
+    state.device = new;
+    if use_service {
+        attach_device_service(state);
+    }
+}
+
 /// How long a failure stays on screen.
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 
-/// Reports a refused device write: logged, and shown briefly so a fader that
-/// moves without effect is not silent. A drag repeats the same failure many
-/// times a second; the same text only refreshes the timer.
 /// Swap the whole backend at runtime: open the chosen device, rebuild the
 /// meter vectors/tap for its channel counts, and carry the GUI prefs
 /// across.  ALSA devices keep their own live matrix; the USB backend
@@ -6817,7 +6866,7 @@ fn switch_device(state: &mut TuxMix, target: DeviceTarget) -> Result<(), String>
     let new = DeviceHandle::open_target(&target)
         .ok_or_else(|| format!("{} is not connected", target.label()))?;
     let prefs = prefs_of(state);
-    state.device = new;
+    replace_device_handle(state, new);
     state.device_target = Some(state.device.target());
     // The new unit has its own layout, topology and scene; never carry the
     // old device's host model into it.
@@ -6877,6 +6926,9 @@ fn switch_device(state: &mut TuxMix, target: DeviceTarget) -> Result<(), String>
     Ok(())
 }
 
+/// Reports a refused device write: logged, and shown briefly so a fader that
+/// moves without effect is not silent. A drag repeats the same failure many
+/// times a second; the same text only refreshes the timer.
 fn fail(state: &mut TuxMix, what: &str, error: &dyn std::fmt::Display) {
     let what = what.trim_start_matches("set_").replace('_', " ");
     let text = format!("Could not apply {what}: {error}");
@@ -6941,6 +6993,10 @@ const TICK_HIDDEN: Duration = Duration::from_millis(250);
 /// auto-save, the front panel); anything that changes the screen switches
 /// back to a faster tick at once.
 const TICK_IDLE: Duration = Duration::from_millis(100);
+/// Housekeeping cadence once the device service owns the meters: the
+/// canvases redraw from the shared bus themselves, so the view only needs
+/// an occasional pass for connection/autosave/OSC and non-canvas readouts.
+const TICK_SERVICE: Duration = Duration::from_secs(1);
 /// How long after the last change the tick stays fast: longer than the
 /// meters' release, so a fading peak is drawn to the end.
 const ACTIVE_FOR: Duration = Duration::from_millis(1500);
@@ -6970,6 +7026,11 @@ pub fn tick_interval(state: &TuxMix) -> Duration {
         TICK_ACTIVE
     } else if is_active(state) {
         TICK_METERS
+    } else if state.meter_bus.is_some()
+        && (state.device.has_device_playback_meters() || state.device.is_mock())
+        && state.osc_config.is_none()
+    {
+        TICK_SERVICE
     } else {
         TICK_IDLE
     }
@@ -6980,6 +7041,16 @@ pub fn subscription(state: &TuxMix) -> Subscription<Message> {
         iced::time::every(tick_interval(state)).map(|_| Message::Tick),
         iced::event::listen_with(handle_global_event),
     ];
+    // The device service publishes model snapshots only when something
+    // changed.  This stream is the wake-up edge; the snapshots themselves
+    // are drained on `Message::DeviceUpdated`.  Without it the tick would
+    // have to poll the channel, which would rebuild the view for meters.
+    if state.device_service.is_some() {
+        subs.push(
+            Subscription::run(crate::device_service::update_stream)
+                .map(|_| Message::DeviceUpdated),
+        );
+    }
     // Another app (or `pw-metadata` by hand) can change the graph clock;
     // re-read it now and then so the device card never shows a stale rate.
     if state.device.rate_follows_sound_server() {
@@ -8699,6 +8770,20 @@ fn strip_params<'a>(
         None
     };
 
+    // The shared bus carries device meters for every row.  A backend that
+    // only has a PipeWire tap for playback stays on the view-fed path.
+    let bus_ok = state.device.has_device_playback_meters() || state.device.is_mock();
+    let meter_bus = if bus_ok {
+        state.meter_bus.clone()
+    } else {
+        None
+    };
+    let meter_slot = meter_bus.as_ref().map(|_| match cid {
+        ChannelId::Input(i) => fader::BusSlot::Input(i),
+        ChannelId::Playback(i) => fader::BusSlot::Playback(i),
+        ChannelId::Output(i) => fader::BusSlot::Output(i),
+    });
+
     let base = strip::StripParams {
         cid,
         output_idx,
@@ -8721,6 +8806,9 @@ fn strip_params<'a>(
         meter_available: false,
         meter2: None,
         meter2_available: false,
+        meter_bus,
+        meter_slot,
+        meter_trim: 0.0,
         has_48v: false,
         has_pad: false,
         has_instrument: false,
@@ -8829,6 +8917,7 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: state.device.has_input_meter(i),
+                meter_trim: ch.trim,
                 has_48v,
                 has_pad: caps.input_pad && ch.has_pad,
                 has_instrument: ch.has_instrument,
@@ -8909,6 +8998,7 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: playback_meter_available(state, i),
+                meter_trim: ch.trim,
                 stereo_linked: state.device.playback_linked(i / 2),
                 mute: ch.mute,
                 solo: ch.solo,
@@ -11098,7 +11188,18 @@ fn fx_delay_cell(
 fn fx_meter_column(state: &TuxMix, scale: f32) -> Element<'static, Message> {
     let bar_h = 230.0 * scale;
     let bar_w = 14.0 * scale;
-    let bar = |i: usize| -> Element<'static, Message> {
+    let bus = state.meter_bus.clone();
+    let bar = move |i: usize| -> Element<'static, Message> {
+        // Service path: the canvas reads the shared bus at display rate.
+        // Direct path: keep the view-fed progress bar.
+        if let Some(bus) = &bus {
+            let side = if i == 0 {
+                fader::FxSide::In
+            } else {
+                fader::FxSide::Out
+            };
+            return fader::fx_meter(Some((bus.clone(), side)), bar_h, scale);
+        }
         let meter = progress_bar(0.0..=1.0, state.fx_meters[i].frame().value)
             .vertical()
             .length(Length::Fixed(bar_h))
@@ -13156,7 +13257,7 @@ mod tests {
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
-        apply_startup_sync, prefs_of, mute_armed, power_sum_output_meters,
+        apply_startup_sync, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
@@ -13172,6 +13273,38 @@ mod tests {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
     use tuxmix_core::RmeDevice;
+
+    #[test]
+    fn the_service_switch_keeps_the_model_and_meters_alive() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        assert!(matches!(state.device, DeviceHandle::Mirror(_)));
+        assert!(state.device_service.is_some());
+        assert!(!state.device.inputs().is_empty());
+
+        let bus = state.meter_bus.as_ref().expect("meter bus").clone();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && bus.lock().unwrap().at.is_none() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(bus.lock().unwrap().at.is_some(), "the service publishes meters");
+
+        let _ = state.device.set_volume(ChannelId::Output(0), 0, 0.25);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut updated = false;
+        while Instant::now() < deadline && !updated {
+            if let (Some(rx), DeviceHandle::Mirror(m)) =
+                (&mut state.device_updates, &mut state.device)
+            {
+                while let Ok(snapshot) = rx.try_recv() {
+                    m.update(snapshot);
+                }
+            }
+            updated = (state.device.outputs()[0].volume - 0.25).abs() < 0.001;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(updated, "the mirror follows the service snapshot");
+    }
 
     #[test]
     fn osc_commands_go_through_the_host_scene_merge() {

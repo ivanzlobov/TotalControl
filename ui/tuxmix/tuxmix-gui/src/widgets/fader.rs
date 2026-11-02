@@ -7,9 +7,15 @@ use iced::keyboard::Modifiers;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::{mouse, window, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 use std::hash::Hash;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::device_service::MeterSnapshot;
 use crate::theme;
+
+fn trim_factor(db: f32) -> f32 {
+    10f32.powf(db.clamp(-65.0, 0.0) / 20.0)
+}
 
 fn hash_of(f: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
     use std::hash::Hasher;
@@ -38,6 +44,20 @@ const INTERPOLATE_METERS: bool = true;
 /// a signal is live.
 const METER_INTERP_MS: f32 = 120.0;
 
+/// How often a bus-driven meter schedules its next canvas frame.  30 fps
+/// reads as continuous motion for a VU and halves the window redraws a
+/// display-rate loop would cost; the bus itself is still updated at the
+/// device rate, so a frame always shows a current value.
+const METER_FRAME_MS: u64 = 33;
+
+/// Which channel a fader's meter reads from the device-service bus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BusSlot {
+    Input(usize),
+    Playback(usize),
+    Output(usize),
+}
+
 /// A meter's ease-out keyframe pair — the ballistics in `app.rs` only
 /// compute a new value once per `Tick` (50ms), which reads as a stair-step
 /// rather than motion if drawn as-is. `Fader`/`VuMeter` interpolate between
@@ -53,6 +73,8 @@ pub struct MeterFrame {
     pub value: f32,
     /// Held peak marker, independent of the bar's fast fall.
     pub peak: f32,
+    /// When `peak` was last set, for the peak-hold fall-off in the bus path.
+    pub peak_since: Instant,
     pub since: Instant,
 }
 
@@ -63,6 +85,7 @@ impl MeterFrame {
             prev: value,
             value,
             peak: value,
+            peak_since: Instant::now(),
             since: Instant::now(),
         }
     }
@@ -204,6 +227,12 @@ pub struct Fader<Message> {
     /// strip, unaffected.
     pub meter2: Option<MeterFrame>,
     pub meter2_available: bool,
+    /// When the device service owns metering, the canvas reads the shared
+    /// bus directly on its own redraws instead of taking levels from the
+    /// view.  `None` keeps the old path (direct backend on the UI thread).
+    pub bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
+    /// Trim in dB applied to bus meter values (0 for outputs).
+    pub meter_trim: f32,
     pub height: f32,
     pub show_meter: bool,
     /// The colour of the filled part of the rail, below the cap. The strip's
@@ -314,6 +343,39 @@ impl<Message> Fader<Message> {
     }
 }
 
+/// Read one channel (and, for a linked pair, its right neighbour) from the
+/// shared meter bus.
+fn bus_levels(
+    snapshot: &MeterSnapshot,
+    slot: BusSlot,
+    stereo: bool,
+) -> (f32, f32, Option<(f32, f32)>) {
+    let (levels, peaks, index) = match slot {
+        BusSlot::Input(i) => (&snapshot.inputs, &snapshot.input_peaks, i),
+        BusSlot::Playback(i) => (&snapshot.playbacks, &snapshot.playback_peaks, i),
+        BusSlot::Output(i) => (&snapshot.outputs, &snapshot.output_peaks, i),
+    };
+    let level = |i: usize| levels.get(i).copied().unwrap_or(0.0);
+    let peak = |i: usize| peaks.get(i).copied().unwrap_or(0.0);
+    let right = stereo.then(|| (level(index + 1), peak(index + 1)));
+    (level(index), peak(index), right)
+}
+
+/// Advance a bus-driven meter by one canvas frame.  The bar eases toward
+/// the newest value; the peak marker holds, then falls at 20 dB/s.
+fn advance_bus(old: MeterFrame, value: f32, peak: f32, now: Instant) -> MeterFrame {
+    let prev = old.at(now);
+    let peak = peak.max(value);
+    let peak_since = if peak > old.peak { now } else { old.peak_since };
+    MeterFrame {
+        prev,
+        value,
+        peak,
+        peak_since,
+        since: now,
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     /// The parts of the drawing that do not move with the signal, each
@@ -368,6 +430,14 @@ pub struct State {
     /// every mouse event, so layering interpolation on top of that would
     /// only add latency, not smoothness.
     display: Option<MeterFrame>,
+    /// Latest meter frames read from the shared bus, updated on the canvas's
+    /// own redraws and never through a view rebuild.
+    bus: Option<BusState>,
+}
+
+struct BusState {
+    left: MeterFrame,
+    right: Option<MeterFrame>,
 }
 
 impl<Message> canvas::Program<Message> for Fader<Message> {
@@ -440,16 +510,17 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 if !state.dragging {
                     return None;
                 }
+                let released = state.drag_t.map(t_to_vol).unwrap_or(self.value);
                 state.dragging = false;
                 state.drag_pos = None;
                 state.drag_t = None;
-                // While dragging, draw() reads self.value directly and
+                // While dragging, draw() reads the local drag target and
                 // never touches `display` — resync it to the just-released
                 // position now, so the next external change eases in from
                 // here rather than from whatever `display` was cached at
                 // before the drag started (which would show as a snap-back
                 // glitch the instant dragging ends).
-                state.display = Some(MeterFrame::still(self.value));
+                state.display = Some(MeterFrame::still(released));
                 Some(canvas::Action::publish((self.on_release)()).and_capture())
             }
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -504,8 +575,37 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
             // to the normal Tick-driven rate on its own once caught up
             // (see `MeterFrame`).
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
-                let mut still_animating =
-                    INTERPOLATE_METERS && self.show_meter && self.meter.is_settling(*now);
+                let mut bus_live = false;
+                if let Some((bus, slot)) = &self.bus {
+                    bus_live = self.show_meter;
+                    let snapshot = *bus.lock().unwrap();
+                    let trim = trim_factor(self.meter_trim);
+                    let (left, left_peak, mut right) =
+                        bus_levels(&snapshot, *slot, self.meter2.is_some());
+                    let left = left * trim;
+                    let left_peak = left_peak * trim;
+                    if let Some((value, peak)) = right.as_mut() {
+                        *value *= trim;
+                        *peak *= trim;
+                    }
+                    let entry = state.bus.get_or_insert_with(|| BusState {
+                        left: MeterFrame::still(left),
+                        right: right.map(|(v, _)| MeterFrame::still(v)),
+                    });
+                    entry.left = advance_bus(entry.left, left, left_peak, *now);
+                    if let Some((value, peak)) = right {
+                        match &mut entry.right {
+                            Some(frame) => *frame = advance_bus(*frame, value, peak, *now),
+                            None => entry.right = Some(MeterFrame::still(value)),
+                        }
+                    } else {
+                        entry.right = None;
+                    }
+                }
+                let mut still_animating = INTERPOLATE_METERS
+                    && self.show_meter
+                    && self.meter.is_settling(*now)
+                    && !bus_live;
 
                 if !state.dragging {
                     let display = state
@@ -516,13 +616,18 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                             prev: display.at(*now),
                             value: self.value,
                             peak: display.peak,
+                            peak_since: display.peak_since,
                             since: *now,
                         };
                     }
                     still_animating |= display.is_settling(*now);
                 }
 
-                if still_animating {
+                if bus_live {
+                    Some(canvas::Action::request_redraw_at(
+                        *now + Duration::from_millis(METER_FRAME_MS),
+                    ))
+                } else if still_animating {
                     Some(canvas::Action::request_redraw())
                 } else {
                     None
@@ -541,6 +646,24 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let (track_x, meter_x) = self.layout_x(bounds.width);
+        // When the service owns metering, the canvas state carries the
+        // latest bus frames; the view's own `meter` is only the fallback
+        // for the direct-backend path.
+        let (meter, meter2, available, meter2_available) =
+            match (self.bus.as_ref(), &state.bus) {
+                (Some(_), Some(bus)) => (
+                    bus.left,
+                    bus.right,
+                    self.meter_available,
+                    self.meter2_available,
+                ),
+                _ => (
+                    self.meter,
+                    self.meter2,
+                    self.meter_available,
+                    self.meter2_available,
+                ),
+            };
         let mut layers: Vec<Geometry> = Vec::with_capacity(4);
 
         // Static layer 0: the meter's dark well and (when unmetered) the
@@ -556,7 +679,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 )
                     .hash(h);
                 meter_x.to_bits().hash(h);
-                (self.meter_available, self.meter2_available, self.meter2.is_some()).hash(h);
+                (available, meter2_available, meter2.is_some()).hash(h);
             });
             if state.meter_key.replace(key) != key {
                 state.meter_cache.clear();
@@ -566,8 +689,8 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     frame,
                     meter_rect,
                     self.scale,
-                    self.meter_available,
-                    self.meter2.map(|_| self.meter2_available),
+                    available,
+                    meter2.map(|_| meter2_available),
                 );
             }));
         }
@@ -580,12 +703,12 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
             draw_meter(
                 &mut frame,
                 meter_rect,
-                self.meter.shown(Instant::now()),
-                self.meter.peak,
+                meter.shown(Instant::now()),
+                meter.peak,
                 self.scale,
-                self.meter_available,
-                self.meter2.map(|m| {
-                    (m.shown(Instant::now()), m.peak, self.meter2_available)
+                available,
+                meter2.map(|m| {
+                    (m.shown(Instant::now()), m.peak, meter2_available)
                 }),
             );
         }
@@ -626,7 +749,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         // value.
         if self.show_track {
             let display_value = if state.dragging {
-                self.value
+                state.drag_t.map(t_to_vol).unwrap_or(self.value)
             } else {
                 state
                     .display
@@ -1124,24 +1247,40 @@ struct VuMeter {
     level: MeterFrame,
     scale: f32,
     available: bool,
+    bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
+    meter_trim: f32,
 }
 
 impl<Message> canvas::Program<Message> for VuMeter {
-    type State = ();
+    type State = Option<BusState>;
 
     fn update(
         &self,
-        _state: &mut (),
+        state: &mut Option<BusState>,
         event: &canvas::Event,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         // See `Fader`'s identical arm.
         match event {
-            canvas::Event::Window(window::Event::RedrawRequested(now))
-                if INTERPOLATE_METERS && self.level.is_settling(*now) =>
-            {
-                Some(canvas::Action::request_redraw())
+            canvas::Event::Window(window::Event::RedrawRequested(now)) => {
+                if let Some((bus, slot)) = &self.bus {
+                    let snapshot = *bus.lock().unwrap();
+                    let trim = trim_factor(self.meter_trim);
+                    let (left, peak, _) = bus_levels(&snapshot, *slot, false);
+                    let left = left * trim;
+                    let peak = peak * trim;
+                    let entry = state.get_or_insert_with(|| BusState {
+                        left: MeterFrame::still(left),
+                        right: None,
+                    });
+                    entry.left = advance_bus(entry.left, left, peak, *now);
+                    return Some(canvas::Action::request_redraw_at(
+                        *now + Duration::from_millis(METER_FRAME_MS),
+                    ));
+                }
+                (INTERPOLATE_METERS && self.level.is_settling(*now))
+                    .then_some(canvas::Action::request_redraw())
             }
             _ => None,
         }
@@ -1149,7 +1288,7 @@ impl<Message> canvas::Program<Message> for VuMeter {
 
     fn draw(
         &self,
-        _state: &(),
+        state: &Option<BusState>,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -1157,13 +1296,19 @@ impl<Message> canvas::Program<Message> for VuMeter {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let (meter_rect, ruler_rect) = meter_column(0.0, bounds.height, self.scale);
+        let level = if self.bus.is_some() {
+            state.as_ref().map(|s| s.left).unwrap_or(self.level)
+        } else {
+            self.level
+        };
+        let (top, peak) = (level.shown(Instant::now()), level.peak);
         draw_meter(
             &mut frame,
             meter_rect,
-            self.level.shown(Instant::now()),
-            self.level.peak,
+            top,
+            peak,
             self.scale,
-            self.available,
+            self.available || self.bus.is_some(),
             // Collapsed strips are a glance-only view with no room for a
             // second bar even if this were a linked pair — out of scope
             // for this pass, single-bar only here.
@@ -1179,15 +1324,121 @@ pub fn vu_meter<'a, Message: 'a>(
     height: f32,
     scale: f32,
     available: bool,
+    bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
+    meter_trim: f32,
 ) -> Element<'a, Message> {
     Canvas::new(VuMeter {
         level,
         scale,
         available,
+        bus,
+        meter_trim,
     })
     .width(Length::Fixed(METER_RULER_W * scale))
     .height(Length::Fixed(height))
     .into()
+}
+
+
+/// The two-bar FX meter.  Like `Fader`, it reads the device-service bus
+/// from its own canvas so the FX column stays live at the slow housekeeping
+/// tick.
+pub struct FxMeter {
+    bus: Option<(Arc<Mutex<MeterSnapshot>>, FxSide)>,
+    height: f32,
+    scale: f32,
+}
+
+/// Which of the two FX meter bars this canvas draws (`In` or `Out`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FxSide {
+    In,
+    Out,
+}
+
+impl<Message> canvas::Program<Message> for FxMeter {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &canvas::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        match event {
+            canvas::Event::Window(window::Event::RedrawRequested(now)) if self.bus.is_some() => {
+                Some(canvas::Action::request_redraw_at(
+                    *now + Duration::from_millis(METER_FRAME_MS),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (level, overload) = match &self.bus {
+            Some((bus, side)) => {
+                let snapshot = *bus.lock().unwrap();
+                let i = (*side == FxSide::Out) as usize;
+                (snapshot.fx[i], snapshot.fx_overload[i])
+            }
+            None => (0.0, false),
+        };
+        let radius = (3.0 * self.scale).into();
+        let well = Path::rounded_rectangle(
+            Point::new(0.0, 0.0),
+            Size::new(bounds.width, bounds.height),
+            radius,
+        );
+        frame.fill(&well, theme::BG_DEEP);
+        frame.stroke(
+            &well,
+            Stroke::default()
+                .with_color(theme::BORDER)
+                .with_width(1.0),
+        );
+        let t = vol_to_t(level).clamp(0.0, 1.0);
+        let fill_h = bounds.height * t;
+        if fill_h > 0.0 {
+            let fill = Path::rounded_rectangle(
+                Point::new(0.0, bounds.height - fill_h),
+                Size::new(bounds.width, fill_h),
+                radius,
+            );
+            frame.fill(&fill, theme::MGREEN);
+        }
+        if overload {
+            let over = Path::rectangle(
+                Point::new(0.0, 0.0),
+                Size::new(bounds.width, 4.0 * self.scale),
+            );
+            frame.fill(&over, theme::MRED);
+        }
+        let _ = self.height;
+        vec![frame.into_geometry()]
+    }
+}
+
+/// One bar of the FX meter column: fixed width, full-height canvas.
+pub fn fx_meter<'a, Message: 'a>(
+    bus: Option<(Arc<Mutex<MeterSnapshot>>, FxSide)>,
+    height: f32,
+    scale: f32,
+) -> Element<'a, Message> {
+    let bar_w = 14.0 * scale;
+    Canvas::new(FxMeter { bus, height, scale })
+        .width(Length::Fixed(bar_w))
+        .height(Length::Fixed(height))
+        .into()
 }
 
 #[cfg(test)]
@@ -1229,6 +1480,7 @@ mod tests {
             prev: 0.2,
             value: 0.8,
             peak: 0.8,
+            peak_since: Instant::now(),
             since: Instant::now(),
         };
         assert!(
@@ -1251,6 +1503,7 @@ mod tests {
             prev: 0.0,
             value: 1.0,
             peak: 1.0,
+            peak_since: Instant::now(),
             since: Instant::now(),
         };
         assert_eq!(f.at(f.since), 0.0);

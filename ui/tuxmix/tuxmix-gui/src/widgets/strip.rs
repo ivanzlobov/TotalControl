@@ -11,7 +11,7 @@ use tuxmix_core::ChannelId;
 
 use crate::app::{short_label, Message};
 use crate::theme;
-use crate::widgets::fader::{fader, vu_meter, Fader, MeterFrame};
+use crate::widgets::fader::{fader, vu_meter, BusSlot, Fader, MeterFrame};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -224,6 +224,15 @@ pub struct StripParams<'a> {
     /// every unlinked/mono strip.
     pub meter2: Option<MeterFrame>,
     pub meter2_available: bool,
+    /// When the device service owns metering, the main fader reads this
+    /// shared bus from its own canvas instead of the view's meter frames.
+    pub meter_bus: Option<
+        std::sync::Arc<std::sync::Mutex<crate::device_service::MeterSnapshot>>,
+    >,
+    pub meter_slot: Option<BusSlot>,
+    /// Trim in dB applied to the bus meter, so the strip shows the signal
+    /// after trim exactly like the view-fed path.
+    pub meter_trim: f32,
     pub has_48v: bool,
     pub has_pad: bool,
     pub has_instrument: bool,
@@ -708,6 +717,8 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             COLLAPSED_METER_H * scale,
             scale,
             p.meter_available,
+            p.meter_bus.clone().zip(p.meter_slot),
+            p.meter_trim,
         ))
             .width(Length::Fill)
             .center_x(Length::Fill),
@@ -911,6 +922,8 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         meter_available: p.meter_available,
         meter2: p.meter2,
         meter2_available: p.meter2_available,
+        bus: p.meter_bus.clone().zip(p.meter_slot),
+        meter_trim: p.meter_trim,
         height: fader_h,
         show_meter: true,
         fill: theme::FADER,
@@ -1049,6 +1062,8 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             meter_available: false,
             meter2: None,
             meter2_available: false,
+            bus: None,
+            meter_trim: 0.0,
             // Leaves the T / gear / EQ / D buttons their room at the
             // bottom of the column.
             // 20 % taller than the earlier track: the FX send/return is
