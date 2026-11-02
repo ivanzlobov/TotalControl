@@ -35,14 +35,90 @@ pub enum Command {
     Stop,
 }
 
+/// Static properties of the device, captured once when the service starts.
+#[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub model_name: String,
+    pub canonical_model: String,
+    pub capabilities: tuxmix_core::DeviceCapabilities,
+    pub protocol_features: bool,
+    pub output_pair_count: usize,
+    pub output_display_order: Vec<usize>,
+    pub is_uc: bool,
+    pub is_ucx: bool,
+    pub is_uc_family: bool,
+    pub is_mock: bool,
+}
+
 /// The channel model as the UI should draw it.  Replaced wholesale when the
 /// service sees a change; cheap enough to clone at the UI's housekeeping
 /// rate.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub scene: Scene,
+    pub info: DeviceInfo,
     pub connected: bool,
     pub at: Instant,
+}
+
+/// The UI-side copy of the model.
+///
+/// Getters return references into the local copy, so the view never locks or
+/// blocks on the device thread.  Setters enqueue a command; the next
+/// [`Snapshot`] replaces the local copy.  The service updates it from
+/// `DeviceService::take_updates`.
+pub struct Mirror {
+    scene: Scene,
+    info: DeviceInfo,
+    commands: Sender<Command>,
+}
+
+impl Mirror {
+    pub fn new(initial: Snapshot, commands: Sender<Command>) -> Self {
+        Self {
+            scene: initial.scene,
+            info: initial.info,
+            commands,
+        }
+    }
+
+    /// Apply a snapshot published by the service.  Returns false once the
+    /// service has stopped.
+    pub fn update(&mut self, snapshot: Snapshot) -> bool {
+        self.scene = snapshot.scene;
+        self.info = snapshot.info;
+        true
+    }
+
+    pub fn inputs(&self) -> &[tuxmix_core::InputChannel] {
+        &self.scene.inputs
+    }
+
+    pub fn playbacks(&self) -> &[tuxmix_core::PlaybackChannel] {
+        &self.scene.playbacks
+    }
+
+    pub fn outputs(&self) -> &[tuxmix_core::OutputChannel] {
+        &self.scene.outputs
+    }
+
+    pub fn settings(&self) -> &tuxmix_core::DeviceSettings {
+        &self.scene.settings
+    }
+
+    pub fn info(&self) -> &DeviceInfo {
+        &self.info
+    }
+
+    pub fn set_volume(&self, channel: ChannelId, output: usize, value: f32) -> bool {
+        self.commands
+            .send(Command::SetVolume(channel, output, value))
+            .is_ok()
+    }
+
+    pub fn set_mute(&self, channel: ChannelId, mute: bool) -> bool {
+        self.commands.send(Command::SetMute(channel, mute)).is_ok()
+    }
 }
 
 /// Meter values written by the service and read by the fader canvases.
@@ -63,6 +139,7 @@ pub struct DeviceService {
     commands: Sender<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
     meters: Arc<Mutex<MeterSnapshot>>,
+    updates: Option<Receiver<Snapshot>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -77,20 +154,29 @@ impl DeviceService {
     /// Take ownership of `device` and start the service thread.
     pub fn spawn(mut device: DeviceHandle) -> Self {
         let initial = device.capture_scene();
+        let info = capture_info(&device);
         let snapshot = Arc::new(Mutex::new(Snapshot {
             scene: initial,
+            info,
             connected: device.is_connected(),
             at: Instant::now(),
         }));
         let meters = Arc::new(Mutex::new(MeterSnapshot::default()));
         let (commands, rx) = mpsc::channel();
+        let (updates_tx, updates_rx) = mpsc::channel();
 
         let thread_snapshot = Arc::clone(&snapshot);
         let thread_meters = Arc::clone(&meters);
         let join = thread::Builder::new()
             .name("tuxmix-device-service".into())
             .spawn(move || {
-                run(&mut device, rx, thread_snapshot, thread_meters);
+                run(
+                    &mut device,
+                    rx,
+                    thread_snapshot,
+                    thread_meters,
+                    updates_tx,
+                );
             })
             .expect("starting the device service");
 
@@ -98,6 +184,7 @@ impl DeviceService {
             commands,
             snapshot,
             meters,
+            updates: Some(updates_rx),
             join: Some(join),
         }
     }
@@ -105,6 +192,17 @@ impl DeviceService {
     /// The current model snapshot.
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
+    }
+
+    /// Take the update receiver; the UI drains it and applies the snapshots
+    /// to its `Mirror`.
+    pub fn take_updates(&mut self) -> Option<Receiver<Snapshot>> {
+        self.updates.take()
+    }
+
+    /// A clone of the command sender, for a `Mirror`.
+    pub fn command_sender(&self) -> Sender<Command> {
+        self.commands.clone()
     }
 
     /// The current meter snapshot.
@@ -135,11 +233,27 @@ impl Drop for DeviceService {
     }
 }
 
+fn capture_info(device: &DeviceHandle) -> DeviceInfo {
+    DeviceInfo {
+        model_name: device.model_name().to_string(),
+        canonical_model: device.canonical_model().to_string(),
+        capabilities: device.capabilities(),
+        protocol_features: device.protocol_features(),
+        output_pair_count: device.output_pair_count(),
+        output_display_order: device.output_display_order(),
+        is_uc: device.is_uc_model(),
+        is_ucx: device.is_ucx_model(),
+        is_uc_family: device.is_uc_family(),
+        is_mock: device.is_mock(),
+    }
+}
+
 fn run(
     device: &mut DeviceHandle,
     rx: Receiver<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
     meters: Arc<Mutex<MeterSnapshot>>,
+    updates: Sender<Snapshot>,
 ) {
     let mut last_scene = Instant::now();
     let mut last_connected = device.is_connected();
@@ -188,12 +302,20 @@ fn run(
         if last_scene.elapsed() >= Duration::from_millis(50) {
             last_scene = Instant::now();
             let connected = device.is_connected();
-            let mut s = snapshot.lock().unwrap();
-            if connected != last_connected || s.at.elapsed() >= Duration::from_millis(50) {
-                s.scene = device.capture_scene();
-                s.connected = connected;
-                s.at = Instant::now();
-                last_connected = connected;
+            let update = {
+                let mut s = snapshot.lock().unwrap();
+                if connected != last_connected || s.at.elapsed() >= Duration::from_millis(50) {
+                    s.scene = device.capture_scene();
+                    s.connected = connected;
+                    s.at = Instant::now();
+                    last_connected = connected;
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(update) = update {
+                let _ = updates.send(update);
             }
         }
     }
@@ -270,6 +392,27 @@ mod tests {
             "the meter snapshot is written"
         );
         assert!(service.meters().inputs.iter().any(|v| *v >= 0.0));
+        service.stop();
+    }
+
+    #[test]
+    fn a_mirror_applies_updates_and_sends_commands() {
+        let mut service = DeviceService::spawn(mock());
+        let updates = service.take_updates().expect("the update receiver");
+        let mut mirror = super::Mirror::new(service.snapshot(), service.command_sender());
+        assert!(!mirror.outputs().is_empty());
+        assert_eq!(mirror.info().output_pair_count, mirror.outputs().len() / 2);
+
+        assert!(mirror.set_volume(ChannelId::Output(0), 0, 0.25));
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                (mirror.outputs()[0].volume - 0.25).abs() < 0.001
+            }),
+            "the mirror follows the service snapshot"
+        );
         service.stop();
     }
 }
