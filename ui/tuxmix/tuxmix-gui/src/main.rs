@@ -14,6 +14,7 @@
 
 mod about;
 mod app;
+mod device_service;
 mod icon;
 mod layouts;
 mod matrix;
