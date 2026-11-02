@@ -367,9 +367,12 @@ percent and dB, with a `0 dB` action. The host volume is an attenuation before
 the interface, so it lowers the playback meters by the same amount; the
 interface's own faders remain the monitoring level.
 
-`Errors` counts the driver transport faults since the sheet opened or the
-last `reset`: empty-URB gaps, short packets, status and URB errors, and
-recoveries. A non-zero count is a transport fault; the row is absent when the
+`Errors` lists the driver transport faults since the sheet opened or the
+last `reset`, one row per type: `usb` (URB status errors), `urb` (URB resubmit
+errors), `gaps` (the USB queue ran dry), `short` (short packets), `recover`
+(engine recoveries) and `events` (dropped driver events). `usb`, `gaps` and
+`short` show input/output as `in / out`; `urb`, `recover` and `events` are
+single values. A non-zero row is a fault; the section is absent when the
 backend does not expose counters.
 
 ## 5. Equalizer panel

@@ -357,10 +357,11 @@ device-side latency on top of the buffer; the readout lists the estimate
 and its parts (USB queue, device lead, converters and graph period) so you
 can budget monitoring and recording latency.
 
-The **Errors** row counts driver transport faults since the device sheet
-opened or the last **reset**: empty USB-queue gaps, short packets, status
-and URB errors, and recoveries. A non-zero count means the USB transport is
-dropping or mis-timing packets; reset only clears the display baseline.
+The **Errors** section lists driver transport faults since the device sheet
+opened or the last **reset**, one row per type. `usb`, `gaps` and `short`
+show input and output as `in / out`; `urb`, `recover` and `events` are single
+values. A non-zero row means the USB transport is dropping or mis-timing
+packets; reset only clears the display baseline.
 
 ## 15. Where TuxMix keeps its data
 

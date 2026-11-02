@@ -21,6 +21,8 @@ int main(int argc, char **argv) {
     printf("out_urbs=%u out_gaps=%u out_shorts=%u out_status_errors=%u urb_errors=%u recoveries=%u events_dropped=%u meter_urbs=%u state_urbs=%u status_urbs=%u\n",
         c.out_urbs, c.out_gaps, c.out_shorts, c.out_status_errors, c.urb_errors,
         c.recoveries, c.events_dropped, c.meter_urbs, c.state_urbs, c.status_urbs);
+    printf("in_urbs=%u in_gaps=%u in_shorts=%u in_status_errors=%u\n",
+        c.in_urbs, c.in_gaps, c.in_shorts, c.in_status_errors);
     close(fd);
     return 0;
 }

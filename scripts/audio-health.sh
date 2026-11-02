@@ -22,24 +22,24 @@ xrun() { pw-top -b -n 2 2>/dev/null | grep -E '^R .*Fireface.*pro-output' | tail
 state() { awk '/^state:/ {print $2}' /proc/asound/card2/pcm0p/sub0/status 2>/dev/null; }
 q() { grep -E 'period_size|buffer_size' /proc/asound/card2/pcm0p/sub0/hw_params 2>/dev/null | tr '\n' ' '; }
 
-fields="out_gaps out_shorts out_status_errors urb_errors recoveries"
+fields="out_gaps out_shorts out_status_errors urb_errors recoveries in_gaps in_shorts in_status_errors"
 declare -A prev
 for f in $fields; do prev[$f]=$(get "$f"); done
 prev_x=$(xrun)
 fail=0
-echo "time      xrun gaps short stat urb recov  quantum state"
+echo "time      xrun  deltas (out_gaps/out_short/out_stat/urb/recov/in_gaps/in_short/in_stat)  quantum state"
 for i in $(seq 1 "$secs"); do
     sleep 1
     x=$(xrun); dx=$((x - prev_x)); prev_x=$x
-    d=""
+    line=""
     for f in $fields; do
-        v=$(get "$f"); d+=" $((v - ${prev[$f]}))"; prev[$f]=$v
+        v=$(get "$f"); line+=" $((v - ${prev[$f]}))"; prev[$f]=$v
     done
-    set -- $d
+    set -- $line
     for v in "$@"; do [ "$v" -ne 0 ] && fail=1; done
     [ "$dx" -ne 0 ] && fail=1
-    printf '%s %5d %4d %5d %4d %3d %3d  %-24s %s\n' \
-        "$(date +%H:%M:%S)" "$dx" "$1" "$2" "$3" "$4" "$5" "$(q)" "$(state)"
+    printf '%s %5d %s  %-24s %s\n' \
+        "$(date +%H:%M:%S)" "$dx" "$line" "$(q)" "$(state)"
 done
 echo "result: $([ "$fail" -eq 0 ] && echo CLEAN || echo ERRORS)"
 exit "$fail"

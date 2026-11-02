@@ -8226,18 +8226,9 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
     );
     if let (Some(now), Some(base)) = (state.transport_counters, state.transport_baseline) {
         let delta = transport_delta(&now, &base);
-        let total = transport_error_total(&delta);
-        let colour = if total == 0 {
-            theme::TEXT_SEC
-        } else {
-            Color::from_rgb8(0xe0, 0x5a, 0x5a)
-        };
         body = body.push(
             row![
                 caption("Errors"),
-                text(total.to_string())
-                    .size(theme::TEXT_XS * ts)
-                    .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
                 button(text("reset").size(theme::TEXT_XS * scale))
                     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -8247,19 +8238,42 @@ fn engine_section(state: &TuxMix, label_w: f32) -> Element<'_, Message> {
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         );
-        if total > 0 {
+        // One row per fault type, named for the transport stage.  "xruns"
+        // is the host/PipeWire side and needs its own driver counter before
+        // it can be shown here; it is not inferred from these.
+        for (label, value, bad) in [
+            (
+                "usb",
+                format!("{} / {}", delta.in_status_errors, delta.out_status_errors),
+                delta.in_status_errors + delta.out_status_errors,
+            ),
+            ("urb", delta.urb_errors.to_string(), delta.urb_errors),
+            (
+                "gaps",
+                format!("{} / {}", delta.in_gaps, delta.out_gaps),
+                delta.in_gaps + delta.out_gaps,
+            ),
+            (
+                "short",
+                format!("{} / {}", delta.in_shorts, delta.out_shorts),
+                delta.in_shorts + delta.out_shorts,
+            ),
+            ("recover", delta.recoveries.to_string(), delta.recoveries),
+            ("events", delta.events_dropped.to_string(), delta.events_dropped),
+        ] {
+            let colour = if bad == 0 {
+                theme::TEXT_SEC
+            } else {
+                Color::from_rgb8(0xe0, 0x5a, 0x5a)
+            };
             body = body.push(
-                text(format!(
-                    "gaps {} · short {} · status {} · urb {} · recoveries {} · dropped {}",
-                    delta.out_gaps,
-                    delta.out_shorts,
-                    delta.out_status_errors,
-                    delta.urb_errors,
-                    delta.recoveries,
-                    delta.events_dropped
-                ))
-                .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                row![
+                    text(label).size(theme::TEXT_XS * ts).color(theme::TEXT_SEC),
+                    iced::widget::Space::new().width(Length::Fill),
+                    text(value).size(theme::TEXT_XS * ts).color(colour),
+                ]
+                .spacing(theme::SPACE_MD * scale)
+                .align_y(iced::Alignment::Center),
             );
         }
     }
@@ -8309,13 +8323,13 @@ fn transport_delta(
         meter_urbs: now.meter_urbs.saturating_sub(base.meter_urbs),
         state_urbs: now.state_urbs.saturating_sub(base.state_urbs),
         status_urbs: now.status_urbs.saturating_sub(base.status_urbs),
+        in_urbs: now.in_urbs.saturating_sub(base.in_urbs),
+        in_gaps: now.in_gaps.saturating_sub(base.in_gaps),
+        in_shorts: now.in_shorts.saturating_sub(base.in_shorts),
+        in_status_errors: now.in_status_errors.saturating_sub(base.in_status_errors),
     }
 }
 
-/// Audio-transport errors in a counter delta (event-queue drops excluded).
-fn transport_error_total(d: &tuxmix_core::fireface::abi::HwdepCounters) -> u32 {
-    d.out_gaps + d.out_shorts + d.out_status_errors + d.urb_errors + d.recoveries
-}
 
 /// The latency line.  While the card plays, it uses the card's actual period
 /// and the USB queue from the module parameters.  The UCX line is a
@@ -13464,7 +13478,7 @@ mod tests {
 
     #[test]
     fn transport_counter_deltas_saturate_and_total_only_audio_errors() {
-        use super::{transport_delta, transport_error_total};
+        use super::transport_delta;
         use tuxmix_core::fireface::abi::HwdepCounters;
         let base = HwdepCounters {
             out_urbs: 100,
@@ -13491,7 +13505,10 @@ mod tests {
         assert_eq!(d.out_gaps, 2);
         assert_eq!(d.out_shorts, 0);
         assert_eq!(d.out_status_errors, 2);
-        assert_eq!(transport_error_total(&d), 4);
+        assert_eq!(
+            d.out_gaps + d.out_shorts + d.out_status_errors + d.urb_errors + d.recoveries,
+            4
+        );
         // A reset/restart baseline can be newer than the reading.
         let back = transport_delta(&base, &now);
         assert_eq!(back.out_gaps, 0);

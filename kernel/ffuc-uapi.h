@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 
-#define FFUC_ABI_VERSION	2
+#define FFUC_ABI_VERSION	3
 
 /* Largest payload in one FFUC_HWDEP_IOCTL_VENDOR request. */
 #define FFUC_HWDEP_MAX_DATA	64
@@ -121,6 +121,10 @@ struct ffuc_hwdep_counters {
 	__u32 meter_urbs;
 	__u32 state_urbs;
 	__u32 status_urbs;
+	__u32 in_urbs;
+	__u32 in_gaps;
+	__u32 in_shorts;
+	__u32 in_status_errors;
 };
 
 #define FFUC_HWDEP_IOCTL_INFO \

@@ -272,6 +272,10 @@ static int ffuc_hwdep_counters(struct ffuc *chip,
 	c.meter_urbs = atomic_read(&chip->meter_urbs);
 	c.state_urbs = atomic_read(&chip->state_urbs);
 	c.status_urbs = 0;
+	c.in_urbs = atomic_read(&chip->in_urbs);
+	c.in_gaps = atomic_read(&chip->in_gaps);
+	c.in_shorts = atomic_read(&chip->in_shorts);
+	c.in_status_errors = atomic_read(&chip->in_status_errors);
 	if (copy_to_user(arg, &c, sizeof(c)))
 		return -EFAULT;
 	return 0;

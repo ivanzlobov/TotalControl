@@ -1023,6 +1023,7 @@ static void ffuc_iso_capture_urb(struct ffuc_ep *ep, struct urb *urb)
 		if (d->status || d->actual_length < FFUC_ISO_IN_HEADER ||
 		    (d->actual_length - FFUC_ISO_IN_HEADER) %
 		    (nch * FFUC_SAMPLE_BYTES)) {
+			atomic_inc(&chip->in_shorts);
 			frames[i] = 0;
 			ffuc_fb_put_nominal(chip);
 			continue;
@@ -1179,6 +1180,25 @@ static void ffuc_track_playback_urb(struct ffuc *chip, struct urb *urb)
 	chip->last_out_complete = now;
 }
 
+static void ffuc_track_capture_urb(struct ffuc *chip, struct urb *urb)
+{
+	s64 expected, delta;
+	ktime_t now = ktime_get();
+
+	if (urb->status)
+		atomic_inc(&chip->in_status_errors);
+	atomic_inc(&chip->in_urbs);
+	if (!chip->rate || !READ_ONCE(chip->engine_running))
+		return;
+	expected = (s64)chip->urb_frames * NSEC_PER_SEC / chip->rate;
+	if (chip->last_in_complete) {
+		delta = ktime_to_ns(ktime_sub(now, chip->last_in_complete));
+		if (delta > expected * 3)
+			atomic_inc(&chip->in_gaps);
+	}
+	chip->last_in_complete = now;
+}
+
 static int ffuc_stats_show(struct seq_file *m, void *v)
 {
 	struct ffuc *chip = m->private;
@@ -1188,6 +1208,11 @@ static int ffuc_stats_show(struct seq_file *m, void *v)
 	seq_printf(m, "out_shorts %d\n", atomic_read(&chip->out_shorts));
 	seq_printf(m, "out_status_errors %d\n",
 		   atomic_read(&chip->out_status_errors));
+	seq_printf(m, "in_urbs %d\n", atomic_read(&chip->in_urbs));
+	seq_printf(m, "in_gaps %d\n", atomic_read(&chip->in_gaps));
+	seq_printf(m, "in_shorts %d\n", atomic_read(&chip->in_shorts));
+	seq_printf(m, "in_status_errors %d\n",
+		   atomic_read(&chip->in_status_errors));
 	seq_printf(m, "urb_errors %d\n", atomic_read(&chip->urb_errors));
 	seq_printf(m, "recoveries %u\n", chip->recoveries);
 	seq_printf(m, "events_dropped %d\n", atomic_read(&chip->events_dropped));
@@ -1204,10 +1229,13 @@ static void ffuc_urb_complete(struct urb *urb)
 	struct ffuc *chip = ep->chip;
 	int ret;
 
-	if (ep->dir == SNDRV_PCM_STREAM_PLAYBACK &&
-	    urb->status != -ENOENT && urb->status != -ECONNRESET &&
-	    urb->status != -ESHUTDOWN && urb->status != -ENODEV)
-		ffuc_track_playback_urb(chip, urb);
+	if (urb->status != -ENOENT && urb->status != -ECONNRESET &&
+	    urb->status != -ESHUTDOWN && urb->status != -ENODEV) {
+		if (ep->dir == SNDRV_PCM_STREAM_PLAYBACK)
+			ffuc_track_playback_urb(chip, urb);
+		else
+			ffuc_track_capture_urb(chip, urb);
+	}
 
 	switch (urb->status) {
 	case 0:
@@ -1592,6 +1620,7 @@ static int ffuc_engine_start(struct ffuc *chip)
 
 	atomic_set(&chip->urb_errors, 0);
 	chip->last_out_complete = 0;
+	chip->last_in_complete = 0;
 	WRITE_ONCE(chip->engine_broken, false);
 	WRITE_ONCE(chip->engine_running, true);
 	for (i = 0; i < chip->nurbs; i++) {

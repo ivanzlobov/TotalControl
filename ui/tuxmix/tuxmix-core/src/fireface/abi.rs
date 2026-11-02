@@ -7,7 +7,7 @@
 
 use std::mem::size_of;
 
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 pub const HWDEP_MAX_DATA: usize = 64;
 pub const HWDEP_MAX_WORDS: usize = 63;
 pub const EVENT_MAX: usize = 512;
@@ -104,6 +104,10 @@ pub struct HwdepCounters {
     pub meter_urbs: u32,
     pub state_urbs: u32,
     pub status_urbs: u32,
+    pub in_urbs: u32,
+    pub in_gaps: u32,
+    pub in_shorts: u32,
+    pub in_status_errors: u32,
 }
 
 /// Linux `_IOC` encoding (the generic asm-generic layout used on x86_64,
@@ -149,7 +153,7 @@ mod tests {
         // ffuc_hwdep_vendor: 1 + 1 + 2 + 2 + 2 + 2 + 64 = 74, aligned to 2
         assert_eq!(size_of::<HwdepVendor>(), 74);
         assert_eq!(size_of::<HwdepWords>(), 4 + 4 + 63 * 4);
-        assert_eq!(size_of::<HwdepCounters>(), 40);
+        assert_eq!(size_of::<HwdepCounters>(), 56);
     }
 
     #[test]

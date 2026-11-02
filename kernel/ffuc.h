@@ -315,7 +315,12 @@ struct ffuc {
 	atomic_t out_gaps;
 	atomic_t out_shorts;
 	atomic_t out_status_errors;
+	atomic_t in_urbs;
+	atomic_t in_gaps;
+	atomic_t in_shorts;
+	atomic_t in_status_errors;
 	ktime_t last_out_complete;
+	ktime_t last_in_complete;
 
 	/* identity */
 	u32 firmware;
