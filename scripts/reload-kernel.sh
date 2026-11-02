@@ -11,21 +11,28 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-if ! sudo rmmod snd_fireface_uc; then
-	echo "module still in use; trying USB interface unbind..." >&2
-	IFACE=$(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null |
-		head -1 | xargs -r -n1 basename)
-	if [ -z "$IFACE" ]; then
-		echo "no bound interface found." >&2
-		echo "Stop the audio services: systemctl --user stop wireplumber pipewire pipewire-pulse" >&2
-		echo "or unplug the Fireface, then rerun this script." >&2
-		exit 1
-	fi
-	echo "unbinding $IFACE" >&2
-	echo -n "$IFACE" | sudo tee /sys/bus/usb/drivers/snd-fireface-uc/unbind >/dev/null
+if lsmod | grep -q '^snd_fireface_uc '; then
 	if ! sudo rmmod snd_fireface_uc; then
-		echo "module is still in use; unplug the Fireface, then rerun this script." >&2
-		exit 1
+		echo "module still in use; checking holders..." >&2
+		echo "  refcnt: $(cat /sys/module/snd_fireface_uc/refcnt 2>/dev/null || echo '?')" >&2
+		# An unplugged unit can leave a process holding the removed hwdep
+		# node (TuxMix is the usual one), keeping the module reference.
+		lsof +L1 2>/dev/null | grep -E 'snd/(hwC|pcmC)' >&2 || true
+		IFACE=$(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null |
+			head -1 | xargs -r -n1 basename)
+		if [ -z "$IFACE" ]; then
+			echo "no bound USB interface to unbind." >&2
+			echo "Close TuxMix, or stop the audio services:" >&2
+			echo "  systemctl --user stop wireplumber pipewire-pulse pipewire" >&2
+			echo "then rerun this script." >&2
+			exit 1
+		fi
+		echo "unbinding $IFACE" >&2
+		echo -n "$IFACE" | sudo tee /sys/bus/usb/drivers/snd-fireface-uc/unbind >/dev/null
+		if ! sudo rmmod snd_fireface_uc; then
+			echo "module is still in use; close TuxMix or unplug the Fireface, then rerun." >&2
+			exit 1
+		fi
 	fi
 fi
 
