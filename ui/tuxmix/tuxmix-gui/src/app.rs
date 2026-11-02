@@ -2215,6 +2215,11 @@ pub struct TuxMix {
     /// not this scene, matching Windows TotalMix: the saved host mix wins at
     /// the next connect.
     pub host_scene: Option<Scene>,
+    /// A host mix change whose confirming service snapshot has not arrived
+    /// yet.  The mirror only changes when that snapshot lands, so the host
+    /// scene merge waits for it instead of comparing two identical
+    /// captures (which recorded nothing).
+    pub pending_host_merge: Option<(Scene, Instant)>,
     /// The host scene to reapply after the UC meter tap has opened the
     /// card.  Reapplying `capture_scene()` here was wrong: a stale
     /// front-panel `0x8b` event could already have replaced the output
@@ -2806,6 +2811,7 @@ pub fn new_with_device(
         startup_scene_due: None,
         startup_scene: None,
         host_scene: None,
+        pending_host_merge: None,
         last_sink_running: false,
         last_card_rate: None,
         tray_active: false,
@@ -4836,6 +4842,15 @@ fn select_strip(state: &mut TuxMix, cid: ChannelId) {
 }
 
 pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
+    // A host change whose confirming snapshot never arrived (a rejected
+    // command, or a stopped service) must not capture a later snapshot.
+    if state
+        .pending_host_merge
+        .as_ref()
+        .is_some_and(|(_, at)| at.elapsed() > Duration::from_secs(1))
+    {
+        state.pending_host_merge = None;
+    }
     // A Control Room pair can never be unlinked; correct the model before
     // the message below acts on it.
     enforce_control_room_stereo(state);
@@ -4975,6 +4990,17 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             {
                 while let Ok(snapshot) = rx.try_recv() {
                     m.update(snapshot);
+                }
+            }
+            // The mirror now holds the confirmed values.  Merge the host
+            // change that was waiting for them; keep waiting if this was a
+            // snapshot published before the command reached the service.
+            if let Some((before, at)) = state.pending_host_merge.take() {
+                let after = state.device.capture_scene();
+                if after != before {
+                    merge_host_changes(state, before);
+                } else if at.elapsed() < Duration::from_secs(1) {
+                    state.pending_host_merge = Some((before, at));
                 }
             }
         }
@@ -6815,19 +6841,32 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         }
     }
     if let Some(before) = host_before {
-        let after = state.device.capture_scene();
-        // The UCX options word, references and 48 V/Inst/Level switches have
-        // no readback, so a host change is the only record.  Gain is read
-        // back from the state stream.  The UC reads its device group again
-        // at connect and keeps the unit's values.
-        let include_device = state.device.is_ucx_model();
-        if let Some(host) = state.host_scene.as_mut() {
-            host.merge_host_changes_with_device(&before, &after, include_device);
+        if state.device_service.is_some() {
+            // The command only reaches the device thread; the mirror still
+            // shows the old value.  Wait for the confirming snapshot.
+            state.pending_host_merge = Some((before, Instant::now()));
         } else {
-            state.host_scene = Some(after);
+            merge_host_changes(state, before);
         }
     }
     Task::none()
+}
+
+/// Merge one host-originated change into the saved scene.  Only the fields
+/// that differ between the two captures are taken, so a front-panel change
+/// present in both is not persisted.
+fn merge_host_changes(state: &mut TuxMix, before: Scene) {
+    let after = state.device.capture_scene();
+    // The UCX options word, references and 48 V/Inst/Level switches have no
+    // readback, so a host change is the only record.  Gain is read back from
+    // the state stream.  The UC reads its device group again at connect and
+    // keeps the unit's values.
+    let include_device = state.device.is_ucx_model();
+    if let Some(host) = state.host_scene.as_mut() {
+        host.merge_host_changes_with_device(&before, &after, include_device);
+    } else {
+        state.host_scene = Some(after);
+    }
 }
 
 /// Swap in a newly opened device.  When the device service owns the
@@ -13322,6 +13361,51 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(updated, "the mirror follows the service snapshot");
+    }
+
+    #[test]
+    fn a_host_edit_reaches_the_saved_scene_with_the_service() {
+        let mut state = new(true, None, None);
+        attach_device_service(&mut state);
+        state.host_scene = Some(state.device.capture_scene());
+
+        let cid = ChannelId::Playback(0);
+        let out = 0;
+        let initial = state.device.volume(cid, out).unwrap_or(0.0);
+        let target = if initial > 0.5 {
+            initial - 0.25
+        } else {
+            initial + 0.25
+        };
+        assert!(
+            (target - initial).abs() > 0.1,
+            "the test needs a visible change"
+        );
+        let _ = update(&mut state, Message::VolumeChanged(cid, out, target));
+
+        // The mirror learns the value from the service snapshot; the saved
+        // host scene must be merged from that confirmation, not from the
+        // stale local model right after the command.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saved = 0.0;
+        while Instant::now() < deadline {
+            let _ = update(&mut state, Message::DeviceUpdated);
+            saved = state
+                .host_scene
+                .as_ref()
+                .and_then(|scene| scene.playbacks.first())
+                .and_then(|pb| pb.volumes.get(out))
+                .copied()
+                .unwrap_or(0.0);
+            if (saved - target).abs() < 0.001 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            (saved - target).abs() < 0.001,
+            "host scene kept {saved}, expected the confirmed {target}"
+        );
     }
 
     #[test]
