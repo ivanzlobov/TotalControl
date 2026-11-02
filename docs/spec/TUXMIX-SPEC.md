@@ -543,8 +543,9 @@ The preamp gain is present on the UCX analog inputs 1–4. Digital inputs enter
 after the preamp stage. In TotalMix, T is a send-fader mode, not a gain stage.
 In TuxMix, trim is a host-side pre-fader gain after the ADC.
 
-Control Room destinations (Main, Speaker B, Phones, Cue) are ordinary output
-buses with their assignment controls.
+Control Room destinations (Main, Speaker B, Phones) are ordinary output buses
+with their assignment controls. Cue/PFL to selects which monitoring output
+carries the Cue signal; it is not a channel.
 
 ## 9. Motion
 
@@ -561,6 +562,10 @@ a wider panel takes longer instead of sliding faster:
 
 Toggling Stereo tweens the second half of the pair between zero and full width
 at the same speed. Channels to the right reflow with the tween.
+
+Assignment add, clear and replace move at the same 1 px/ms speed. A
+destination change that keeps the Control Room channel count unchanged does
+not animate.
 
 ## 10. Stereo link
 
@@ -597,19 +602,16 @@ independent states across every transition.
 
 ## 11. Control Room
 
-The Control Room panel closes the mixer, flush with its right edge beside the
-FX column. Its buttons sit in TotalMix's background groups:
+The Control Room panel is flush with the mixer's right edge beside the FX
+column. Its button stack is one channel wide; every button in the stack has
+the same width and height, and its label is centred. Long labels use the next
+smaller type tier. The stack runs, top to bottom:
 
-| Group | Control | Behaviour |
-|---|---|---|
-| assign | Assign | Picks the Main Out from the hardware outputs (output mode word `0xNN02` bit 1). Assigning another pair clears the previous one. The button reads `assign` with the list closed |
-| dim / recall | Dim | Lowers the Main Out by 20 dB and sets the device Dim flag |
-| | Recall | Restores the pre-Dim level and clears the Dim flag |
-| mono / speaker B / ext. input / mute FX | Mono | Host-side monitoring option |
-| | Speaker B | Switches the main monitoring output to Speaker B |
-| | Ext. input | Switches monitoring to the external stereo input. Inert: the level register is unmeasured |
-| | Mute FX | Host-side effect-return option |
-| talkback | Talkback | Dims the Phones outputs and sends the talkback source. Inert: the source assignment is unmeasured |
+| Group | Controls |
+|---|---|
+| dim / recall / speaker B | Dim, Recall, Speaker B |
+| mono / talkback / ext. input / mute FX | Mono, Talkback, Ext. input, Mute FX |
+| assign | Assign, at the bottom |
 
 Dim, Recall and Speaker B use the UCX control-room registers. Mono and
 Mute FX are stored in the device scene.
@@ -617,22 +619,53 @@ Mute FX are stored in the device scene.
 ### 11.1 Assign
 
 `assign` opens a two-level menu. The first level lists the monitoring
-destinations, each with the output it currently holds:
+destinations in this order, using the same names as the Control Room channels:
 
 | Destination | Device |
 |---|---|
-| Main Out | output mode word `0xNN02` bit 1 on the chosen pair |
-| Main Out B | the same bit, plus control-room state word `0x3d00 = 3` |
+| Main | output mode word `0xNN02` bit 1 on the chosen pair |
+| Speaker B | the same bit, plus control-room state word `0x3d00 = 3` |
 | Phones 1..4 | host-side; the unit receives nothing |
-| Cue/PFL to | host-side; the unit receives nothing |
+| Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 
-The menu opens immediately left of the `assign` button and covers the
+The second level for an output destination lists the predetermined hardware
+channel names—`None` first, then every hardware output in display order, the
+current output in bold. It never shows user names. Choosing `None` clears the
+destination. Both levels use the same button width, and every label is
+centred.
+
+Clicking a first-level destination opens and pins its second level. Hovering
+an unpinned first-level row opens or switches the second level without
+pinning it. The second level closes only when an item is chosen, a click lands
+outside the menu, or `assign` is clicked.
+
+`Cue/PFL to` is the seventh entry and stays in the Assign list. Its sublist is
+`Main`, `Phones 1`, `Phones 2`, `Phones 3`; it has no `None`; the current
+target is bold. Choosing a target changes only where Cue/PFL is monitored; the
+same target controls PFL monitoring. It assigns no hardware output, moves no
+channel and creates no Control Room slot. The target is host-side and stored
+with the GUI preferences.
+
+The menu opens immediately left of the bottom `assign` button and covers the
 section's channels while it is open.
 
-Hovering or clicking a destination opens the second level beside it: every
-hardware output in order, `None` at the top, and the currently assigned output
-in bold. Choosing `None` clears that destination. The list closes when an
-output is chosen or a click lands outside it.
+Control Room slots run left to right: `Phones 1`, `Phones 2`, `Phones 3`,
+`Phones 4`, `Speaker B`, `Main`. `Main` is beside the buttons. There are no
+empty slots: every hardware output is either assigned in the Control Room or
+unassigned in the Hardware Outputs row.
+
+Control Room channel names are predetermined and are exactly the first six
+Assign names: `Main`, `Speaker B`, `Phones 1`–`Phones 4`. View → Names does
+not change them. They are not user editable; clicking the name selects the
+channel but never opens the rename field. The Assign menu uses those names in
+its first level and the predetermined hardware names in its second level.
+
+Assigning a pair moves its channel out of the Hardware Outputs row into the
+Control Room section, named for its destination, and the panel widens to hold
+it. Clearing the destination returns the channel to the Hardware Outputs row
+in its original position. Changing an output from one destination to another
+keeps the fixed slot order: when the Control Room count does not change, the
+strip takes its new destination slot and its name changes without animation.
 
 The section carries its own `control room` title in the same line as the
 HARDWARE OUTPUTS label. The title starts at the section's leftmost channel,
@@ -646,27 +679,53 @@ Control Room channels are ordinary hardware outputs for routing too: clicking
 one selects that output's submix and it takes the same brighter surface as any
 other output does, which is how the manual describes every hardware output
 ("click on the Hardware Output channel ... This channel turns brighter, means
-it is selected as current submix"). The Main Out is a submix like any other;
-FX Send can follow it.
+it is selected as current submix"). The Main output is a submix like any
+other; FX Send can follow it.
 
 Every click on a hardware output counts, not only the strip's empty surface:
 its mute and cue switches, its slideout buttons (gear, EQ, D), its fader and
 its name field select that output the same way, and the visible submix
-switches to it.  An output strip that is already part of a multi-selection
+switches to it. An output strip that is already part of a multi-selection
 keeps the selection when one of its controls is clicked, so group edits still
 apply.
 
-Assigning a pair moves its channel out of the Hardware Outputs row into the
-Control Room section, renamed for the destination — `Main`, `Speaker B`,
-`Phones 1`–`Phones 4`, `Cue` — and the panel widens to hold it. Assigning a
-different output, or `None`, returns the previous channel to the Hardware
-Outputs row in its original position.
+### 11.2 Assignment motion
 
-The manual (§25.4) describes the move: assigning moves the channel "from the
-Hardware Outputs into the Control Room section, and renamed Main. The same
-happens when assigning Main Out B or the Phones." Its `Names` view option is
-what lets the original name be shown again; TuxMix keeps the destination name
-while the channel is in the Control Room.
+An assignment change is one combined flow. Every affected strip, slot and row
+gap starts in the same frame and moves at the same constant 1 px/ms as the
+other panel transitions. Parts with different travel distances finish at
+different times; there is no separate Control Room timing.
+
+Adding an assignment slides only within each row; the channel does not
+travel between the Hardware Outputs row and the Control Room.
+
+- The output strip leaves the Hardware Outputs row, and the strips to its
+  right slide left by the vacated width.
+- The Control Room grows by one slot; the new slot takes its place in the
+  fixed order; the slots to its left slide left; the slots to its right stay.
+- The channel appears in its new Control Room slot.
+
+Clearing an assignment reverses the row-internal motion: the Control Room
+slots to the left of the removed slot slide right, the panel shrinks, and the
+strips to the right of the channel's original row position slide right to open
+the gap. The returning channel fills that gap from its right edge as the gap
+opens; it is revealed progressively rather than appearing at full width.
+
+Replacing an occupied destination, or changing an output from one destination
+to another, keeps the Control Room channel count unchanged and therefore does
+not animate. The fixed slot order is recomputed immediately; the channel and
+its name appear in the new destination slot.
+
+A split output pair moves as one dual channel. If a channel has an open
+slideout, the slideout travels with it and stays open. The Hardware Outputs
+row makes room for the strip plus the slideout; when there is not enough room,
+the rightmost channels pass under the Control Room, which always remains
+visible. At the destination the usual slideout rule applies: it opens to the
+right, and the Control Room shifts its own channels left by one slot.
+
+The moving channel is drawn once, above the rows and panel, and accepts no
+pointer input until it settles. No motion runs when assignments are restored
+from a scene or from preferences at startup.
 
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.

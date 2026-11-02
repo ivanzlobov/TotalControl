@@ -300,11 +300,6 @@ pub struct StripParams<'a> {
     /// (`theme::armed_toggle_button`). Set by `app::finish_params`.
     pub mute_armed: bool,
     pub solo_armed: bool,
-    /// `true` only for `ChannelId::Output` — every other channel kind
-    /// has no CUE bus of its own (see `RmeDevice::set_cue`'s doc
-    /// comment: CUE always monitors *some output's* dedicated
-    /// playback pair through AN1/2, not an input/playback concept).
-    pub has_cue: bool,
     pub cue: bool,
     pub default_vol: f32,
     pub editing: bool,
@@ -326,6 +321,12 @@ pub struct StripParams<'a> {
     /// `name` is the user's own label; do not strip a hardware "PCM "/"OUT "
     /// prefix from it, unlike the original names.
     pub name_custom: bool,
+    /// The name is fixed by the app (Control Room destinations) and must not
+    /// be replaced by a user label.
+    pub name_locked: bool,
+    /// Double-clicking the name may open the rename field. Control Room
+    /// channels set this off: the name still selects the channel.
+    pub renameable: bool,
 }
 
 /// A button's own padding-based centering isn't reliable across glyphs of
@@ -554,6 +555,7 @@ fn header_row<'a>(
     name: &str,
     name_custom: bool,
     type_tag: Option<(&'static str, Color)>,
+    renameable: bool,
     renaming: bool,
     rename_buf: &'a str,
     scale: f32,
@@ -598,11 +600,20 @@ fn header_row<'a>(
                 .wrapping(advanced_text::Wrapping::None),
         );
     }
-    let header = mouse_area(header)
-        .on_press(Message::StripClicked(cid))
-        .on_double_click(Message::RenameStart(cid))
-        .interaction(mouse::Interaction::Text);
-    container(hint(header, "Double-click to rename", scale))
+    let header = mouse_area(header).on_press(Message::StripClicked(cid));
+    let header = if renameable {
+        header
+            .on_double_click(Message::RenameStart(cid))
+            .interaction(mouse::Interaction::Text)
+    } else {
+        header
+    };
+    let header = if renameable {
+        hint(header, "Double-click to rename", scale)
+    } else {
+        header.into()
+    };
+    container(header)
         .width(Length::Fill)
         .center_x(Length::Fill)
         .align_y(iced::Alignment::Center)
@@ -664,10 +675,19 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         scale,
     );
 
-    // No solo on outputs (see `full_strip`); an empty slot keeps the
-    // collapsed cards' meters aligned across the row.
-    let solo_slot: Element<'a, Message> = if matches!(cid, ChannelId::Output(_)) {
-        iced::widget::Space::new().height(btn_h).into()
+    // Inputs and software playbacks keep S; outputs keep CUE. Both occupy
+    // the same second slot, so the collapsed cards stay aligned.
+    let cue_btn = hint(
+        button(centered_label("CUE", theme::TEXT_XS * scale))
+            .width(Length::Fill)
+            .height(btn_h)
+            .style(theme::toggle_button(p.cue, theme::ACCENT))
+            .on_press(Message::CueChanged(cid, !p.cue)),
+        "CUE — exclusively monitor this output's own playback feed through AN1/2",
+        scale,
+    );
+    let second_slot: Element<'a, Message> = if matches!(cid, ChannelId::Output(_)) {
+        cue_btn.into()
     } else {
         solo_btn.into()
     };
@@ -682,7 +702,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             scale,
         ),
         mute_btn,
-        solo_slot,
+        second_slot,
         container(vu_meter(
             p.meter,
             COLLAPSED_METER_H * scale,
@@ -760,6 +780,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         &p.name,
         p.name_custom,
         p.type_tag,
+        p.renameable,
         p.renaming,
         p.rename_buf,
         scale,
@@ -791,31 +812,24 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         },
         scale,
     );
-    // Fixed-width buttons left dead space flanking them whenever the card
-    // was sized for a wider sibling row (48V/PAD, or just a long channel
-    // name) — filling the row makes every row use the card's full width
-    // instead of only the widest one.
-    // Outputs have no solo: TotalMix has none, and neither backend that
-    // drives the hardware does anything with one (`set_solo` returns early
-    // for outputs), so an output's S lit only in the simulation.
-    let mut ms_row = if matches!(cid, ChannelId::Output(_)) {
-        row![mute_btn]
+    let cue_btn = hint(
+        button(centered_label("CUE", theme::TEXT_SM * scale))
+            .width(Length::Fill)
+            .height(btn_h)
+            .style(theme::toggle_button(p.cue, theme::ACCENT))
+            .on_press(Message::CueChanged(cid, !p.cue)),
+        "CUE — exclusively monitor this output's own playback feed through AN1/2",
+        scale,
+    );
+    // Inputs and software playbacks pair M with S. Outputs, including the
+    // Control Room channels, pair M with CUE; an output never shows M alone.
+    let ms_row = if matches!(cid, ChannelId::Output(_)) {
+        row![mute_btn, cue_btn]
     } else {
         row![mute_btn, solo_btn]
     }
     .spacing(theme::SPACE_TIGHT)
     .width(Length::Fill);
-    if p.has_cue {
-        ms_row = ms_row.push(hint(
-            button(centered_label("C", theme::TEXT_SM * scale))
-                .width(Length::Fill)
-                .height(btn_h)
-                .style(theme::toggle_button(p.cue, theme::ACCENT))
-                .on_press(Message::CueChanged(cid, !p.cue)),
-            "CUE — exclusively monitor this output's own playback feed through AN1/2",
-            scale,
-        ));
-    }
 
     let mut rows = column![header].spacing(theme::SPACE_HAIRLINE);
 

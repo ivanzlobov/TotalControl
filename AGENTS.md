@@ -63,9 +63,22 @@ Authoritative files:
 - The dB readout under the main fader is centred on the fader track and has
   no unit suffix; the numeric scale stays in the lane beside the track. The
   collapse button sits at the right edge of that row.
-- Outside the Settings control grid, buttons are only as wide as their label
-  needs. Do not stretch a button across its container by default; list and
-  menu rows are the exception.
+- Standard controls use one width per stack or panel: a single button spans
+  it; a pair in one row splits it with one gap. Menu rows share the menu
+  width. Slideout tabs (T, gear, EQ, D), the channel minimize button and
+  compact navigation/utility buttons keep their own fixed or label-sized
+  size.
+- The Control Room button stack is exactly one channel wide; every button in
+  it shares one width and height, labels are centred, and long labels use the
+  next smaller type tier. Its order is dim, recall, speaker B; mono,
+  talkback, ext. input, mute FX; then a gap and assign at the bottom.
+- A strip's M/S pair (inputs and software playbacks) or M/CUE pair (outputs,
+  including Control Room channels) shares the strip's control width. An
+  output never shows M alone.
+- Control Room channel names are predetermined and are exactly the first six
+  Assign names: Main, Speaker B, Phones 1–4. View → Names does not change
+  them, and they are not user editable. The Assign menu's first level uses
+  those names; its second level uses the predetermined channel names.
 - Section headers use one style everywhere: uppercase label, accent tick and a
   trailing rule closed by a small block. A header spans its own section's
   elements, and the slack in the row is the break before the next section.

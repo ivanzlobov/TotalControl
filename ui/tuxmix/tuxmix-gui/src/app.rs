@@ -1495,18 +1495,67 @@ pub enum AssignMenu {
     Closed,
     Destinations,
     Outputs(usize),
+    CueTargets,
 }
 
-/// Control Room Assign destinations, in TotalMix's menu order.
+/// Control Room Assign destinations, in the menu order. The first six are
+/// output-pair assignments; the seventh is the Cue/PFL target selector.
+pub const OUTPUT_DESTS: usize = 6;
+pub const CUE_DEST: usize = 6;
 pub const ASSIGN_DESTS: [&str; 7] = [
-    "Main Out",
-    "Main Out B",
+    "Main",
+    "Speaker B",
     "Phones 1",
     "Phones 2",
     "Phones 3",
     "Phones 4",
     "Cue/PFL to",
 ];
+
+/// Monitoring outputs the Cue/PFL signal can follow. Phones 4 is selectable
+/// as a Control Room channel but is not a Cue target on the UCX.
+pub const CUE_TARGETS: [usize; 4] = [0, 2, 3, 4];
+
+/// One add or clear transition between the Hardware Outputs row and the
+/// Control Room. A same-count change (destination move or replace) does not
+/// animate.
+#[derive(Debug, Clone)]
+pub struct AssignAnim {
+    pub since: Instant,
+    pub old: [Option<usize>; OUTPUT_DESTS],
+    pub new: [Option<usize>; OUTPUT_DESTS],
+    pub max_ms: f32,
+}
+
+impl AssignAnim {
+    fn elapsed_ms(&self, now: Instant) -> f32 {
+        now.duration_since(self.since).as_secs_f32() * 1000.0
+    }
+
+    fn moving(&self) -> Option<(usize, usize)> {
+        let old_count = self.old.iter().flatten().count();
+        let new_count = self.new.iter().flatten().count();
+        if new_count > old_count {
+            self.new
+                .iter()
+                .enumerate()
+                .find_map(|(dest, pair)| match (pair, self.old[dest]) {
+                    (Some(pair), None) => Some((dest, *pair)),
+                    _ => None,
+                })
+        } else if new_count < old_count {
+            self.old
+                .iter()
+                .enumerate()
+                .find_map(|(dest, pair)| match (pair, self.new[dest]) {
+                    (Some(pair), None) => Some((dest, *pair)),
+                    _ => None,
+                })
+        } else {
+            None
+        }
+    }
+}
 
 
 
@@ -1750,10 +1799,15 @@ pub enum Message {
     ToggleFxPanel,
     /// Opens the Assign menu at its first level, or closes it.
     ToggleAssign,
-    /// First level: open that destination's output list.
+    /// First level: open and pin that destination's second level.
     AssignDestinations(usize),
+    /// Pointer entered a first-level destination: switch an unpinned
+    /// second level, but never close it.
+    AssignHover(usize),
     /// Second level: assign an output to a destination, `None` clears it.
     AssignOutput(usize, Option<usize>),
+    /// Choose the monitoring output that carries Cue/PFL.
+    AssignCueTarget(usize),
     /// Toggles the About modal (version, icon, links; see `about`).
     ToggleAbout,
     /// The TuxMix settings popover (the app's own, not the device's).
@@ -2106,12 +2160,19 @@ pub struct TuxMix {
     /// Width tween for the FX column. `None` once settled; closing keeps
     /// the column in the layout until this reaches zero.
     pub fx_anim: Option<strip::CollapseAnim>,
-    /// Control Room Assign: the output pair chosen for each destination,
-    /// in `ASSIGN_DESTS` order. An assigned pair leaves the hardware-output
-    /// row and shows up in the Control Room section instead.
+    /// Control Room Assign: the output pair chosen for each of the first six
+    /// destinations, then the Cue/PFL target index in the seventh slot. An
+    /// assigned pair leaves the hardware-output row and shows up in the
+    /// Control Room section instead.
     pub assign: [Option<usize>; 7],
     /// Which level of the Assign menu is open.
     pub assign_menu: AssignMenu,
+    /// A click on a first-level destination pins its second level open.
+    /// Hovering switches an unpinned second level; it never closes it.
+    pub assign_pinned: bool,
+    /// In-flight add or clear between the Hardware Outputs row and the
+    /// Control Room.
+    pub assign_anim: Option<AssignAnim>,
     /// Whether the About modal is open: the version, the icon and the
     /// links, layered above the whole window (see `about::about_modal`).
     pub show_about: bool,
@@ -2278,6 +2339,21 @@ impl TuxMix {
             .into_iter()
             .map(|pair| labels.get(pair).cloned().unwrap_or_default())
             .collect()
+    }
+
+    /// The output pairs assigned to the Control Room. The seventh `assign`
+    /// slot is the Cue/PFL target, not an output pair, so it is excluded.
+    pub fn assigned_pairs(&self) -> impl Iterator<Item = usize> + '_ {
+        self.assign[..OUTPUT_DESTS].iter().flatten().copied()
+    }
+
+    pub fn is_output_assigned(&self, pair: usize) -> bool {
+        self.assigned_pairs().any(|p| p == pair)
+    }
+
+    /// The monitoring output that carries Cue/PFL. `0` is Main.
+    pub fn cue_target(&self) -> usize {
+        self.assign[CUE_DEST].unwrap_or(0)
     }
 }
 
@@ -2601,8 +2677,15 @@ pub fn new_with_device(
         talkback_on: false,
         show_fx_panel: true,
         fx_anim: None,
-        assign: [None; 7],
+        assign: {
+            let mut assign = [None; 7];
+            // The seventh slot is the Cue/PFL target; Main is the default.
+            assign[CUE_DEST] = Some(0);
+            assign
+        },
         assign_menu: AssignMenu::Closed,
+        assign_pinned: false,
+        assign_anim: None,
         show_about: false,
         show_settings: false,
         startup_mismatch: None,
@@ -2718,6 +2801,13 @@ pub fn apply_prefs(state: &mut TuxMix, prefs: crate::prefs::Prefs) {
         state.show_fx_panel = open;
     }
     state.assign = prefs.assign;
+    // Older files stored an output pair in the seventh slot. It cannot be
+    // interpreted as a monitoring target, so anything outside the Cue
+    // target list falls back to Main.
+    let cue = state.assign[CUE_DEST]
+        .filter(|target| CUE_TARGETS.contains(target))
+        .unwrap_or(0);
+    state.assign[CUE_DEST] = Some(cue);
     if let Some(w) = prefs.sidebar_width {
         // Move installs still on the old default to the new, slightly
         // narrower default; an explicitly chosen width is left alone.
@@ -3173,6 +3263,7 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::ToggleSidebar
             | Message::ToggleFxPanel
             | Message::AssignOutput(..)
+            | Message::AssignCueTarget(_)
             | Message::SidebarResize(_)
             | Message::ToggleSidebarPanel(_)
             | Message::SetRowMode(_)
@@ -3205,17 +3296,28 @@ pub(crate) fn user_label(state: &TuxMix, cid: ChannelId) -> Option<&str> {
     state.labels.get(&cid).map(String::as_str)
 }
 
+/// Whether `cid` is rendered by the Control Room. Its name is fixed by the
+/// destination; it may not be renamed and never takes a user label.
+fn is_control_room_cid(state: &TuxMix, cid: ChannelId) -> bool {
+    let ChannelId::Output(i) = cid else {
+        return false;
+    };
+    state.is_output_assigned(i / 2)
+}
+
 /// The name a strip shows: the user's label unless "show original names"
 /// is on, else the hardware-derived one the caller built. Also hands the
 /// strip its rename-field state. Every `strip::strip` call goes through
 /// this, after any pair-label joining, so a label replaces the whole
 /// strip name ("AN1/2" -> "Vocals"), not one half of it.
 fn finish_params<'a>(state: &'a TuxMix, mut p: strip::StripParams<'a>) -> strip::StripParams<'a> {
-    if let Some(label) = user_label(state, p.cid) {
-        p.name = label.to_string();
-        p.name_custom = true;
+    if !p.name_locked {
+        if let Some(label) = user_label(state, p.cid) {
+            p.name = label.to_string();
+            p.name_custom = true;
+        }
     }
-    p.renaming = state.renaming == Some(p.cid);
+    p.renaming = p.renameable && state.renaming == Some(p.cid);
     p.mute_armed = mute_armed(state, p.cid);
     p.solo_armed = solo_armed(state, p.cid);
     p.rename_buf = &state.rename_buf;
@@ -4269,6 +4371,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ToggleAssign
             | Message::AssignDestinations(_)
             | Message::AssignOutput(..)
+            | Message::AssignCueTarget(_)
             | Message::ToggleCollapse(_)
             | Message::ToggleFlyout(..)
             | Message::CloseFlyout
@@ -4533,7 +4636,9 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             message,
             Message::ToggleAssign
                 | Message::AssignDestinations(_)
+                | Message::AssignHover(_)
                 | Message::AssignOutput(..)
+                | Message::AssignCueTarget(_)
                 | Message::PointerPressed
                 | Message::Tick
                 | Message::ModifiersChanged(_)
@@ -4548,6 +4653,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         )
     {
         state.assign_menu = AssignMenu::Closed;
+        state.assign_pinned = false;
     }
 
     // OSC is an input path, not a separate control implementation: decode
@@ -5762,6 +5868,13 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             if state.fx_anim.is_some_and(|a| !a.is_settling(now)) {
                 state.fx_anim = None;
             }
+            if state
+                .assign_anim
+                .as_ref()
+                .is_some_and(|a| a.elapsed_ms(now) >= a.max_ms)
+            {
+                state.assign_anim = None;
+            }
             if let Some((cid, kind)) = state.pending_flyout {
                 let still_closing = state.flyout_anim.iter().any(|(&(c, k), a)| {
                     c == cid && k != strip::FlyoutKind::Route && a.is_settling(now)
@@ -5879,34 +5992,74 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             });
         }
         Message::ToggleAssign => {
-            state.assign_menu = match state.assign_menu {
-                AssignMenu::Closed => AssignMenu::Destinations,
-                _ => AssignMenu::Closed,
+            let opening = matches!(state.assign_menu, AssignMenu::Closed);
+            state.assign_menu = if opening {
+                AssignMenu::Destinations
+            } else {
+                AssignMenu::Closed
             };
+            state.assign_pinned = false;
         }
         Message::AssignDestinations(dest) => {
-            if dest < ASSIGN_DESTS.len() {
+            if dest == CUE_DEST {
+                state.assign_menu = AssignMenu::CueTargets;
+                state.assign_pinned = true;
+            } else if dest < OUTPUT_DESTS {
                 state.assign_menu = AssignMenu::Outputs(dest);
+                state.assign_pinned = true;
+            }
+        }
+        Message::AssignHover(dest) => {
+            if !state.assign_pinned && !matches!(state.assign_menu, AssignMenu::Closed) {
+                if dest == CUE_DEST {
+                    state.assign_menu = AssignMenu::CueTargets;
+                } else if dest < OUTPUT_DESTS {
+                    state.assign_menu = AssignMenu::Outputs(dest);
+                }
+            }
+        }
+        Message::AssignCueTarget(target) => {
+            state.assign_menu = AssignMenu::Closed;
+            state.assign_pinned = false;
+            if CUE_TARGETS.contains(&target) {
+                state.assign[CUE_DEST] = Some(target);
             }
         }
         Message::AssignOutput(dest, pair) => {
             // Choosing an output ends the menu, like TotalMix's.
             state.assign_menu = AssignMenu::Closed;
-            if dest >= state.assign.len() {
+            state.assign_pinned = false;
+            if dest >= OUTPUT_DESTS {
                 return Task::none();
             }
+            let old_assign = state.assign;
             // A hardware output can only sit in one monitoring destination.
             // Move it rather than showing the same channel in two Control
             // Room slots; this is also what lets `None` return it to the
-            // Hardware Outputs row.
+            // Hardware Outputs row. The seventh slot is the Cue target, not
+            // an output assignment, so it is not part of this scan.
             if let Some(pair) = pair {
-                for (i, slot) in state.assign.iter_mut().enumerate() {
+                for (i, slot) in state.assign.iter_mut().take(OUTPUT_DESTS).enumerate() {
                     if i != dest && *slot == Some(pair) {
                         *slot = None;
                     }
                 }
             }
             state.assign[dest] = pair;
+            let old_outputs: [Option<usize>; OUTPUT_DESTS] =
+                std::array::from_fn(|i| old_assign[i]);
+            let new_outputs: [Option<usize>; OUTPUT_DESTS] =
+                std::array::from_fn(|i| state.assign[i]);
+            let old_count = old_outputs.iter().flatten().count();
+            let new_count = new_outputs.iter().flatten().count();
+            // Only a change in the number of Control Room channels animates.
+            // Destination moves and replacements keep the count and snap.
+            state.assign_anim = (old_count != new_count).then_some(AssignAnim {
+                since: Instant::now(),
+                old: old_outputs,
+                new: new_outputs,
+                max_ms: (state.window_width + 200.0).clamp(300.0, 1600.0),
+            });
             let result = match dest {
                 0 => state.device.set_main_out(pair),
                 1 => state.device.set_main_out_b(pair),
@@ -6013,6 +6166,10 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         }
         Message::RenameStart(cid) => {
             select_strip(state, cid);
+            // Control Room names are fixed by their destination.
+            if is_control_room_cid(state, cid) {
+                return Task::none();
+            }
             // Opening another strip's name accepts the one being typed.
             if state.renaming.is_some_and(|open| open != cid) {
                 let _ = update(state, Message::RenameCommit);
@@ -6598,6 +6755,7 @@ pub fn subscription(state: &TuxMix) -> Subscription<Message> {
         || !state.flyout_anim.is_empty()
         || !state.stereo_anim.is_empty()
         || state.fx_anim.is_some()
+        || state.assign_anim.is_some()
     {
         subs.push(iced::time::every(Duration::from_millis(8)).map(|_| Message::CollapseTick));
     }
@@ -8342,7 +8500,7 @@ fn strip_params<'a>(
         solo: false,
         mute_armed: false,
         solo_armed: false,
-        has_cue: false,
+
         cue: false,
         default_vol: 1.0,
         editing: state.editing == Some(cid),
@@ -8358,6 +8516,8 @@ fn strip_params<'a>(
         hovered: state.hovered_strip == Some(cid),
         active_surface: false,
         name_custom: false,
+        name_locked: false,
+        renameable: true,
     };
 
     let caps = state.device.capabilities();
@@ -8559,7 +8719,7 @@ fn strip_params<'a>(
                 stereo_linked: state.device.output_linked(i / 2),
                 mute: ch.mute,
                 solo: ch.solo,
-                has_cue: true,
+
                 cue: ch.cue,
                 default_vol: 1.0,
                 active_surface: if state.device.outputs_one_per_pair() {
@@ -11247,80 +11407,122 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
         weight: iced::font::Weight::Bold,
         ..iced::Font::DEFAULT
     };
+    let entry_w = (ASSIGN_MENU_W - 2.0 * theme::SPACE_SM) * scale;
     let entry = |label: String, strong: bool, message: Message| -> Element<'static, Message> {
         iced::widget::button(
-            text(label)
-                .size(theme::TEXT_MD * scale)
-                .font(if strong { bold } else { iced::Font::DEFAULT }),
+            container(
+                text(label)
+                    .size(theme::TEXT_MD * scale)
+                    .font(if strong { bold } else { iced::Font::DEFAULT })
+                    .center(),
+            )
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center),
         )
+        .width(Length::Fixed(entry_w))
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
         .style(theme::ghost_button)
         .on_press(message)
         .into()
     };
 
-    let labels = state.display_pair_labels();
-    let order = state.device.output_display_order();
-    let mut cards = row![].spacing(gap).align_y(iced::Alignment::Start);
+    let mut cards = row![].spacing(gap).align_y(iced::Alignment::End);
 
     // Second level first: it sits to the left of the destination list.
-    if let AssignMenu::Outputs(dest) = state.assign_menu {
-        let current = state.assign.get(dest).copied().flatten();
-        let mut col = column![].spacing(0.0);
-        col = col.push(entry("None".to_string(), current.is_none(), Message::AssignOutput(dest, None)));
-        for (display, label) in labels.iter().enumerate() {
-            let internal = order.get(display).copied().unwrap_or(display);
+    match state.assign_menu {
+        AssignMenu::Outputs(dest) => {
+            let labels = state.display_pair_labels();
+            let order = state.device.output_display_order();
+            let current = state.assign.get(dest).copied().flatten();
+            let mut col = column![].spacing(0.0).width(Length::Fill);
             col = col.push(entry(
-                label.clone(),
-                current == Some(internal),
-                Message::AssignOutput(dest, Some(internal)),
+                "None".to_string(),
+                current.is_none(),
+                Message::AssignOutput(dest, None),
+            ));
+            for (display, label) in labels.iter().enumerate() {
+                let internal = order.get(display).copied().unwrap_or(display);
+                col = col.push(entry(
+                    label.clone(),
+                    current == Some(internal),
+                    Message::AssignOutput(dest, Some(internal)),
+                ));
+            }
+            cards = cards.push(opaque(
+                container(col)
+                    .padding(theme::SPACE_SM * scale)
+                    .width(Length::Fixed(ASSIGN_MENU_W * scale))
+                    .style(theme::dialog),
             ));
         }
-        cards = cards.push(opaque(
-            container(col)
-                .padding(theme::SPACE_SM * scale)
-                .style(theme::dialog),
-        ));
+        AssignMenu::CueTargets => {
+            let current = state.cue_target();
+            let mut col = column![].spacing(0.0).width(Length::Fill);
+            for target in CUE_TARGETS {
+                col = col.push(entry(
+                    ASSIGN_DESTS[target].to_string(),
+                    current == target,
+                    Message::AssignCueTarget(target),
+                ));
+            }
+            cards = cards.push(opaque(
+                container(col)
+                    .padding(theme::SPACE_SM * scale)
+                    .width(Length::Fixed(ASSIGN_MENU_W * scale))
+                    .style(theme::dialog),
+            ));
+        }
+        _ => {}
     }
 
-    // First level: the destinations, each showing what it holds.
-    let mut col = column![].spacing(0.0);
+    // First level: the destinations. Choosing one opens the matching list;
+    // the active destination is highlighted so the second level clearly
+    // belongs to it. The row is a plain button, not a hover area: rebuilding
+    // a hovered row under the pointer used to lose the click.
+    let mut col = column![].spacing(0.0).width(Length::Fill);
     for (dest, name) in ASSIGN_DESTS.iter().enumerate() {
-        // Hovering opens that destination's output list, so the whole menu
-        // reads at a glance; a click fixes it open until a leaf is chosen.
-        // The destination whose list is showing is highlighted, so the
-        // second level clearly belongs to it.
-        let active = matches!(state.assign_menu, AssignMenu::Outputs(d) if d == dest);
+        let active = matches!(state.assign_menu, AssignMenu::Outputs(d) if d == dest)
+            || (dest == CUE_DEST && matches!(state.assign_menu, AssignMenu::CueTargets));
         col = col.push(
             iced::widget::mouse_area(
-                iced::widget::button(text(*name).size(theme::TEXT_MD * scale))
-                    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                    .style(theme::toggle_button(active, theme::ACCENT))
-                    .on_press(Message::AssignDestinations(dest)),
+                iced::widget::button(
+                    container(
+                        text(*name)
+                            .size(theme::TEXT_MD * scale)
+                            .center(),
+                    )
+                    .width(Length::Fill)
+                    .align_x(iced::Alignment::Center),
+                )
+                .width(Length::Fixed(entry_w))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .style(theme::toggle_button(active, theme::ACCENT))
+                .on_press(Message::AssignDestinations(dest)),
             )
-            .on_enter(Message::AssignDestinations(dest)),
+            .on_enter(Message::AssignHover(dest)),
         );
     }
     cards = cards.push(opaque(
         container(col)
             .padding(theme::SPACE_SM * scale)
+            .width(Length::Fixed(ASSIGN_MENU_W * scale))
             .style(theme::dialog),
     ));
 
-    // The cards open immediately left of the assign button and over the
-    // Control Room channels, which they obscure rather than displace.  Each
-    // card is opaque on its own, so presses on either level reach the menu
-    // entries.  There is no background catcher: a click outside lands on the
-    // page or a strip, and the update loop closes the menu on that click.
+    // The cards open immediately left of the assign button, which sits at
+    // the bottom of the Control Room button stack. Each card is opaque on
+    // its own; there is no background catcher, so a click outside reaches
+    // the page or a strip and the update loop closes the menu.
     container(cards)
         .align_x(iced::Alignment::End)
-        .align_y(iced::Alignment::Start)
+        .align_y(iced::Alignment::End)
         .padding(iced::Padding {
             top: 0.0,
-            // Inside the panel's own padding, the assign column's
-            // left edge.
+            // Inside the panel's own padding, the assign column's left edge.
             right: theme::SPACE_SM * scale + CONTROL_ROOM_W * scale + gap,
-            bottom: 0.0,
+            // Panel padding, body padding and group padding sit below the
+            // bottom Assign button.
+            bottom: 3.0 * theme::SPACE_SM * scale,
             left: 0.0,
         })
         .width(Length::Fill)
@@ -11331,11 +11533,98 @@ fn assign_menu_layer(state: &TuxMix) -> Element<'_, Message> {
 /// Width of the Control Room section: its button column plus one strip per
 /// assigned monitoring output.
 fn control_room_width(state: &TuxMix, scale: f32) -> f32 {
-    let assigned = state.assign.iter().flatten().count() as f32;
+    let assigned = state.assigned_pairs().count() as f32;
     CONTROL_ROOM_W * scale
         + assigned * (strip::STRIP_W + theme::SPACE_MD) * scale
         + 2.0 * theme::SPACE_SM * scale
 }
+
+/// The width an output pair occupies in the Hardware Outputs row. A linked
+/// pair is one strip; a split pair is two strips plus the gap between them.
+fn rendered_pair_width(state: &TuxMix, pair: usize, scale: f32) -> f32 {
+    let left = ChannelId::Output(pair * 2);
+    let left_w = rendered_strip_width(state, left);
+    if state.device.output_linked(pair) {
+        left_w
+    } else {
+        let right = ChannelId::Output(pair * 2 + 1);
+        left_w + rendered_strip_width(state, right) + theme::SPACE_MD * scale
+    }
+}
+
+/// Slot index of a Control Room destination, in the fixed left-to-right
+/// order, for one assignment map.
+fn cr_slot_index(assign: &[Option<usize>; OUTPUT_DESTS], dest: usize) -> Option<usize> {
+    let mut index = 0usize;
+    for d in [2usize, 3, 4, 5, 1, 0] {
+        if d == dest {
+            return assign[d].map(|_| index);
+        }
+        if assign[d].is_some() {
+            index += 1;
+        }
+    }
+    None
+}
+
+/// The returning pair's normal output-row strips, clipped to `clip_w`. The
+/// clip grows during a clear, so the channel fills its slot from the right
+/// instead of appearing all at once when the gap reaches full width.
+fn output_row_clipped_pair(
+    state: &TuxMix,
+    pair: usize,
+    clip_w: f32,
+    scale: f32,
+) -> Element<'_, Message> {
+    let left = pair * 2;
+    let linked = state.device.output_linked(pair);
+    let mut items = row![].spacing(theme::SPACE_MD * scale);
+    let channels: Vec<usize> = if linked {
+        vec![left]
+    } else {
+        vec![left, left + 1]
+    };
+    for ch_idx in channels {
+        let cid = ChannelId::Output(ch_idx);
+        let mut params = strip_params(state, cid, state.sel_out);
+        if linked && ch_idx == left {
+            if let Some(right) = state.device.outputs().get(left + 1) {
+                params.name = pair_bus_label(&params.name, &right.name);
+            }
+            params.meter2 = state.output_meters.get(left + 1).map(MeterAnim::frame);
+            params.meter2_available = output_meter_available(state, left + 1);
+        }
+        items = items.push(strip::strip(finish_params(state, params)));
+    }
+    container(items)
+        .width(Length::Fixed(clip_w))
+        .height(Length::Fixed(strip::STRIP_H * scale))
+        .align_x(iced::Alignment::End)
+        .clip(true)
+        .into()
+}
+
+/// Width of the temporary gap in the Hardware Outputs row during an add or
+/// clear. The gap is at the moving pair's display position.
+fn assign_gap_width(
+    state: &TuxMix,
+    anim: &AssignAnim,
+    pair: usize,
+    scale: f32,
+    now: Instant,
+) -> f32 {
+    let pair_w = rendered_pair_width(state, pair, scale);
+    let old_count = anim.old.iter().flatten().count();
+    let new_count = anim.new.iter().flatten().count();
+    let duration = (pair_w / 1.0).max(1.0);
+    let t = (anim.elapsed_ms(now) / duration).clamp(0.0, 1.0);
+    if new_count > old_count {
+        pair_w * (1.0 - t)
+    } else {
+        pair_w * t
+    }
+}
+
 
 /// Options > Reset Mix (manual 25.10): rewrite the captured scene, then push
 /// it in one go. Every entry writes the whole mixer, which is what makes this
@@ -11475,8 +11764,12 @@ fn set_output_volumes(scene: &mut tuxmix_core::Scene, main_pair: usize, b_pair: 
 /// which iced renders dimmed: the assign register, the external-input level
 /// and the talkback source are unmeasured (`docs/work/UCX-OPEN-ITEMS.md`).
 /// The buttons below them carry TotalMix's own order and background groups.
-/// At least as wide as its own `CONTROL ROOM` header, which must not wrap.
-const CONTROL_ROOM_W: f32 = 136.0;
+/// One channel wide: the button stack is exactly a strip wide, and every
+/// Control Room button shares that width.
+const CONTROL_ROOM_W: f32 = strip::STRIP_W;
+
+/// Both Assign menu levels use this width so the cards align.
+const ASSIGN_MENU_W: f32 = 150.0;
 
 fn control_room_panel(
     state: &TuxMix,
@@ -11488,7 +11781,9 @@ fn control_room_panel(
     // hardware-output row, renamed for their destination (manual 25.4:
     // "the channel will be shifted from the Hardware Outputs into the
     // Control Room section, and renamed Main").
-    let mut strips = row![].spacing(theme::SPACE_MD * scale);
+    let mut strip_items: Vec<(f32, Element<'_, Message>)> = Vec::new();
+    let mut slot_index = 0usize;
+    let slot = (strip::STRIP_W + theme::SPACE_MD) * scale;
     for dest in [2usize, 3, 4, 5, 1, 0] {
         let Some(pair) = state.assign.get(dest).copied().flatten() else {
             continue;
@@ -11498,11 +11793,12 @@ fn control_room_panel(
         }
         let cid = ChannelId::Output(pair * 2);
         let mut params = strip_params(state, cid, state.sel_out);
-        params.name = match dest {
-            0 => "Main".to_string(),
-            1 => "Speaker B".to_string(),
-            d => ASSIGN_DESTS[d].to_string(),
-        };
+        // The Control Room name is always one of the first six Assign
+        // names. View → Names does not change it.
+        params.name = ASSIGN_DESTS[dest].to_string();
+        params.name_custom = true;
+        params.name_locked = true;
+        params.renameable = false;
         let strip_w = strip::STRIP_W * scale;
         let mut item: Element<'_, Message> = strip::strip(finish_params(state, params));
         // A slideout always opens to the right of its channel. The Control
@@ -11526,46 +11822,139 @@ fn control_room_panel(
             item = row![item, panel].spacing(0.0).into();
             break;
         }
-        strips = strips.push(item);
+        // The final slot position; an add or clear slides the existing
+        // slots between their old and new index at the same 1 px/ms speed.
+        let final_x = slot_index as f32 * slot;
+        let x = if let Some(anim) = state.assign_anim.as_ref() {
+            if let Some(old_index) = cr_slot_index(&anim.old, dest) {
+                let old_count = anim.old.iter().flatten().count();
+                let new_count = anim.new.iter().flatten().count();
+                let adding = new_count > old_count;
+                let old_x = (old_index as f32 + if adding { 1.0 } else { -1.0 }) * slot;
+                let dx = final_x - old_x;
+                let distance = dx.abs();
+                let t = if distance <= f32::EPSILON {
+                    1.0
+                } else {
+                    (anim.elapsed_ms(anim_now) / distance).clamp(0.0, 1.0)
+                };
+                old_x + dx * t
+            } else {
+                final_x
+            }
+        } else {
+            final_x
+        };
+        strip_items.push((x, item));
+        slot_index += 1;
     }
-    let cell = |label: &'static str, active: bool, msg: Option<Message>| -> Element<'static, Message> {
-        button(text(label).size(theme::TEXT_MD * scale).center())
-            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .style(theme::toggle_button(active, theme::ACCENT))
-            .on_press_maybe(msg)
-            .into()
+    let count = slot_index as f32;
+    let strips_w = if count > 0.0 {
+        count * (strip::STRIP_W + theme::SPACE_MD) * scale - theme::SPACE_MD * scale
+    } else {
+        0.0
     };
-    // The Assign button opens the menu card beside the panel.
+    // The row layout is the settled state and the only one that accounts for
+    // open slideouts' extra width. During an add/clear, absolute x positions
+    // let the existing slots slide to their new indexes.
+    let strips: Element<'_, Message> = if state.assign_anim.is_some() {
+        let mut layers: Vec<Element<'_, Message>> =
+            vec![iced::widget::Space::new().width(Length::Fill).height(Length::Fill).into()];
+        for (x, item) in strip_items {
+            layers.push(
+                container(item)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::Alignment::Start)
+                    .align_y(iced::Alignment::Start)
+                    .padding(iced::Padding {
+                        left: x,
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                    })
+                    .into(),
+            );
+        }
+        iced::widget::Stack::with_children(layers)
+            .width(Length::Fixed(strips_w))
+            .height(Length::Fixed(strip::STRIP_H * scale))
+            .into()
+    } else {
+        let mut row = row![].spacing(theme::SPACE_MD * scale);
+        for (_, item) in strip_items {
+            row = row.push(item);
+        }
+        row.into()
+    };
+
+    // The stack is one channel wide. The body and each group add one
+    // SPACE_SM inset on both sides, so the button itself is four insets
+    // narrower than the channel.
+    let btn_w = (CONTROL_ROOM_W - 4.0 * theme::SPACE_SM) * scale;
+    let btn_h = 24.0 * scale;
+    let cell = |label: &'static str,
+                size: f32,
+                active: bool,
+                msg: Option<Message>|
+     -> Element<'static, Message> {
+        button(
+            container(text(label).size(size * scale).center())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::Alignment::Center)
+                .align_y(iced::Alignment::Center),
+        )
+        .width(Length::Fixed(btn_w))
+        .height(Length::Fixed(btn_h))
+        .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+        .style(theme::toggle_button(active, theme::ACCENT))
+        .on_press_maybe(msg)
+        .into()
+    };
+    // The Assign button opens the menu card beside the panel. It sits at the
+    // bottom of the stack, below the other controls.
     let assign = iced::widget::button(
-        row![
-            text("assign").size(theme::TEXT_MD * scale),
-            text("\u{25be}").size(theme::TEXT_MD * scale),
-        ]
-        .spacing(theme::SPACE_SM * scale),
+        container(
+            text("assign  \u{25be}")
+                .size(theme::TEXT_MD * scale)
+                .center(),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::Alignment::Center)
+        .align_y(iced::Alignment::Center),
     )
-    .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+    .width(Length::Fixed(btn_w))
+    .height(Length::Fixed(btn_h))
+    .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
     .style(theme::ghost_button)
     // The menu writes the UC/UCX Main Out bit; a unit without that path
     // shows the button dimmed rather than opening a menu that cannot apply.
     .on_press_maybe(state.device.is_uc_family().then_some(Message::ToggleAssign));
 
     let group = |cells: Vec<Element<'static, Message>>| -> Element<'static, Message> {
-        container(column(cells).spacing(theme::SPACE_SM * scale).align_x(iced::Alignment::Start))
-            .padding(theme::SPACE_SM * scale)
-            .style(theme::fx_controls)
-            .into()
+        container(
+            column(cells)
+                .spacing(theme::SPACE_SM * scale)
+                .align_x(iced::Alignment::Start)
+                .width(Length::Fill),
+        )
+        .padding(theme::SPACE_SM * scale)
+        .width(Length::Fixed((CONTROL_ROOM_W - 2.0 * theme::SPACE_SM) * scale))
+        .style(theme::fx_controls)
+        .into()
     };
 
+    // RME order: Dim, Recall, Speaker B; Mono, Talkback, Ext. Input,
+    // Mute FX; then a gap and Assign at the bottom.
     let body = column![
-        group(vec![assign.into()]),
         group(vec![
-            cell("dim", settings.dim, Some(Message::Dim(!settings.dim))),
-            cell("recall", false, Some(Message::ControlRoomRecall)),
-        ]),
-        group(vec![
-            cell("mono", settings.mono, Some(Message::ControlRoomMono(!settings.mono))),
+            cell("dim", theme::TEXT_MD, settings.dim, Some(Message::Dim(!settings.dim))),
+            cell("recall", theme::TEXT_MD, false, Some(Message::ControlRoomRecall)),
             cell(
                 "speaker B",
+                theme::TEXT_SM,
                 settings.speaker_b,
                 // Speaker B is a UC/UCX register; other units show it
                 // dimmed instead of failing on press.
@@ -11574,9 +11963,27 @@ fn control_room_panel(
                     .is_uc_family()
                     .then_some(Message::SpeakerB(!settings.speaker_b)),
             ),
-            cell("ext. input", false, None),
+        ]),
+        group(vec![
+            cell(
+                "mono",
+                theme::TEXT_MD,
+                settings.mono,
+                Some(Message::ControlRoomMono(!settings.mono)),
+            ),
+            cell(
+                "talkback",
+                theme::TEXT_MD,
+                state.talkback_on,
+                state
+                    .device
+                    .is_ucx_model()
+                    .then_some(Message::TalkbackChanged(!state.talkback_on)),
+            ),
+            cell("ext. input", theme::TEXT_SM, false, None),
             cell(
                 "mute FX",
+                theme::TEXT_MD,
                 settings.mute_fx,
                 state
                     .device
@@ -11584,20 +11991,15 @@ fn control_room_panel(
                     .then_some(Message::ControlRoomMuteFx(!settings.mute_fx)),
             ),
         ]),
-        group(vec![cell(
-            "talkback",
-            state.talkback_on,
-            state
-                .device
-                .is_ucx_model()
-                .then_some(Message::TalkbackChanged(!state.talkback_on)),
-        )]),
+        iced::widget::Space::new().height(Length::Fill),
+        group(vec![assign.into()]),
     ]
     .spacing(theme::SPACE_MD * scale)
     .padding(theme::SPACE_SM * scale)
-    .width(Length::Fill);
+    .width(Length::Fill)
+    .height(Length::Fill);
 
-    let buttons = container(column![body].width(Length::Fixed(CONTROL_ROOM_W * scale)))
+    let buttons = container(body)
         .width(Length::Fixed(CONTROL_ROOM_W * scale))
         .height(Length::Fixed(strip::STRIP_H * scale));
 
@@ -11855,8 +12257,42 @@ fn mixer_view(state: &TuxMix, fx_width: Option<f32>) -> (Element<'_, Message>, b
     let mut out_width = 0.0f32;
     let mut out_item_count = 0usize;
     for pair in state.device.output_display_order() {
+        // Add/clear: the moving pair leaves a gap in this row that shrinks or
+        // grows at the existing 1 px/ms speed. The moving strip itself is in
+        // the overlay above the row and panel.
+        if let Some(anim) = state.assign_anim.as_ref() {
+            if let Some((_, moving_pair)) = anim.moving() {
+                if moving_pair == pair {
+                    let gap = assign_gap_width(state, anim, pair, state.ui_scale, anim_now);
+                    let old_count = anim.old.iter().flatten().count();
+                    let new_count = anim.new.iter().flatten().count();
+                    if new_count < old_count {
+                        // The returning pair fills the opening gap
+                        // gradually, clipped from the right, instead of
+                        // appearing only when the gap is complete.
+                        out_strips = out_strips.push(output_row_clipped_pair(
+                            state,
+                            pair,
+                            gap,
+                            state.ui_scale,
+                        ));
+                        out_width += rendered_pair_width(state, pair, state.ui_scale);
+                    } else {
+                        // A leaving pair is extra content that overflows
+                        // under the Control Room as the gap closes.
+                        out_strips = out_strips.push(
+                            iced::widget::Space::new()
+                                .width(Length::Fixed(gap))
+                                .height(Length::Fixed(strip::STRIP_H * state.ui_scale)),
+                        );
+                    }
+                    out_item_count += 1;
+                    continue;
+                }
+            }
+        }
         // Assigned monitoring outputs are rendered inside the Control Room.
-        if state.assign.iter().flatten().any(|p| *p == pair) {
+        if state.is_output_assigned(pair) {
             continue;
         }
         let l = pair * 2;
@@ -11993,8 +12429,8 @@ fn mixer_view(state: &TuxMix, fx_width: Option<f32>) -> (Element<'_, Message>, b
                     .height(Length::Fixed(strip::STRIP_H * scale))
                     .align_x(iced::Alignment::End)
                     .align_y(iced::Alignment::Start),
-            )
-            .width(Length::Fixed(out_width));
+            );
+        let row = row.width(Length::Fixed(out_width));
         // The Assign menu opens inside this row, so it stays anchored to
         // the Control Room panel whatever the window size or scroll is.
         if matches!(state.assign_menu, AssignMenu::Closed) {
@@ -12444,7 +12880,8 @@ mod tests {
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
-        ZOOM_STEP, AssignMenu,
+        ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
+        is_control_room_cid,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
     };
@@ -12768,9 +13205,85 @@ mod tests {
         let _ = update(&mut state, Message::AssignOutput(1, None));
         assert_eq!(state.assign[1], None);
         assert!(
-            !state.assign.iter().flatten().any(|p| *p == 3),
+            !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn add_and_clear_start_an_assignment_animation_but_a_move_does_not() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::AssignOutput(2, Some(3)));
+        let anim = state.assign_anim.as_ref().expect("an add animates");
+        assert_eq!(anim.moving(), Some((2, 3)));
+
+        // A same-count destination move snaps.
+        let _ = update(&mut state, Message::AssignOutput(1, Some(3)));
+        assert!(state.assign_anim.is_none());
+
+        // Clearing animates too.
+        let _ = update(&mut state, Message::AssignOutput(1, None));
+        let anim = state.assign_anim.as_ref().expect("a clear animates");
+        assert_eq!(anim.moving(), Some((1, 3)));
+    }
+
+    #[test]
+    fn clearing_phones_2_removes_it_from_the_control_room() {
+        let mut state = new(true, None, None);
+        state.assign = [Some(1), None, None, Some(0), None, None, Some(0)];
+        let _ = update(&mut state, Message::AssignDestinations(3));
+        assert_eq!(state.assign_menu, AssignMenu::Outputs(3));
+        let _ = update(&mut state, Message::AssignOutput(3, None));
+        assert_eq!(state.assign[3], None);
+        assert_eq!(state.assigned_pairs().collect::<Vec<_>>(), vec![1]);
+        assert!(!state.is_output_assigned(0));
+    }
+
+    #[test]
+    fn cue_target_is_separate_from_output_assignments() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::AssignDestinations(CUE_DEST));
+        assert_eq!(state.assign_menu, AssignMenu::CueTargets);
+
+        let _ = update(&mut state, Message::AssignCueTarget(2));
+        assert_eq!(state.assign_menu, AssignMenu::Closed);
+        assert_eq!(state.assign[CUE_DEST], Some(2));
+        assert!(
+            !state.assigned_pairs().any(|p| p == 2),
+            "a Cue target is not an output assignment"
+        );
+
+        // Assigning the pair that happens to equal the Cue target index
+        // must not clear the Cue target.
+        let _ = update(&mut state, Message::AssignOutput(0, Some(2)));
+        assert_eq!(state.assign[CUE_DEST], Some(2));
+        assert!(state.is_output_assigned(2));
+
+        // Phones 4 is a valid Control Room destination but not a Cue target.
+        let _ = update(&mut state, Message::AssignCueTarget(5));
+        assert_eq!(state.assign[CUE_DEST], Some(2));
+    }
+
+    #[test]
+    fn the_cue_target_does_not_widen_the_control_room() {
+        let mut state = new(true, None, None);
+        state.assign = [None; 7];
+        state.assign[CUE_DEST] = Some(2);
+        assert_eq!(
+            control_room_width(&state, 1.0),
+            CONTROL_ROOM_W + 2.0 * theme::SPACE_SM,
+            "only the six output assignments count"
+        );
+    }
+
+    #[test]
+    fn control_room_channels_ignore_rename_start() {
+        let mut state = new(true, None, None);
+        state.assign[0] = Some(2);
+        let cid = ChannelId::Output(4);
+        assert!(is_control_room_cid(&state, cid));
+        let _ = update(&mut state, Message::RenameStart(cid));
+        assert_eq!(state.renaming, None);
     }
 
     #[test]
