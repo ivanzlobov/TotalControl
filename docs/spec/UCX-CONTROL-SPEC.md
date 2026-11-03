@@ -19,6 +19,7 @@ Units and ranges are the values used by the backend. A register value is
 | ALSA PCM channels | 18 at every rate |
 | Default transport | isochronous interface 0 |
 | Alternate transport | interrupt interface 5 |
+| Front panel | one rotary encoder: selects an output channel and sets its volume |
 
 The serial string is the stable unit identity. The ALSA card index changes
 across reconnects and personality changes.
@@ -137,7 +138,7 @@ stream live state changes.
 | `0x3f10` | constant `0x7070` |
 | `0x3f50` | constant `0` |
 | `0x3d03` | DIM |
-| `0x3f9e` | monitor flags; bit 1 = MS processing |
+| `0x3f9e` | monitor flags; bit 0 = Talkback active, bit 1 = Mono Main Out |
 | `0x0002`, `0x0102` | input stereo mode |
 | `0x0202`, `0x0302` | input stereo mode, second pair |
 | `0x1204`, `0x1304` | output stereo mode |
@@ -155,8 +156,8 @@ a linked pair and emit no state word.
 The state stream is sparse. It is not a full scene dump and it does not echo
 every writable register. It carries no observed word for 48 V, Inst, Level,
 reference level, the options word, EQ, dynamics or FX. The full mixer scene is
-written by the host at connect; gain, output volume, DIM and MS state are the
-only live controls read back from this stream.
+written by the host at connect; gain, output volume, DIM, Talkback and MS
+state are the live controls read back from this stream.
 
 ### 3.3 State readback
 
@@ -165,7 +166,8 @@ only live controls read back from this stream.
 | Input gain 1–4 | `0xNN07` state word |
 | Output volume | `0xNN00` state word |
 | DIM | `0x3d03` state word |
-| MS processing | `0x3f9e` bit 1 |
+| Talkback | `0x3f9e` bit 0 |
+| Mono Main Out | `0x3f9e` bit 1 |
 | Stereo mode | `0xNN02` / `0xNN04` state word |
 | Fader records | `0x12a0` family |
 | 48 V, Inst, Level, reference level | host scene only |
@@ -190,6 +192,7 @@ A channel register is `(channel << 8) | offset`.
 | `0x00` | mute | 0/1 |
 | `0x01` | FX send | 0.1 dB, signed |
 | `0x02` | stereo mode | 0 mono, 1 stereo |
+| `0x03` | record enable | 0/1 |
 | `0x05` | MS processing | 0/1 |
 | `0x06` | phase | 0/1 |
 | `0x07` | preamp gain | 0.1 dB |
@@ -235,6 +238,7 @@ Output registers are the input layout mirrored at `+0x1200`:
 | `0x02` | mute | 0/1 |
 | `0x03` | FX Return | 0.1 dB, signed |
 | `0x04` | stereo mode | 0 mono, 1 stereo |
+| `0x05` | MS processing | 0/1 |
 | `0x07` | phase L, and R at `+0x100` | 0/1 |
 | `0x40..0x4b` | EQ and low cut | as inputs |
 | `0x60..0x83` | dynamics and AutoLevel | as inputs |
@@ -270,7 +274,11 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3c02` | Reverb pre-delay | ms |
 | `0x3c03` | Reverb low cut | Hz |
 | `0x3c04` | Reverb room scale | 0.01 |
+| `0x3c05` | Reverb attack | ms |
+| `0x3c06` | Reverb hold | ms |
 | `0x3c08` | Reverb high cut | Hz |
+| `0x3c09` | Reverb time | 0..100 |
+| `0x3c0a` | Reverb high damp | Hz |
 | `0x3c0b` | Reverb smoothness | 0..100 |
 | `0x3c0c` | Reverb volume | 0.1 dB, signed |
 | `0x3c0d` | Reverb width | 0..100 |
@@ -285,8 +293,8 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3d00` | control-room state | bit 3 = Speaker B |
 | `0x3d03` | DIM / Recall | 0/1 |
 | `0x3f00` | heartbeat / window | sequence |
-| `0x3f98` | monitor mask | — |
-| `0x3f9e` | monitor flags | — |
+| `0x3f98` | monitor mask; `0x83ff` with Mono, `0xfc40` with Cue, `0xffff` idle | — |
+| `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 Mono Main Out | — |
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
@@ -381,9 +389,13 @@ the affected sends:
   `gr*(sin-cos)/2` for L→L, R→L, L→R and R→R.  Mono inputs reject MS Proc.
 - **Talkback receive per output** and **No Trim** — host-side flags; they
   write nothing.  With a talkback source selected, enabling talkback on an
-  output injects that source as ordinary send words into the output, dims
-  the other sends by the Dim setting (measured -20 dB on a -20 dB setting),
-  and mutes Main's FX return (`0x1803`/`0x1903` = `0xFD76`).
+  output injects that source as ordinary send words into the output and dims
+  the other active sends by the Dim setting (measured -20 dB on a -20 dB
+  setting).  It also sets the FX-return level of each affected monitored
+  output to `0xFD76` (`-65.0 dB`); the Reverb and Echo processors remain
+  enabled.  The activation flag is a read-modify-write of `0x3f9e` bit 0,
+  preserving bit 1 (Mono Main Out).  Releasing Talkback restores the prior
+  send and FX-return words.
 - **Trim** — a per-channel attenuation applied to every send (see
   `TUXMIX-SPEC.md`).
 
@@ -391,6 +403,78 @@ the affected sends:
 A fader drag writes `0x0000` to the send and restores the knob value when
 the drag ends; the send value itself is the knob value and does not track
 the fader.  The post-fader coupling is not expressed in `NN01`.
+
+### 6.2.1 Talkback activation
+
+Talkback is a host-driven rewrite of the monitored sends. The source route
+uses a four-word block per side. For a hardware input at zero-based index
+`i`, the Talkback block is:
+
+For a receiving output pair whose DSP output is `D`, and hardware input
+index `i`:
+
+| Field | Address |
+|---|---|
+| source level | `((0x12 + D) << 8) \| (0xE0 + i)` |
+| source pan | the same address, second word |
+| source send | `0x4000 + D * 0x40 + i` |
+| right-side level | `((0x13 + D) << 8) \| (0xE0 + i)` |
+| right-side pan | the same address, second word |
+| right-side send | `0x4000 + (D + 1) * 0x40 + i` |
+
+The measured Phones 1 receiver had DSP output 2, so its 18 inputs occupied
+`0x14e0..0x14f1`, `0x15e0..0x15f1`, `0x4080..0x4091` and
+`0x40c0..0x40d1`. The addresses move with the receiving output; they are not
+fixed to Phones 1. Level and pan are written as two consecutive words at the
+same address; pan is `(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8`
+hard left and `0x0648` hard right.
+
+The source send is a matrix coefficient. At source fader `0 dB` and pan
+centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and
+`-21 dB` is `0x07FC`. The coefficient is the matrix encoding of the source
+fader gain multiplied by the equal-power pan gain. At `-65 dB` the source
+block is omitted. The source level word remained `0xD760` (`-65.0 dB`) in
+the measured Phones 1 routing; the route gain is carried by the companion
+matrix word.
+
+The source block is followed by the attenuated active sends and the FX
+returns. A normal ON/OFF burst is 60 bytes (15 words). The periodic monitor
+refresh described below can add a leading `0x3f98` word to the same transfer,
+making it 64 bytes. With no active sends, the burst is shorter. When
+the Listenback source is the same input as the Talkback source, no source
+block is written; the captured form is 36 bytes, containing only the
+active sends, FX returns and `0x3f9e`.
+
+The activation sequence also:
+
+- attenuates active sends into the Talkback-receiving outputs by the
+  Talkback Dim amount, and active sends into Main by the Listenback Dim
+  amount;
+- writes each affected output's FX-return level (`0x1203`, `0x1303`, …) to
+  `0xFD76` (`-65.0 dB`), without disabling the Reverb or Echo processors;
+- sets bit 0 of `0x3f9e` with a read-modify-write, preserving bit 1 (Mono
+  Main Out).
+
+A `0 dB` Dim writes no active-send word at all. At `-65 dB` the affected
+send is `0x0000`. Listenback Dim is independent of the Listenback input:
+with the input at `None`, Main sends still use the configured Listenback Dim.
+
+Listenback with a different source adds a second source block at the Main
+output's DSP addresses: `0x12e0 + i` / `0x13e0 + i` with matrix
+`0x4000 + i` / `0x4040 + i` when Main is DSP 0. With the same source as
+Talkback, only the first source block is present.
+
+Deactivation restores the words captured before activation and clears bit 0.
+A source change while Talkback is inactive emitted a 4-byte
+`0x0001 = 0x0000` cleanup in the measured scene; a live source change also
+rewrote the old and new source blocks. A `None` source emits no activation
+burst.
+
+The host rewrites the monitor mask (`0x3f98`) and the monitor flags
+(`0x3f9e`) together every 1.5–1.9 s while it is connected. `0x3f98` is
+`0x83ff` while Mono Main Out is active, `0xfc40` while a Cue output is
+active, and `0xffff` otherwise. The refresh is independent of Talkback and
+can share a USB transfer with an unrelated burst.
 
 ### 6.3 Mute, solo and stereo mode
 

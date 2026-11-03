@@ -191,10 +191,16 @@ Page-1 bus and monitoring controls:
 | `/1/mainMuteFx` | Mute FX return on Main Out | `Toggle` |
 | `/1/mainMono` | Mono Main Out | `Toggle` |
 | `/1/mainExtIn` | External input path | `Toggle` |
-| `/1/mainTalkback` | Talkback | `Toggle` |
+| `/1/mainTalkback` | Talkback | `Toggle`; a non-zero value flips the state, `0.0` is ignored |
 
 Snapshot, group and recorder controls are also accepted on page 1 and page 3;
 see section 8.
+
+Channels above the first bank use the range forms
+`/1/Level9Left-level24Left`, `/1/Level9Right-level24Right`,
+`/1/Trackname9-24` and `/1/micgain9-micgain24`. They carry the same scales
+as the single-channel forms; the official table gives them the channel
+offset range 8–47.
 
 ## 7. Page 2 — selected channel
 
@@ -202,6 +208,11 @@ Page 2 controls the channel selected by the bank/offset commands. The same
 path changes meaning with the channel row: input preamp controls apply to
 hardware inputs, EQ and dynamics apply to inputs and outputs, and FX send
 applies to inputs and software playback.
+
+Page 2 also accepts the bus toggles (`/2/busInput`, `/2/busPlayback`,
+`/2/busOutput`), `/2/track+`, `/2/track-`, `/2/labelSubmix`, `/2/trackname`
+and the meter paths `/2/levelLeft` and `/2/levelRight`, with the page-1
+scales.
 
 | Path | Function | Scale | Rows |
 |---|---|---|---|
@@ -276,6 +287,9 @@ both sides. Splitting writes the mono value on both sides.
 There is no separate link register. The link state is the stereo-mode value.
 
 ## 8. Page 3 — FX, snapshots and groups
+
+Page 3 also accepts `/3/globalMute` and `/3/globalSolo`, with the page-1
+`Toggle` scale.
 
 | Path | Function | Scale |
 |---|---|---|
@@ -439,6 +453,22 @@ Inputs use `0x00..0x11`; outputs use `0x12..0x23`. Register values are 16-bit
 unless stated otherwise. `0x8000` in the address field is the odd-parity bit,
 not part of the address.
 
+Page-1 and page-2 fader values are normalized `0.0 .. 1.0`, using RME's
+documented fader curve, not a direct dB value:
+
+```text
+position = value * 1023
+if position >= 649:
+    dB = position * 0.0320855615 - 26.8235294118
+else:
+    dB = position^2 * (-1/11033) + position * 0.1497326203 - 65.0
+```
+
+The resulting dB is converted to the UCX fader-record tenths field. Sending
+a fader value is therefore not the same as sending a matrix coefficient or a
+literal dB value. The authoritative RME OSC table is
+`osc_table_totalmix_new.zip` from the RME downloads page.
+
 ### 12.1 Page 1 and page 2 channel controls
 
 | OSC path | Row | UCX target | Value |
@@ -511,11 +541,11 @@ not part of the address.
 | `/1/globalMute`, `/1/globalSolo` | none | host-side |
 | `/1/trim` | none | host-side |
 | `/1/mainDim` | `0x3d03` | 0/1 |
-| `/1/mainMono` | `0x3f9e` bit 1 | host/device monitor flags |
-| `/1/mainTalkback` | `0x3f9e` bit 0 | host/device monitor flags |
+| `/1/mainMono` | none | host-side |
+| `/1/mainTalkback` | `0x3f9e` bit 0, read-modify-write | host/device monitor flags; preserve bit 1 (Mono Main Out) |
 | `/1/mainSpeakerB`, `/1/speakerBLinked` | output assign words | host/output assignment |
 | `/1/mainMuteFx` | control-room `NN03` | FX return level |
-| `/1/mastervolume` | Main Out `NN00` | 0.1 dB, signed |
+| `/1/mastervolume` | Main Out `NN00` | normalized fader value through the documented curve |
 
 ### 12.3 Page 3 global FX
 

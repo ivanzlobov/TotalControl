@@ -264,11 +264,88 @@ holds your monitoring destinations — `Main`, `Speaker B` and `Phones 1–4`.
 Every hardware output is either assigned in the Control Room or unassigned
 in the Hardware Outputs row; there are no empty slots.
 
+### Who hears what
+
+The Control Room is not another mixer bus. It gives names and monitoring
+behaviour to hardware outputs you already have:
+
+- **Main** is normally the engineer’s monitor output: the speakers in the
+  control room.
+- **Phones 1–4** are normally the performers’ headphone outputs. They are
+  not the engineer’s headphones unless you assign one of them that way.
+- **Speaker B** is an alternative monitor output, for a second pair of
+  speakers or a second listening position.
+- **Cue/PFL to** chooses where the engineer’s cue or PFL signal is heard.
+
+So the usual studio picture is: the engineer listens on Main, the performers
+listen on Phones, and the Control Room decides which physical outputs play
+those roles. Assigning a pair moves it out of the ordinary Hardware Outputs
+row and gives it the fixed Control Room name.
+
+### Talkback and Listenback
+
+Talkback is the engineer’s communication path to the performers. While
+Talkback is active, the selected talkback microphone is sent to the Phones
+outputs that receive it, and the other signals on those Phones outputs are
+attenuated so the performer can hear the engineer clearly without removing
+the cue mix permanently.
+
+Listenback is the reverse direction: a microphone in the recording room is
+sent to Main while Talkback is active, with its own attenuation for the Main
+signal. RME’s Control Room uses both directions; TuxMix currently exposes the
+Talkback button and its receive switches.
+
+Talkback attenuates the active sends in the monitored mix; silent routes are
+not rewritten. The talkback source is added only to outputs whose Talkback
+receive is enabled. Talkback also silences the FX returns on the monitored
+outputs; it does not switch the Reverb or Echo processors off. Releasing
+Talkback restores the previous sends and FX-return levels.
+
+These are temporary monitoring states. Releasing Talkback returns the
+monitor mix to its previous state; talkback is not stored in a scene.
+
 The button stack, on one channel, has:
 
 - **dim** and **recall** (snapshot recall) and **speaker B**;
 - **mono**, **talkback**, **ext. input** and **mute FX**;
-- **assign** at the bottom.
+- **settings** and **assign** at the bottom.
+
+| Button | Effect |
+|---|---|
+| `dim` | lowers the monitor level according to the Control Room Dim setting; releasing it restores the level |
+| `recall` | sets the monitor level to the configured listening volume; momentary, not a toggle |
+| `speaker B` | switches monitoring from Main to the Speaker B output |
+| `mono` | sums the Main monitor signal to mono |
+| `talkback` | sends the talkback source to the performers’ Phones outputs and dims the other Phones signals |
+| `ext. input` | replaces the Main mix with the selected stereo external input |
+| `mute FX` | removes Reverb and Echo from Main |
+| `settings` | opens the Control Room Settings dialog |
+| `assign` | assigns Main, Speaker B and Phones outputs and selects the Cue/PFL destination |
+
+Talkback and External Input are temporary listening states. Recall changes the
+underlying monitor level; it is not a second volume control that is restored
+on release.
+
+### Control Room Settings
+
+The Talkback source and Dim, Listenback source and Dim, Recall level, Main Dim,
+External Input and Gain, and the Solo/PFL modes are set in the Control Room
+Settings dialog. Press `settings`, immediately above `assign`.
+
+The dialog has four sections:
+
+- **Talkback**: source and Dim.
+- **Listenback**: source and Dim.
+- **Main Out**: Recall, Dim, External Input and Gain.
+- **Solo / PFL Mode**: `Live Mode, PFL replaces Solo` and
+  `Exclusive Solo/PFL Mode`.
+
+The source lists start with `None` and then use the hardware input names. The
+five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
+are saved per device in TuxMix's own preferences, not in the mixer scene.
+
+`OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
+The settings in the dialog are not written while it is open.
 
 `assign` opens the destination menu. The first level lists the destinations
 — the same names as the Control Room channels — plus `Cue/PFL to`, which

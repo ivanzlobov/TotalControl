@@ -680,7 +680,12 @@ smaller type tier. The stack runs, top to bottom:
 |---|---|
 | dim / recall / speaker B | Dim, Recall, Speaker B |
 | mono / talkback / ext. input / mute FX | Mono, Talkback, Ext. input, Mute FX |
-| assign | Assign, at the bottom |
+| bottom | Settings, immediately above Assign |
+
+Engaged Control Room buttons use the dark face, orange text and 1 px orange
+outline. Recall has no latched state and uses the normal press feedback;
+Settings stays lit while its dialog is open; Assign stays lit while its menu
+is open.
 
 Dim, Recall and Speaker B use the UCX control-room registers. Mono and
 Mute FX are stored in the device scene.
@@ -803,6 +808,29 @@ from a scene or from preferences at startup.
 
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.
+
+### 11.3 Control Room Settings
+
+`settings` opens a modal dialog titled `CONTROL ROOM SETTINGS`. It edits a
+draft; the stored values change only when `OK` is pressed. `Cancel`, `Escape`
+and a click outside the dialog discard the draft.
+
+| Section | Controls |
+|---|---|
+| Talkback | Input, Dim |
+| Listenback | Input, Dim |
+| Main Out | Recall, Dim, External Input, Gain |
+| Solo / PFL Mode | Live Mode, PFL replaces Solo; Exclusive Solo/PFL Mode |
+
+The input lists start with `None`, then the mono hardware inputs by their
+device names. External Input lists stereo hardware-input pairs. The five
+level controls have a `-65.0 … 0.0 dB` range, a `0.5 dB` step and a
+one-decimal value display.
+
+`OK` stores the settings in `gui.json` for the selected device. The settings
+are not part of the mixer scene, snapshot, undo stack or OSC scene state.
+The Control Room button state (`Dim`, `Talkback`, `Speaker B`, `Mono`,
+`Mute FX`) remains runtime state and is not stored in these settings.
 
 ## 13. Latency chain
 
