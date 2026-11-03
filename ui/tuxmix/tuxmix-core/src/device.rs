@@ -6,6 +6,31 @@ use crate::channel::{
 use crate::error::Error;
 use crate::scene::Scene;
 
+/// Host-side Talkback configuration.  These values are deliberately not part
+/// of [`DeviceSettings`] or a scene: they configure how the momentary
+/// Talkback switch rewrites the monitor mix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TalkbackConfig {
+    /// Hardware input used as the talkback microphone.  The index is the
+    /// device input index, not the display position.
+    pub source: Option<usize>,
+    pub dim_db: f32,
+    /// Hardware input sent back to Main while Talkback is active.
+    pub listenback: Option<usize>,
+    pub listenback_dim_db: f32,
+}
+
+impl Default for TalkbackConfig {
+    fn default() -> Self {
+        Self {
+            source: None,
+            dim_db: -20.0,
+            listenback: None,
+            listenback_dim_db: -20.0,
+        }
+    }
+}
+
 /// Balance of a linked pair, from its two channel volumes. The louder
 /// side is the pair level, so this matches the linked fader. The same
 /// formula applies to input, playback and output pairs.

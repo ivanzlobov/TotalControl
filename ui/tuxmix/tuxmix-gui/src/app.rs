@@ -15,7 +15,7 @@ use tuxmix_core::channel::EqBandType;
 use tuxmix_core::{BabyfacePro, Fireface, FirefaceModel, UcxAlsa};
 use tuxmix_core::{
     BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, RmeDevice,
-    Reverb, Scene, Sensitivity,
+    Reverb, Scene, Sensitivity, TalkbackConfig,
 };
 
 use crate::about;
@@ -338,6 +338,25 @@ impl DeviceHandle {
             dev.suppress_front_panel_for(duration);
         }
         let _ = duration;
+    }
+
+    pub fn set_talkback_receive(
+        &mut self,
+        output: usize,
+        on: bool,
+    ) -> Result<(), tuxmix_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            d.set_talkback_receive(output, on);
+            return Ok(());
+        }
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.set_talkback_receive(output, on);
+        }
+        if let Some(out) = self.outputs_mut().get_mut(output) {
+            out.talkback = on;
+        }
+        Ok(())
     }
 }
 
@@ -1338,14 +1357,18 @@ impl DeviceHandle {
         Ok(())
     }
 
-    pub fn set_talkback(&mut self, on: bool) -> Result<(), tuxmix_core::Error> {
+    pub fn set_talkback_with(
+        &mut self,
+        on: bool,
+        config: &TalkbackConfig,
+    ) -> Result<(), tuxmix_core::Error> {
         if let DeviceHandle::Mirror(d) = self {
-            d.set_talkback(on);
+            d.set_talkback_with(on, config);
             return Ok(());
         }
         #[cfg(feature = "alsa")]
         if let DeviceHandle::Fireface(d) = self {
-            return d.set_talkback(on);
+            return d.set_talkback_with(on, config);
         }
         if let DeviceHandle::Mock(_) = self {
             return Ok(());
@@ -1868,6 +1891,7 @@ pub enum Message {
     OutputPhaseChanged(usize, bool),
     /// Exclude one hardware output from Trim Gain changes.
     NoTrimChanged(usize, bool),
+    TalkbackReceiveChanged(usize, bool),
 
     VolumeChanged(ChannelId, usize, f32),
     /// One Matrix cell: source channel and physical output block (0-17).
@@ -5415,7 +5439,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             // Talkback is a performance state; never leave the unit talking
             // back after TuxMix closes.
             if state.talkback_on {
-                let _ = state.device.set_talkback(false);
+                let _ = state.device.set_talkback_with(false, &talkback_config(state));
                 state.talkback_on = false;
             }
             // Closing writes the window size, which no resize step does.
@@ -6088,6 +6112,12 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 fail(state, "set_no_trim", &e);
             }
             notify_osc_bool(state, format!("/output/{idx}/no_trim"), on);
+        }
+        Message::TalkbackReceiveChanged(idx, on) => {
+            if let Err(e) = state.device.set_talkback_receive(idx, on) {
+                fail(state, "set_talkback_receive", &e);
+            }
+            notify_osc_bool(state, format!("/output/{idx}/talkback"), on);
         }
         Message::VolumeChanged(cid, out, v) => {
             select_strip(state, cid);
@@ -6814,7 +6844,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             notify_osc_bool(state, "/mute_fx", on);
         }
         Message::TalkbackChanged(on) => {
-            if let Err(e) = state.device.set_talkback(on) {
+            if let Err(e) = state.device.set_talkback_with(on, &talkback_config(state)) {
                 fail(state, "talkback", &e);
             }
             state.talkback_on = on;
@@ -10394,8 +10424,33 @@ fn settings_popover(state: &TuxMix, cid: ChannelId, width: f32, scale: f32) -> E
     // Row 7 — reserved for the Talkback source/level rows.
     col = col.push(settings_slot(None, SETTINGS_ROW_TEXT, scale));
 
-    // Row 8 — Talkback receive (no device state yet).
-    col = col.push(settings_slot(None, SETTINGS_ROW_CTRL, scale));
+    // Row 8 — Talkback receive.
+    let talkback_on = if p.stereo_linked {
+        state
+            .device
+            .outputs()
+            .get(out & !1)
+            .is_some_and(|o| o.talkback)
+    } else {
+        state
+            .device
+            .outputs()
+            .get(out)
+            .is_some_and(|o| o.talkback)
+    };
+    let talkback = caps.fx.then(|| {
+        hint(
+            button(strip::centered_label("talkback", theme::TEXT_SM * scale))
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+                .width(Length::Fill)
+                .height(Length::Fixed(SETTINGS_CONTROL_H * scale))
+                .style(theme::stereo_button(talkback_on))
+                .on_press(Message::TalkbackReceiveChanged(out, !talkback_on)),
+            "Receives the Talkback source while Talkback is active",
+            scale,
+        )
+    });
+    col = col.push(settings_slot(talkback, SETTINGS_ROW_CTRL, scale));
 
     // Row 9 — loopback.
     let loopback = p.loopback_supported.then(|| {
@@ -12662,6 +12717,17 @@ fn control_room_panel(
         .padding(theme::SPACE_SM * scale)
         .style(theme::panel)
         .into()
+}
+
+/// The persistent Control Room values in the form the UCX Talkback
+/// generator consumes.
+fn talkback_config(state: &TuxMix) -> TalkbackConfig {
+    TalkbackConfig {
+        source: state.control_room.talkback_input,
+        dim_db: state.control_room.talkback_dim_db,
+        listenback: state.control_room.listenback_input,
+        listenback_dim_db: state.control_room.listenback_dim_db,
+    }
 }
 
 /// Round a slider value to the Control Room's half-dB grid.

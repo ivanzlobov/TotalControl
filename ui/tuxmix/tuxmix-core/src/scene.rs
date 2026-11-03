@@ -338,6 +338,9 @@ impl Scene {
                 if a.no_trim != b.no_trim {
                     host.no_trim = a.no_trim;
                 }
+                if a.talkback != b.talkback {
+                    host.talkback = a.talkback;
+                }
                 if a.name != b.name {
                     host.name = a.name.clone();
                 }

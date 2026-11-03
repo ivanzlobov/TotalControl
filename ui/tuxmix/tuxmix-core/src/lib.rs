@@ -50,7 +50,7 @@ pub use channel::{
     ChannelId, ChannelType, Dynamics, Echo, InputChannel, InputLevel, OutputChannel,
     PlaybackChannel, Reverb, Sensitivity,
 };
-pub use device::{DeviceSettings, RmeDevice};
+pub use device::{DeviceSettings, RmeDevice, TalkbackConfig};
 pub use error::Error;
 #[cfg(feature = "alsa")]
 pub use mixer::AlsaMixer;

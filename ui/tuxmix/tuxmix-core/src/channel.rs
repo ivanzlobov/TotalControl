@@ -487,6 +487,10 @@ pub struct OutputChannel {
     /// factor is 1 for sends into a No-Trim destination.
     #[serde(default)]
     pub no_trim: bool,
+    /// This output receives the Talkback source while Talkback is active.
+    /// Host-side monitoring flag; it writes no register by itself.
+    #[serde(default)]
+    pub talkback: bool,
     pub mute: bool,
     pub solo: bool,
     /// CUE engaged — this output's own dedicated playback pair (`PB
@@ -563,6 +567,7 @@ impl OutputChannel {
             phase_l: false,
             phase_r: false,
             no_trim: false,
+            talkback: false,
             mute: false,
             solo: false,
             cue: false,

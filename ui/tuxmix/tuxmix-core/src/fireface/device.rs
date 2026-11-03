@@ -26,7 +26,8 @@ use crate::channel::{
     OutputChannel, PlaybackChannel, Reverb, Sensitivity,
 };
 use crate::device::{
-    DeviceSettings, RmeDevice, output_balance_from_volumes, output_balance_to_volumes,
+    DeviceSettings, RmeDevice, TalkbackConfig, output_balance_from_volumes,
+    output_balance_to_volumes,
 };
 use crate::error::Error;
 use crate::scene::{MatrixOverride, Scene};
@@ -546,6 +547,10 @@ pub struct Fireface {
     output_mute_saved: HashMap<usize, f32>,
     /// Phones pair level saved while control-room Dim is engaged.
     dim_saved: Option<(f32, f32)>,
+    /// Register words replaced by the current Talkback activation, in write
+    /// order.  Restored when Talkback is released.
+    talkback_saved: Option<Vec<(u16, u16)>>,
+    talkback_active: bool,
     /// UCX per-channel processing (inputs and outputs).  Output settings are
     /// kept for the protocol-complete scene model; the current RmeDevice
     /// trait only exposes input EQ.
@@ -1038,6 +1043,8 @@ impl Fireface {
             mute_saved: HashMap::new(),
             output_mute_saved: HashMap::new(),
             dim_saved: None,
+            talkback_saved: None,
+            talkback_active: false,
             input_settings,
             output_settings,
             playback_phase,
@@ -2273,58 +2280,229 @@ impl Fireface {
         self.ucx_write_options()
     }
 
-    /// Toggle Talkback.  The measured activation set is one 19-word burst;
-    /// the source and dim are host-side settings on the reference app and
-    /// are not part of this write.
-    pub fn set_talkback(&mut self, on: bool) -> Result<(), Error> {
+    /// Mark one hardware output as a Talkback receiver.  The flag is
+    /// host-side; it only changes which outputs [`Self::set_talkback_with`]
+    /// rewrites.
+    pub fn set_talkback_receive(&mut self, output: usize, on: bool) -> Result<(), Error> {
+        let Some(out) = self.outputs.get_mut(output) else {
+            return Err(Error::InvalidChannel(format!("output {output}")));
+        };
+        out.talkback = on;
+        Ok(())
+    }
+
+    /// Toggle Talkback using the measured UCX rewrite.
+    ///
+    /// The source route uses the host configuration; active sends into
+    /// receiving outputs use Talkback Dim, active sends into Main use
+    /// Listenback Dim, and the affected FX returns are muted.  Every word
+    /// replaced by the activation is saved and written back on release.
+    pub fn set_talkback_with(
+        &mut self,
+        on: bool,
+        config: &TalkbackConfig,
+    ) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
                 "Talkback is not mapped on the UC".into(),
             ));
         }
-        const ON: [(u16, u16); 19] = [
-            (0x18E8, 0xEA60),
-            (0x18E8, 0xF9C8),
-            (0x19E9, 0xEA60),
-            (0x19E9, 0x0648),
-            (0x4188, 0x0263),
-            (0x41C9, 0x0263),
-            (0x18EA, 0xEFC0),
-            (0x18EA, 0xF9C8),
-            (0x19EB, 0xEFC0),
-            (0x19EB, 0x0648),
-            (0x418A, 0x066A),
-            (0x41CB, 0x066A),
-            (0x41A0, 0x0F95),
-            (0x41E1, 0x0F95),
-            (0x41A4, 0x0ADB),
-            (0x41E5, 0x0ADB),
-            (0x1803, 0xFD76),
-            (0x1903, 0xFD76),
-            (0x3F9E, 0x0001),
-        ];
-        const OFF: [(u16, u16); 19] = [
-            (0x18E8, 0xF6E0),
-            (0x18E8, 0xF9C8),
-            (0x19E9, 0xF6E0),
-            (0x19E9, 0x0648),
-            (0x4188, 0x17E3),
-            (0x41C9, 0x17E3),
-            (0x18EA, 0xFC40),
-            (0x18EA, 0xF9C8),
-            (0x19EB, 0xFC40),
-            (0x19EB, 0x0648),
-            (0x418A, 0x8804),
-            (0x41CB, 0x8804),
-            (0x41A0, 0x937B),
-            (0x41E1, 0x937B),
-            (0x41A4, 0x8D92),
-            (0x41E5, 0x8D92),
-            (0x1803, 0xFD76),
-            (0x1903, 0xFD76),
-            (0x3F9E, 0x0000),
-        ];
-        self.write_words(if on { &ON } else { &OFF })
+        if on == self.talkback_active {
+            return Ok(());
+        }
+        if !on {
+            if let Some(saved) = self.talkback_saved.take() {
+                self.write_words(&saved)?;
+            }
+            self.talkback_active = false;
+            return Ok(());
+        }
+
+        // Source None is the reference app's "no activation burst" case.
+        if config.source.is_none() {
+            self.talkback_active = true;
+            self.talkback_saved = Some(Vec::new());
+            return Ok(());
+        }
+
+        let source = config.source.unwrap();
+        if source >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!("talkback input {source}")));
+        }
+        let main_pair = self.settings.main_out;
+        let receivers: Vec<usize> = (0..self.output_pair_count())
+            .filter(|pair| {
+                self.outputs
+                    .get(pair * 2)
+                    .is_some_and(|out| out.talkback)
+                    || self
+                        .outputs
+                        .get(pair * 2 + 1)
+                        .is_some_and(|out| out.talkback)
+            })
+            .collect();
+
+        // (address, previous value, activation value), de-duplicated by
+        // address in case a source route and a normal send share a cell.
+        let mut edits: Vec<(u16, u16, u16)> = Vec::new();
+
+        fn push_edit(edits: &mut Vec<(u16, u16, u16)>, addr: u16, old: u16, new: u16) {
+            // Fader records deliberately use the same address twice (level
+            // then pan), so do not coalesce by address.
+            edits.push((addr, old, new));
+        }
+
+        fn source_block(
+            this: &Fireface,
+            edits: &mut Vec<(u16, u16, u16)>,
+            pair: usize,
+            input: usize,
+        ) {
+            let Some(dsp) = ucx::output_pair_dsp(pair) else {
+                return;
+            };
+            let volume = this
+                .inputs
+                .get(input)
+                .and_then(|ch| ch.volumes.get(pair))
+                .copied()
+                .unwrap_or(0.0);
+            if volume <= 0.0 {
+                return;
+            }
+            let pan = this
+                .inputs
+                .get(input)
+                .and_then(|ch| ch.pans.get(pair))
+                .copied()
+                .unwrap_or(0);
+            let level = ucx::fader_level(ucx::MINUS_INF_TENTHS);
+            let pan_word = ucx::fader_pan(pan as i16);
+            // TotalMix's measured source split is 0.700 per side at
+            // centre, not the 0.7071 used by the width matrix.
+            let matrix = ucx::matrix_gain(volume as f64 * 0.7);
+            for dsp_side in [dsp, dsp + 1] {
+                let level_addr = ucx::fader_table_reg(dsp_side as u8, input);
+                push_edit(edits, level_addr, level, level);
+                push_edit(edits, level_addr, pan_word, pan_word);
+                let matrix_addr =
+                    ucx::matrix_reg(dsp_side as u8, Source::Input(input));
+                push_edit(edits, matrix_addr, 0, matrix);
+            }
+        }
+
+        fn add_sends(
+            this: &Fireface,
+            edits: &mut Vec<(u16, u16, u16)>,
+            pair: usize,
+            dim_db: f32,
+        ) {
+            let Some(dsp) = ucx::output_pair_dsp(pair) else {
+                return;
+            };
+            let factor = 10f64.powf((dim_db as f64) / 20.0).clamp(0.0, 1.0);
+            if factor >= 0.999 {
+                return;
+            }
+            // The per-pair model indexes volumes by output pair; the wire
+            // address uses the DSP output's side.  Keep those two mappings
+            // distinct (pair 2 -> DSP 2, but model block 4).
+            for side in 0..2 {
+                let model_block = pair * 2 + side;
+                let dsp_side = dsp + side;
+                for (idx, ch) in this.inputs.iter().enumerate() {
+                    let gain = this
+                        .matrix_cell(ChannelId::Input(idx), model_block)
+                        .unwrap_or(0.0);
+                    if gain != 0.0 {
+                        let addr = ucx::matrix_reg(dsp_side as u8, Source::Input(ch.id));
+                        push_edit(
+                            edits,
+                            addr,
+                            ucx::matrix_gain(gain as f64),
+                            ucx::matrix_gain(gain as f64 * factor),
+                        );
+                    }
+                }
+                for (idx, ch) in this.playbacks.iter().enumerate() {
+                    let gain = this
+                        .matrix_cell(ChannelId::Playback(idx), model_block)
+                        .unwrap_or(0.0);
+                    if gain != 0.0 {
+                        let addr = ucx::matrix_reg(dsp_side as u8, Source::Playback(ch.id));
+                        push_edit(
+                            edits,
+                            addr,
+                            ucx::matrix_gain(gain as f64),
+                            ucx::matrix_gain(gain as f64 * factor),
+                        );
+                    }
+                }
+            }
+        }
+
+        for &pair in &receivers {
+            add_sends(self, &mut edits, pair, config.dim_db);
+        }
+        if let Some(pair) = main_pair {
+            add_sends(self, &mut edits, pair, config.listenback_dim_db);
+        }
+
+        // Source routes are written after the attenuated normal sends so a
+        // source that is also a normal send cannot overwrite the talkback
+        // route with the dimmed value.  The reference app omits the source
+        // block when Listenback uses the same input: the captured form is
+        // the short 36-byte burst.
+        if config.listenback != Some(source) {
+            for &pair in &receivers {
+                source_block(self, &mut edits, pair, source);
+            }
+        }
+        if let Some(listen) = config.listenback {
+            if let Some(pair) = main_pair {
+                if listen != source {
+                    source_block(self, &mut edits, pair, listen);
+                }
+            }
+        }
+
+        let fx_pairs: Vec<usize> = receivers
+            .iter()
+            .copied()
+            .chain(main_pair.into_iter())
+            .collect();
+        for pair in fx_pairs {
+            for output in [pair * 2, pair * 2 + 1] {
+                let Some(out) = self.outputs.get(output) else {
+                    continue;
+                };
+                let old = (out.fx_return_db.clamp(-65.0, 6.0) * 10.0).round() as i16 as u16;
+                let pair = output / 2;
+                let dsp = ucx::output_pair_dsp(pair)
+                    .ok_or_else(|| Error::InvalidChannel(format!("output {output}")))?;
+                let addr = ucx::channel_reg(
+                    ucx::output_channel(dsp + output % 2),
+                    ucx::offset::FX_RETURN,
+                );
+                push_edit(&mut edits, addr, old, 0xfd76);
+            }
+        }
+
+        let old_flag = (self.settings.mono as u16) << 1;
+        let flag_addr = 0x3f9e;
+        push_edit(&mut edits, flag_addr, old_flag, old_flag | 1);
+
+        let old: Vec<(u16, u16)> = edits.iter().map(|(a, o, _)| (*a, *o)).collect();
+        let new: Vec<(u16, u16)> = edits.iter().map(|(a, _, n)| (*a, *n)).collect();
+        self.talkback_saved = Some(old);
+        self.talkback_active = true;
+        self.write_words(&new)
+    }
+
+    /// Compatibility entry point for callers that have no Control Room
+    /// configuration yet.  A missing source deliberately produces no burst.
+    pub fn set_talkback(&mut self, on: bool) -> Result<(), Error> {
+        self.set_talkback_with(on, &TalkbackConfig::default())
     }
 
     /// Toggle M/S processing on an input pair: `NN05` on both channels and
@@ -2609,7 +2787,7 @@ impl Fireface {
         match addr {
             ucx::global::DIM => self.settings.dim = value != 0,
             ucx::global::MONITOR_FLAGS => {
-                self.settings.ms_proc = value & 0x02 != 0;
+                self.settings.mono = value & 0x02 != 0;
             }
             _ => {}
         }
@@ -5950,57 +6128,132 @@ mod tests {
     }
 
     #[test]
-    fn ucx_talkback_writes_the_measured_set() {
+    fn ucx_talkback_writes_the_dynamic_source_and_dims() {
+        let (mut dev, writes) = open(Model::Ucx);
+        // Internal pair 1 is Main (DSP 0); pair 2 is the receiver (DSP 2),
+        // matching the addresses in the controlled captures.
+        dev.settings.main_out = Some(1);
+        dev.settings.ms_proc = true;
+        dev.outputs[4].talkback = true;
+        dev.outputs[5].talkback = true;
+        for input in &mut dev.inputs {
+            input.volumes.fill(0.0);
+        }
+        for playback in &mut dev.playbacks {
+            playback.volumes.fill(0.0);
+        }
+        dev.inputs[0].volumes[2] = 1.0;
+        dev.inputs[0].pans[2] = 0;
+        dev.playbacks[0].volumes[1] = 1.0;
+        dev.playbacks[1].volumes[1] = 1.0;
+        dev.playbacks[0].volumes[2] = 1.0;
+        dev.playbacks[1].volumes[2] = 1.0;
+        dev.outputs[2].fx_return_db = -65.0;
+        dev.outputs[3].fx_return_db = -65.0;
+        dev.outputs[4].fx_return_db = -65.0;
+        dev.outputs[5].fx_return_db = -65.0;
+        dev.settings.mono = true;
+        writes.lock().unwrap().clear();
+
+        dev.set_talkback_with(
+            true,
+            &TalkbackConfig {
+                source: Some(0),
+                dim_db: -20.0,
+                listenback: None,
+                listenback_dim_db: -20.0,
+            },
+        )
+        .unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x14e0, 0xd760)));
+        assert!(words.contains(&(0x14e0, 0x0008)));
+        assert!(words.contains(&(0x15e0, 0xd760)));
+        assert!(words.contains(&(0x4080, 0x8b33)));
+        assert!(words.contains(&(0x40a0, ucx::matrix_gain(0.1))));
+        assert!(words.contains(&(0x4061, ucx::matrix_gain(0.1))));
+        assert!(words.contains(&(0x1403, 0xfd76)));
+        assert!(words.contains(&(0x1503, 0xfd76)));
+        assert!(words.contains(&(0x3f9e, 0x0003)));
+
+        writes.lock().unwrap().clear();
+        dev.set_talkback_with(false, &TalkbackConfig::default())
+            .unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x4080, 0)));
+        assert!(words.contains(&(0x4061, ucx::matrix_gain(1.0))));
+        assert!(words.contains(&(0x3f9e, 0x0002)));
+        assert!(words.contains(&(0x1403, 0xfd76)));
+    }
+
+    #[test]
+    fn ucx_talkback_listenback_same_source_omits_the_second_block() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.settings.main_out = Some(1);
+        dev.outputs[4].talkback = true;
+        for input in &mut dev.inputs {
+            input.volumes.fill(0.0);
+        }
+        for playback in &mut dev.playbacks {
+            playback.volumes.fill(0.0);
+        }
+        dev.inputs[0].volumes[1] = 1.0;
+        dev.inputs[0].volumes[2] = 1.0;
+        writes.lock().unwrap().clear();
+        dev.set_talkback_with(
+            true,
+            &TalkbackConfig {
+                source: Some(0),
+                dim_db: -20.0,
+                listenback: Some(0),
+                listenback_dim_db: -20.0,
+            },
+        )
+        .unwrap();
+        let words = written_words(&writes);
+        assert!(!words.iter().any(|(addr, _)| *addr == 0x14e0));
+        assert!(!words.iter().any(|(addr, _)| *addr == 0x12e1));
+    }
+
+    #[test]
+    fn ucx_talkback_listenback_different_source_adds_the_main_block() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.settings.main_out = Some(1);
+        dev.outputs[4].talkback = true;
+        for input in &mut dev.inputs {
+            input.volumes.fill(0.0);
+        }
+        for playback in &mut dev.playbacks {
+            playback.volumes.fill(0.0);
+        }
+        dev.inputs[0].volumes[2] = 1.0;
+        dev.inputs[1].volumes[1] = 1.0;
+        writes.lock().unwrap().clear();
+        dev.set_talkback_with(
+            true,
+            &TalkbackConfig {
+                source: Some(0),
+                dim_db: -20.0,
+                listenback: Some(1),
+                listenback_dim_db: -20.0,
+            },
+        )
+        .unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x12e1, 0xd760)));
+        assert!(words.contains(&(0x4001, 0x8b33)));
+    }
+
+    #[test]
+    fn ucx_talkback_without_source_writes_nothing() {
         let (mut dev, writes) = open(Model::Ucx);
         writes.lock().unwrap().clear();
-        dev.set_talkback(true).unwrap();
-        let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Words(vec![
-            (0x18E8, 0xEA60),
-            (0x18E8, 0xF9C8),
-            (0x19E9, 0xEA60),
-            (0x19E9, 0x0648),
-            (0x4188, 0x0263),
-            (0x41C9, 0x0263),
-            (0x18EA, 0xEFC0),
-            (0x18EA, 0xF9C8),
-            (0x19EB, 0xEFC0),
-            (0x19EB, 0x0648),
-            (0x418A, 0x066A),
-            (0x41CB, 0x066A),
-            (0x41A0, 0x0F95),
-            (0x41E1, 0x0F95),
-            (0x41A4, 0x0ADB),
-            (0x41E5, 0x0ADB),
-            (0x1803, 0xFD76),
-            (0x1903, 0xFD76),
-            (0x3F9E, 0x0001),
-        ])));
-        drop(w);
-        writes.lock().unwrap().clear();
-        dev.set_talkback(false).unwrap();
-        let w = writes.lock().unwrap();
-        assert!(w.contains(&Write::Words(vec![
-            (0x18E8, 0xF6E0),
-            (0x18E8, 0xF9C8),
-            (0x19E9, 0xF6E0),
-            (0x19E9, 0x0648),
-            (0x4188, 0x17E3),
-            (0x41C9, 0x17E3),
-            (0x18EA, 0xFC40),
-            (0x18EA, 0xF9C8),
-            (0x19EB, 0xFC40),
-            (0x19EB, 0x0648),
-            (0x418A, 0x8804),
-            (0x41CB, 0x8804),
-            (0x41A0, 0x937B),
-            (0x41E1, 0x937B),
-            (0x41A4, 0x8D92),
-            (0x41E5, 0x8D92),
-            (0x1803, 0xFD76),
-            (0x1903, 0xFD76),
-            (0x3F9E, 0x0000),
-        ])));
+        dev.set_talkback_with(true, &TalkbackConfig::default())
+            .unwrap();
+        assert!(written_words(&writes).is_empty());
+        dev.set_talkback_with(false, &TalkbackConfig::default())
+            .unwrap();
+        assert!(written_words(&writes).is_empty());
     }
 
     #[test]

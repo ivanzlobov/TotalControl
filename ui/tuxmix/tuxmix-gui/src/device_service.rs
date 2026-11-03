@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use tuxmix_core::{
     ChannelId, DeviceSettings, Dynamics, Echo, Error, InputChannel, InputLevel,
-    PlaybackChannel, OutputChannel, RmeDevice, Reverb, Scene, Sensitivity,
+    PlaybackChannel, OutputChannel, RmeDevice, Reverb, Scene, Sensitivity, TalkbackConfig,
 };
 use tuxmix_core::fireface::abi::HwdepCounters;
 use tuxmix_core::channel::{EqBandType, InputEq};
@@ -281,8 +281,19 @@ impl Mirror {
     }
 
     pub fn set_talkback(&self, on: bool) {
+        self.set_talkback_with(on, &TalkbackConfig::default());
+    }
+
+    pub fn set_talkback_with(&self, on: bool, config: &TalkbackConfig) {
+        let config = *config;
         self.run(move |d| {
-            let _ = d.set_talkback(on);
+            let _ = d.set_talkback_with(on, &config);
+        });
+    }
+
+    pub fn set_talkback_receive(&self, output: usize, on: bool) {
+        self.run(move |d| {
+            let _ = d.set_talkback_receive(output, on);
         });
     }
 
