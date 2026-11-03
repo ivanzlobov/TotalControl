@@ -1,10 +1,10 @@
 use iced::futures::channel::mpsc;
 use iced::keyboard::{self, Key};
 use iced::widget::{
-    button, column, container, mouse_area, opaque, pick_list, progress_bar, responsive, row,
-    scrollable, stack, text,
+    button, checkbox, column, container, mouse_area, opaque, pick_list, progress_bar, responsive,
+    row, scrollable, slider, stack, text,
 };
-use iced::{window, Color, Element, Length, Subscription, Task};
+use iced::{window, Background, Color, Element, Length, Subscription, Task};
 use rosc::OscType;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -21,7 +21,7 @@ use tuxmix_core::{
 use crate::about;
 use crate::matrix;
 use crate::osc::{self, OscCommand, OscConfig, OscOutbound};
-use crate::prefs::SyncDirection;
+use crate::prefs::{ControlRoomSettings, SyncDirection};
 use tuxmix_core::pw_clock::{self, CardStream, PwClock};
 use tuxmix_core::pw_meter;
 use crate::scenes::{load_scene_file, save_scene_file};
@@ -2001,6 +2001,20 @@ pub enum Message {
     ControlRoomMuteFx(bool),
     /// Control-room Talkback on/off.
     TalkbackChanged(bool),
+    /// Control Room Settings dialog.
+    OpenControlRoomSettings,
+    CancelControlRoomSettings,
+    ApplyControlRoomSettings,
+    ControlRoomTalkbackInput(Option<usize>),
+    ControlRoomTalkbackDim(f32),
+    ControlRoomListenbackInput(Option<usize>),
+    ControlRoomListenbackDim(f32),
+    ControlRoomRecallDb(f32),
+    ControlRoomMainDim(f32),
+    ControlRoomExternalInput(Option<usize>),
+    ControlRoomExternalGain(f32),
+    ControlRoomPflReplacesSolo(bool),
+    ControlRoomExclusiveSoloPfl(bool),
     /// Recalls "Mix `u8`" (1-8) and marks it as the slot `SnapshotStore`
     /// will save into.
     SnapshotClicked(u8),
@@ -2313,6 +2327,11 @@ pub struct TuxMix {
     pub show_device_panel: bool,
     /// Talkback is engaged.  Performance state, not part of the scene.
     pub talkback_on: bool,
+    /// Persisted Control Room monitoring settings.
+    pub control_room: ControlRoomSettings,
+    /// Draft values while the Control Room Settings dialog is open.
+    pub control_room_draft: ControlRoomSettings,
+    pub control_room_settings_open: bool,
     /// The FX column beside the mixer: Reverb and Echo, in TotalMix's own
     /// place for them. Only meaningful when the backend reports `fx`.
     pub show_fx_panel: bool,
@@ -2851,6 +2870,9 @@ pub fn new_with_device(
         show_osc_log: false,
         show_device_panel: false,
         talkback_on: false,
+        control_room: ControlRoomSettings::default(),
+        control_room_draft: ControlRoomSettings::default(),
+        control_room_settings_open: false,
         show_fx_panel: true,
         fx_anim: None,
         assign: {
@@ -2985,6 +3007,7 @@ pub fn prefs_of(state: &TuxMix) -> crate::prefs::Prefs {
         sidebar_open: Some(state.sidebar_open),
         fx_panel: Some(state.show_fx_panel),
         assign: state.assign,
+        control_room: state.control_room.clone(),
         sidebar_width: Some(state.sidebar_width),
         panels_open: Some([p.options, p.snapshots, p.groups, p.layout]),
         two_row: None,
@@ -3021,6 +3044,8 @@ pub fn apply_prefs(state: &mut TuxMix, prefs: crate::prefs::Prefs) {
         state.show_fx_panel = open;
     }
     state.assign = prefs.assign;
+    state.control_room = prefs.control_room;
+    state.control_room_draft = state.control_room.clone();
     // Older files stored an output pair in the seventh slot. It cannot be
     // interpreted as a monitoring target, so anything outside the Cue
     // target list falls back to Main.
@@ -3506,6 +3531,7 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::EngineRate(_)
             | Message::EngineQuantum(_)
             | Message::SelectDevice(_)
+            | Message::ApplyControlRoomSettings
     )
 }
 
@@ -4647,6 +4673,19 @@ fn is_undoable(message: &Message) -> bool {
             | Message::DimToggle
             | Message::Dim(_)
             | Message::TalkbackChanged(_)
+            | Message::OpenControlRoomSettings
+            | Message::CancelControlRoomSettings
+            | Message::ApplyControlRoomSettings
+            | Message::ControlRoomTalkbackInput(_)
+            | Message::ControlRoomTalkbackDim(_)
+            | Message::ControlRoomListenbackInput(_)
+            | Message::ControlRoomListenbackDim(_)
+            | Message::ControlRoomRecallDb(_)
+            | Message::ControlRoomMainDim(_)
+            | Message::ControlRoomExternalInput(_)
+            | Message::ControlRoomExternalGain(_)
+            | Message::ControlRoomPflReplacesSolo(_)
+            | Message::ControlRoomExclusiveSoloPfl(_)
             | Message::MatrixHover(..)
             | Message::PointerPressed
             | Message::FieldFocus(..)
@@ -5480,6 +5519,9 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             // Topmost thing first: the modal outranks an in-place edit.
             if state.show_about {
                 state.show_about = false;
+            } else if state.control_room_settings_open {
+                state.control_room_settings_open = false;
+                state.control_room_draft = state.control_room.clone();
             } else if state.show_device_panel {
                 state.show_device_panel = false;
             } else if state.show_settings {
@@ -6778,6 +6820,50 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             state.talkback_on = on;
             notify_osc_bool(state, "/talkback", on);
         }
+        Message::OpenControlRoomSettings => {
+            state.control_room_draft = state.control_room.clone();
+            state.control_room_settings_open = true;
+        }
+        Message::CancelControlRoomSettings => {
+            state.control_room_settings_open = false;
+            state.control_room_draft = state.control_room.clone();
+        }
+        Message::ApplyControlRoomSettings => {
+            state.control_room = state.control_room_draft.clone();
+            state.control_room_settings_open = false;
+            state.prefs_dirty = true;
+            flush_prefs(state);
+        }
+        Message::ControlRoomTalkbackInput(input) => {
+            state.control_room_draft.talkback_input = input;
+        }
+        Message::ControlRoomTalkbackDim(db) => {
+            state.control_room_draft.talkback_dim_db = round_half_db(db);
+        }
+        Message::ControlRoomListenbackInput(input) => {
+            state.control_room_draft.listenback_input = input;
+        }
+        Message::ControlRoomListenbackDim(db) => {
+            state.control_room_draft.listenback_dim_db = round_half_db(db);
+        }
+        Message::ControlRoomRecallDb(db) => {
+            state.control_room_draft.recall_db = round_half_db(db);
+        }
+        Message::ControlRoomMainDim(db) => {
+            state.control_room_draft.main_dim_db = round_half_db(db);
+        }
+        Message::ControlRoomExternalInput(pair) => {
+            state.control_room_draft.external_input = pair;
+        }
+        Message::ControlRoomExternalGain(db) => {
+            state.control_room_draft.external_gain_db = round_half_db(db);
+        }
+        Message::ControlRoomPflReplacesSolo(on) => {
+            state.control_room_draft.pfl_replaces_solo = on;
+        }
+        Message::ControlRoomExclusiveSoloPfl(on) => {
+            state.control_room_draft.exclusive_solo_pfl = on;
+        }
         Message::SnapshotClicked(n) => {
             state.active_snapshot = Some(n as usize);
             state.snapshot_dirty = false;
@@ -7329,6 +7415,12 @@ pub fn view(state: &TuxMix, _window: window::Id) -> Element<'_, Message> {
     }
     if state.show_settings {
         base = stack(vec![base, settings_panel(state)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
+    if state.control_room_settings_open {
+        base = stack(vec![base, control_room_settings_modal(state)])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -12460,7 +12552,7 @@ fn control_room_panel(
         .width(Length::Fixed(btn_w))
         .height(Length::Fixed(btn_h))
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-        .style(theme::toggle_button(active, theme::ACCENT))
+        .style(theme::phantom_button(active))
         .on_press_maybe(msg)
         .into()
     };
@@ -12480,7 +12572,10 @@ fn control_room_panel(
     .width(Length::Fixed(btn_w))
     .height(Length::Fixed(btn_h))
     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-    .style(theme::ghost_button)
+    .style(theme::phantom_button(!matches!(
+        state.assign_menu,
+        AssignMenu::Closed
+    )))
     // The menu writes the UC/UCX Main Out bit; a unit without that path
     // shows the button dimmed rather than opening a menu that cannot apply.
     .on_press_maybe(state.device.is_uc_family().then_some(Message::ToggleAssign));
@@ -12544,7 +12639,15 @@ fn control_room_panel(
             ),
         ]),
         iced::widget::Space::new().height(Length::Fill),
-        group(vec![assign.into()]),
+        group(vec![
+            cell(
+                "settings",
+                theme::TEXT_MD,
+                state.control_room_settings_open,
+                Some(Message::OpenControlRoomSettings),
+            ),
+            assign.into(),
+        ]),
     ]
     .spacing(theme::SPACE_MD * scale)
     .padding(theme::SPACE_SM * scale)
@@ -12559,6 +12662,215 @@ fn control_room_panel(
         .padding(theme::SPACE_SM * scale)
         .style(theme::panel)
         .into()
+}
+
+/// Round a slider value to the Control Room's half-dB grid.
+fn round_half_db(db: f32) -> f32 {
+    (db.clamp(-65.0, 0.0) * 2.0).round() / 2.0
+}
+
+fn mono_input_choices(state: &TuxMix) -> Vec<String> {
+    let mut choices = Vec::with_capacity(state.device.inputs().len() + 1);
+    choices.push("None".to_string());
+    choices.extend(state.device.inputs().iter().map(|input| input.name.clone()));
+    choices
+}
+
+fn stereo_input_choices(state: &TuxMix) -> Vec<String> {
+    let mut choices = vec!["None".to_string()];
+    for pair in state.device.inputs().chunks(2) {
+        let label = match pair {
+            [left, right] => format!("{} / {}", left.name, right.name),
+            [only] => only.name.clone(),
+            _ => unreachable!(),
+        };
+        choices.push(label);
+    }
+    choices
+}
+
+fn choice_label(choices: &[String], selected: Option<usize>) -> String {
+    selected
+        .and_then(|index| choices.get(index + 1).cloned())
+        .unwrap_or_else(|| choices[0].clone())
+}
+
+fn choice_index(choices: &[String], label: &str) -> Option<usize> {
+    choices
+        .iter()
+        .position(|choice| choice == label)
+        .and_then(|index| index.checked_sub(1))
+}
+
+fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<'static, Message> {
+    row![
+        slider(-65.0..=0.0, value, move |v| on_change(round_half_db(v)))
+            .width(Length::Fill),
+        text(format!("{value:+.1} dB"))
+            .color(theme::TEXT_PRIMARY)
+            .size(theme::TEXT_XS * scale)
+            .width(Length::Fixed(64.0 * scale)),
+    ]
+    .spacing(theme::SPACE_MD * scale)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// The Control Room Settings dialog. It edits a draft only; the live
+/// settings change when `OK` is pressed, and the snapshot is saved there.
+fn control_room_settings_modal(state: &TuxMix) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let draft = &state.control_room_draft;
+    let ts = scale * 1.15;
+
+    let section = |label: &'static str| -> Element<'static, Message> {
+        row![
+            text(label)
+                .color(theme::TEXT_SEC)
+                .size(theme::TEXT_MICRO * ts),
+            iced::widget::rule::horizontal(1),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center)
+        .into()
+    };
+    let label = |text_value: &'static str| -> Element<'static, Message> {
+        text(text_value)
+            .color(theme::TEXT_PRIMARY)
+            .size(theme::TEXT_XS * ts)
+            .width(Length::Fixed(150.0 * scale))
+            .into()
+    };
+    let row_with = |label_text: &'static str, control: Element<'static, Message>| {
+        row![label(label_text), control]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center)
+    };
+
+    let mono_choices = mono_input_choices(state);
+    let tb_choices = mono_choices.clone();
+    let tb_pick = pick_list(
+        tb_choices.clone(),
+        Some(choice_label(&mono_choices, draft.talkback_input)),
+        move |choice| Message::ControlRoomTalkbackInput(choice_index(&tb_choices, &choice)),
+    )
+    .style(theme::pick_list)
+    .width(Length::Fill);
+
+    let lb_choices = mono_choices.clone();
+    let lb_pick = pick_list(
+        lb_choices.clone(),
+        Some(choice_label(&mono_choices, draft.listenback_input)),
+        move |choice| Message::ControlRoomListenbackInput(choice_index(&lb_choices, &choice)),
+    )
+    .style(theme::pick_list)
+    .width(Length::Fill);
+
+    let ext_choices = stereo_input_choices(state);
+    let ext_pick_choices = ext_choices.clone();
+    let ext_pick = pick_list(
+        ext_pick_choices.clone(),
+        Some(choice_label(&ext_choices, draft.external_input)),
+        move |choice| Message::ControlRoomExternalInput(choice_index(&ext_pick_choices, &choice)),
+    )
+    .style(theme::pick_list)
+    .width(Length::Fill);
+
+    let body = column![
+        text("CONTROL ROOM SETTINGS")
+            .color(theme::TEXT_PRIMARY)
+            .size(theme::TEXT_MD * scale),
+        section("TALKBACK"),
+        row_with("Input", tb_pick.into()),
+        row_with(
+            "Dim",
+            db_control(draft.talkback_dim_db, Message::ControlRoomTalkbackDim, scale),
+        ),
+        section("LISTENBACK"),
+        row_with("Input", lb_pick.into()),
+        row_with(
+            "Dim",
+            db_control(
+                draft.listenback_dim_db,
+                Message::ControlRoomListenbackDim,
+                scale,
+            ),
+        ),
+        section("MAIN OUT"),
+        row_with(
+            "Recall",
+            db_control(draft.recall_db, Message::ControlRoomRecallDb, scale),
+        ),
+        row_with(
+            "Dim",
+            db_control(draft.main_dim_db, Message::ControlRoomMainDim, scale),
+        ),
+        row_with("External Input", ext_pick.into()),
+        row_with(
+            "Gain",
+            db_control(
+                draft.external_gain_db,
+                Message::ControlRoomExternalGain,
+                scale,
+            ),
+        ),
+        section("SOLO / PFL MODE"),
+        checkbox(draft.pfl_replaces_solo)
+            .label("Live Mode, PFL replaces Solo")
+            .on_toggle(Message::ControlRoomPflReplacesSolo),
+        checkbox(draft.exclusive_solo_pfl)
+            .label("Exclusive Solo/PFL Mode")
+            .on_toggle(Message::ControlRoomExclusiveSoloPfl),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .width(Length::Fill);
+
+    let footer = row![
+        iced::widget::Space::new().width(Length::Fill),
+        button(text("Cancel").size(theme::TEXT_XS * ts))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::CancelControlRoomSettings),
+        button(text("OK").size(theme::TEXT_XS * ts))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+            .style(theme::toggle_button(true, theme::ACCENT))
+            .on_press(Message::ApplyControlRoomSettings),
+    ]
+    .spacing(theme::SPACE_MD * scale)
+    .align_y(iced::Alignment::Center);
+
+    let card = opaque(
+        container(
+            column![
+                scrollable(body).height(Length::Fixed(455.0 * scale)),
+                footer,
+            ]
+            .spacing(theme::SPACE_LG * scale)
+            .width(Length::Fill),
+        )
+        .style(theme::dialog)
+        .padding(theme::SPACE_XL * scale)
+        .width(Length::Fill)
+        .max_width(560.0 * scale),
+    );
+
+    opaque(
+        mouse_area(
+            container(card)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_theme: &iced::Theme| container::Style {
+                    background: Some(Background::Color(Color {
+                        a: 0.55,
+                        ..Color::BLACK
+                    })),
+                    ..container::Style::default()
+                }),
+        )
+        .on_press(Message::CancelControlRoomSettings),
+    )
 }
 
 fn mixer_view(state: &TuxMix, fx_width: Option<f32>) -> (Element<'_, Message>, bool) {

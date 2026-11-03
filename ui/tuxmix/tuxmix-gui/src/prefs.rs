@@ -28,6 +28,43 @@ pub enum SyncDirection {
     GuiToDevice,
 }
 
+/// Control Room settings. These are application preferences, not mixer
+/// scene values; they configure the monitoring functions rather than the
+/// current routing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControlRoomSettings {
+    /// Mono hardware input index, or `None`.
+    pub talkback_input: Option<usize>,
+    pub talkback_dim_db: f32,
+    pub listenback_input: Option<usize>,
+    pub listenback_dim_db: f32,
+    pub recall_db: f32,
+    pub main_dim_db: f32,
+    /// Stereo hardware-input pair index, or `None`.
+    pub external_input: Option<usize>,
+    pub external_gain_db: f32,
+    pub pfl_replaces_solo: bool,
+    pub exclusive_solo_pfl: bool,
+}
+
+impl Default for ControlRoomSettings {
+    fn default() -> Self {
+        Self {
+            talkback_input: None,
+            talkback_dim_db: -20.0,
+            listenback_input: None,
+            listenback_dim_db: -20.0,
+            recall_db: -10.0,
+            main_dim_db: -20.0,
+            external_input: None,
+            external_gain_db: -3.0,
+            pfl_replaces_solo: false,
+            exclusive_solo_pfl: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -47,6 +84,9 @@ pub struct Prefs {
     /// Control Room monitoring assignments, by `ASSIGN_DESTS` index.
     #[serde(default)]
     pub assign: [Option<usize>; 7],
+    /// Control Room monitoring settings, configured in the settings dialog.
+    #[serde(default)]
+    pub control_room: ControlRoomSettings,
     pub sidebar_width: Option<f32>,
     /// Options, Snapshots, Groups, Mixer Layout, in that order.
     pub panels_open: Option<[bool; 4]>,
@@ -148,6 +188,48 @@ mod tests {
             window_size: Some((1600.0, 900.0)),
             keep_in_tray: Some(false),
             engine_force_quantum: Some(128),
+            ..Default::default()
+        };
+        save(&file, &prefs).unwrap();
+        assert_eq!(load(&file), prefs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn control_room_defaults_match_the_reference_values() {
+        let cr = ControlRoomSettings::default();
+        assert_eq!(cr.talkback_input, None);
+        assert_eq!(cr.talkback_dim_db, -20.0);
+        assert_eq!(cr.listenback_input, None);
+        assert_eq!(cr.listenback_dim_db, -20.0);
+        assert_eq!(cr.recall_db, -10.0);
+        assert_eq!(cr.main_dim_db, -20.0);
+        assert_eq!(cr.external_input, None);
+        assert_eq!(cr.external_gain_db, -3.0);
+        assert!(!cr.pfl_replaces_solo);
+        assert!(!cr.exclusive_solo_pfl);
+    }
+
+    #[test]
+    fn control_room_settings_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "tuxmix-prefs-control-room-{}",
+            std::process::id()
+        ));
+        let file = dir.join("gui.json");
+        let prefs = Prefs {
+            control_room: ControlRoomSettings {
+                talkback_input: Some(2),
+                talkback_dim_db: -21.5,
+                listenback_input: Some(3),
+                listenback_dim_db: -18.0,
+                recall_db: -12.5,
+                main_dim_db: -24.0,
+                external_input: Some(1),
+                external_gain_db: -4.0,
+                pfl_replaces_solo: true,
+                exclusive_solo_pfl: true,
+            },
             ..Default::default()
         };
         save(&file, &prefs).unwrap();
