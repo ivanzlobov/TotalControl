@@ -1704,7 +1704,8 @@ static const struct snd_pcm_hardware ffuc_pcm_hw = {
 	.info = SNDRV_PCM_INFO_MMAP |
 		SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_INTERLEAVED |
-		SNDRV_PCM_INFO_BLOCK_TRANSFER,
+		SNDRV_PCM_INFO_BLOCK_TRANSFER |
+		SNDRV_PCM_INFO_RESUME,
 	.formats = SNDRV_PCM_FMTBIT_FLOAT_LE | SNDRV_PCM_FMTBIT_S32_LE,
 	.rates = SNDRV_PCM_RATE_KNOT,
 	.rate_min = 32000,
@@ -1943,7 +1944,25 @@ static int ffuc_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
+		if (!(chip->prepared_mask & (1u << subs->stream)))
+			return -EPIPE;
 		if (!READ_ONCE(chip->engine_running))
+			return -EIO;
+		memset(s->pos, 0, sizeof(s->pos));
+		s->hw_ptr = 0;
+		s->period = 0;
+		s->running = true;
+		return 0;
+	case SNDRV_PCM_TRIGGER_RESUME:
+		/*
+		 * The stream was running when the system suspended and ALSA
+		 * has already restored the hardware.  If the engine could not
+		 * be restarted in ffuc_resume(), refuse the resume so ALSA
+		 * leaves the stream suspended and userspace can re-prepare it
+		 * instead of running a stream with no URBs.
+		 */
+		if (!(chip->prepared_mask & (1u << subs->stream)) ||
+		    !READ_ONCE(chip->engine_running))
 			return -EIO;
 		memset(s->pos, 0, sizeof(s->pos));
 		s->hw_ptr = 0;
@@ -1989,6 +2008,13 @@ static int ffuc_create_pcm(struct ffuc *chip)
 	strscpy(pcm->name, chip->desc->name, sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &ffuc_pcm_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &ffuc_pcm_ops);
+	/*
+	 * ffuc_suspend() decides per direction whether a PCM needs to enter
+	 * SNDRV_PCM_STATE_SUSPENDED.  Without this flag the ALSA core suspends
+	 * every open PCM first, including prepared-but-stopped playback, which
+	 * leaves some userspace graphs with a suspended sink after resume.
+	 */
+	pcm->no_device_suspend = true;
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL, 0, 0);
 
 	chip->streams[SNDRV_PCM_STREAM_PLAYBACK].substream =
@@ -2348,36 +2374,102 @@ static void ffuc_disconnect(struct usb_interface *intf)
 static int ffuc_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct ffuc *chip = usb_get_intfdata(intf);
+	unsigned int dir;
 
 	if (!chip)
 		return 0;
+
+	chip->resume_mask = 0;
+	for (dir = 0; dir < 2; dir++) {
+		if (chip->streams[dir].running)
+			chip->resume_mask |= 1u << dir;
+	}
+	dev_info(&chip->dev->dev,
+		 "suspend: prepared=0x%x running=0x%x\n",
+		 chip->prepared_mask, chip->resume_mask);
+
 	snd_power_change_state(chip->card, SNDRV_CTL_POWER_D3hot);
-	snd_pcm_suspend_all(chip->pcm);
+	/*
+	 * Only enter the ALSA suspended state when every prepared direction
+	 * was also running.  A prepared but stopped PCM has no active stream
+	 * to suspend, and marking it SUSPENDED makes some userspace graphs
+	 * leave the sink suspended after resume and never restart it.  The
+	 * driver stops the engine in all cases and restarts it on resume; a
+	 * mixed running/prepared pair is left in its current ALSA state.
+	 */
+	if (chip->resume_mask && chip->resume_mask == chip->prepared_mask)
+		snd_pcm_suspend_all(chip->pcm);
+	else
+		dev_info(&chip->dev->dev,
+			 "suspend: driver-managed (prepared=0x%x running=0x%x)\n",
+			 chip->prepared_mask, chip->resume_mask);
 	cancel_work_sync(&chip->recover_work);
 	mutex_lock(&chip->mutex);
 	ffuc_engine_stop(chip);
-	chip->prepared_mask = 0;
 	mutex_unlock(&chip->mutex);
 	ffuc_midi_suspend(chip);
 	ffuc_transport_suspend(chip);
 	return 0;
 }
 
-static int ffuc_resume(struct usb_interface *intf)
+static int ffuc_resume_common(struct usb_interface *intf, bool reset)
 {
 	struct ffuc *chip = usb_get_intfdata(intf);
-	int ret;
+	int ret, engine_ret = 0;
 
 	if (!chip)
 		return 0;
+
+	if (reset) {
+		mutex_lock(&chip->mutex);
+		/*
+		 * A USB reset loses the alternate setting and any UC session
+		 * state.  Force the next engine start to select the alternate
+		 * setting and, on the UC, replay the session-open sequence.
+		 */
+		if (chip->model == FFUC_MODEL_UC) {
+			chip->uc_session = true;
+			chip->session_reopen = true;
+		}
+		chip->cur_alt = 0;
+		mutex_unlock(&chip->mutex);
+	}
+
 	mutex_lock(&chip->mutex);
 	ret = ffuc_hw_setup(chip);
+	if (ret == 0 && chip->prepared_mask && !chip->engine_running)
+		engine_ret = ffuc_engine_start(chip);
 	mutex_unlock(&chip->mutex);
-	if (ret == 0)
-		ffuc_transport_setup(chip);
+
+	if (ret == 0) {
+		int transport_ret = ffuc_transport_setup(chip);
+
+		if (transport_ret < 0)
+			dev_warn(&chip->dev->dev,
+				 "resume: transport setup failed: %d\n",
+				 transport_ret);
+	}
+	if (engine_ret < 0)
+		dev_warn(&chip->dev->dev,
+			 "resume: engine restart failed: %d\n", engine_ret);
+
 	ffuc_midi_resume(chip);
+	dev_info(&chip->dev->dev,
+		 "resume: reset=%d prepared=0x%x running=0x%x engine=%d ret=%d\n",
+		 reset, chip->prepared_mask, chip->resume_mask,
+		 READ_ONCE(chip->engine_running), ret);
 	snd_power_change_state(chip->card, SNDRV_CTL_POWER_D0);
 	return ret;
+}
+
+static int ffuc_resume(struct usb_interface *intf)
+{
+	return ffuc_resume_common(intf, false);
+}
+
+static int ffuc_reset_resume(struct usb_interface *intf)
+{
+	return ffuc_resume_common(intf, true);
 }
 
 static struct usb_driver ffuc_driver = {
@@ -2386,7 +2478,7 @@ static struct usb_driver ffuc_driver = {
 	.disconnect = ffuc_disconnect,
 	.suspend = ffuc_suspend,
 	.resume = ffuc_resume,
-	.reset_resume = ffuc_resume,
+	.reset_resume = ffuc_reset_resume,
 	.id_table = ffuc_ids,
 	.supports_autosuspend = 0,
 };

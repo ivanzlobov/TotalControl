@@ -243,6 +243,8 @@ struct ffuc {
 	bool uc_session;
 	unsigned int hw_params_mask;
 	unsigned int prepared_mask;
+	/* Directions that were running when the system suspended. */
+	unsigned int resume_mask;
 	unsigned int rate;
 	const struct ffuc_mode *mode;
 	unsigned int urb_frames;
