@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=TuxMix
+Name=TotalControl
 GenericName=Audio Mixer
 Comment=Open-source TotalMix replacement for RME audio interfaces on Linux
 Exec=tuxmix

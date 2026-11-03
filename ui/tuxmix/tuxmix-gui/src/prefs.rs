@@ -136,7 +136,21 @@ pub fn path() -> Option<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("tuxmix").join("gui.json"))
+    let new = base.join("totalcontrol").join("gui.json");
+    if new.exists() {
+        return Some(new);
+    }
+    let old = base.join("tuxmix").join("gui.json");
+    if old.exists() {
+        if let Some(dir) = new.parent() {
+            let _ = std::fs::create_dir_all(dir);
+            if std::fs::copy(&old, &new).is_ok() {
+                return Some(new);
+            }
+        }
+        return Some(old);
+    }
+    Some(new)
 }
 
 pub fn load(path: &Path) -> Prefs {

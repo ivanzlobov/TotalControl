@@ -50,8 +50,8 @@ package() {
     install -Dm755 "target/release/tuxmix-tui" \
         "${pkgdir}/usr/bin/tuxmix-tui"
 
-    install -Dm644 "tuxmix-gui/assets/tuxmix.desktop" \
-        "${pkgdir}/usr/share/applications/tuxmix.desktop"
+    install -Dm644 "tuxmix-gui/assets/totalcontrol.desktop" \
+        "${pkgdir}/usr/share/applications/totalcontrol.desktop"
     install -Dm644 "tuxmix-gui/assets/tuxmix.svg" \
         "${pkgdir}/usr/share/icons/hicolor/scalable/apps/tuxmix.svg"
     install -Dm644 "tuxmix-gui/assets/tuxmix-128.png" \

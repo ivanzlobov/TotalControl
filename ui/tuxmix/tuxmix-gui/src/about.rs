@@ -47,7 +47,7 @@ const SHORTCUTS: [(&str, &str); 12] = [
     ("Tab", "Next view (Quick, Mixer, Matrix)"),
     ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
     ("Ctrl + / Ctrl - / Ctrl 0", "Zoom in / out / reset (also Ctrl+wheel)"),
-    ("Ctrl ,", "TuxMix settings (tray, autostart)"),
+    ("Ctrl ,", "TotalControl settings (tray, autostart)"),
     ("F11", "Full screen"),
     ("Esc", "Close a dialog, cancel an edit"),
     ("Ctrl / Shift + click", "Select strips; their faders move together"),
@@ -114,7 +114,7 @@ pub fn about_modal(state: &TuxMix) -> Element<'_, Message> {
 
     let identity = column![
         row![
-            text("TuxMix")
+            text("TotalControl")
                 .color(theme::TEXT_PRIMARY)
                 .size(theme::TEXT_XL * scale),
             text(format!("v{}", env!("CARGO_PKG_VERSION")))

@@ -5,10 +5,30 @@ use crate::channel::{InputChannel, OutputChannel, PlaybackChannel};
 use crate::device::DeviceSettings;
 use crate::error::Error;
 
-/// Directory for saved scenes/presets (~/.local/share/tuxmix/scenes).
+/// Directory for saved scenes/presets (~/.local/share/totalcontrol/scenes).
+/// An existing TuxMix scene directory is copied across on first use.
 pub fn scenes_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let dir = PathBuf::from(home).join(".local/share/tuxmix/scenes");
+    let dir = PathBuf::from(&home).join(".local/share/totalcontrol/scenes");
+    if dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+        return dir;
+    }
+    let old = PathBuf::from(&home).join(".local/share/tuxmix/scenes");
+    if old.exists() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            if let Ok(entries) = std::fs::read_dir(&old) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|e| e == "json") {
+                        let _ = std::fs::copy(&path, dir.join(entry.file_name()));
+                    }
+                }
+            }
+            return dir;
+        }
+        return old;
+    }
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

@@ -40,10 +40,10 @@ use iced::{Font, Size};
 /// little effort.
 const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 
-/// The application id, matching the basename of `tuxmix.desktop`, so the
+/// The application id, matching the basename of `totalcontrol.desktop`, so the
 /// desktop environment associates the window with the app entry (icon
 /// included) in the taskbar and the window list.
-const APP_ID: &str = "tuxmix";
+const APP_ID: &str = "totalcontrol";
 
 /// The window icon, from the same decoded PNG the About dialog draws (see
 /// `icon`). `None` on a decode error: a missing icon is cosmetic, not a
@@ -156,7 +156,7 @@ fn main() -> iced::Result {
     // One TuxMix per session: a second launch asks the first to show its
     // window (it may be hidden in the tray) and leaves.
     if matches!(tray::claim(mock), tray::Instance::Secondary) {
-        eprintln!("TuxMix is already running: asked it to show its window.");
+        eprintln!("TotalControl is already running: asked it to show its window.");
         return Ok(());
     }
     // The tray icon (not for the simulation, which would put a second icon

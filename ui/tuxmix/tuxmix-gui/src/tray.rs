@@ -92,7 +92,7 @@ impl ksni::Tray for Icon {
     }
 
     fn title(&self) -> String {
-        "TuxMix".into()
+        "TotalControl".into()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -110,7 +110,7 @@ impl ksni::Tray for Icon {
         ksni::ToolTip {
             icon_name: String::new(),
             icon_pixmap: self.icon_pixmap(),
-            title: "TuxMix".into(),
+            title: "TotalControl".into(),
             description: if self.status.window_visible {
                 "RME Fireface mixer and router — click to hide".into()
             } else {
@@ -285,7 +285,7 @@ fn autostart_path() -> Option<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(config.join("autostart").join("tuxmix.desktop"))
+    Some(config.join("autostart").join("totalcontrol.desktop"))
 }
 
 /// Whether the session starts TuxMix (the user's own autostart entry).
@@ -338,7 +338,7 @@ mod tests {
             status: Status::default(),
         };
         let tip = ksni::Tray::tool_tip(&icon);
-        assert_eq!(tip.title, "TuxMix");
+        assert_eq!(tip.title, "TotalControl");
         assert!(tip.description.contains("Fireface"));
         assert_eq!(tip.icon_pixmap.len(), 4);
         assert!(tip.icon_pixmap.iter().all(|i| i.width == i.height));

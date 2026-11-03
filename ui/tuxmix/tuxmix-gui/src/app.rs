@@ -3620,11 +3620,11 @@ pub fn title(state: &TuxMix, _window: window::Id) -> String {
         .strip_suffix(" (mock)")
         .unwrap_or_else(|| state.device.model_name());
     if !state.connected {
-        format!("TuxMix \u{2014} {model} (disconnected)")
+        format!("TotalControl \u{2014} {model} (disconnected)")
     } else if state.device.is_mock() {
-        format!("TuxMix \u{2014} {model} (simulated)")
+        format!("TotalControl \u{2014} {model} (simulated)")
     } else {
-        format!("TuxMix \u{2014} {model}")
+        format!("TotalControl \u{2014} {model}")
     }
 }
 
@@ -7859,7 +7859,7 @@ fn settings_panel(state: &TuxMix) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let ts = scale * 1.15;
     let header = row![
-        text("TuxMix settings")
+        text("TotalControl settings")
             .color(theme::TEXT_PRIMARY)
             .size(theme::TEXT_MD * scale),
         iced::widget::Space::new().width(Length::Fill),
@@ -8900,7 +8900,7 @@ fn top_bar(state: &TuxMix) -> Element<'_, Message> {
                     .width(mark_h * ratio)
                     .height(mark_h)
                     .filter_method(iced::widget::image::FilterMethod::Linear),
-                text("TuxMix")
+                text("TotalControl")
                     .color(theme::ACCENT)
                     .size(theme::TEXT_XL * scale),
             ]
@@ -8908,7 +8908,7 @@ fn top_bar(state: &TuxMix) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center)
             .into()
         }
-        None => text("TuxMix")
+        None => text("TotalControl")
             .color(theme::ACCENT)
             .size(theme::TEXT_XL * scale)
             .into(),
