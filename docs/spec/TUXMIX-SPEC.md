@@ -682,8 +682,8 @@ smaller type tier. The stack runs, top to bottom:
 | mono / talkback / ext. input / mute FX | Mono, Talkback, Ext. input, Mute FX |
 | assign | Assign, at the bottom |
 
-Dim, Recall and Speaker B use the UCX control-room registers. Mono and
-Mute FX are stored in the device scene.
+Dim, Recall, Speaker B and Talkback use the UCX control-room registers.
+Mono and Mute FX are stored in the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
@@ -803,6 +803,17 @@ from a scene or from preferences at startup.
 
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.
+
+### 11.3 Talkback
+
+Talkback writes one 19-word burst. The set carries the Phones/Main sends, the
+`0x1803`/`0x1903` FX-return values and `0x3F9E` bit 0. The OFF set restores the
+same addresses.
+
+Source selection and the dim amount are host-side settings in the reference
+application; neither changes a register and neither changes the toggle set.
+TuxMix therefore does not expose a source picker or a dim amount. Per-output
+talkback receive is host-side and is not written.
 
 ## 13. Latency chain
 
