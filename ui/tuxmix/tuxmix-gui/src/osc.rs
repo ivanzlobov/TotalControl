@@ -584,10 +584,6 @@ pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
                                     return;
                                 }
                             }
-                        } else if let Some(cmd) = OscCommand::parse(&msg.addr, &msg.args) {
-                            if output.send(Message::OscCommand(cmd)).await.is_err() {
-                                return;
-                            }
                         }
                     }
                 }

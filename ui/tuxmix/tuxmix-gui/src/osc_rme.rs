@@ -11,6 +11,7 @@
 
 use rosc::OscType;
 
+use tuxmix_core::channel::{EqBandType, InputLevel};
 use tuxmix_core::ChannelId;
 
 use crate::app::Message;
@@ -62,6 +63,31 @@ fn fader_gain(v: &OscType) -> Option<f32> {
 fn pan_value(v: &OscType) -> Option<i8> {
     let p = arg_f32(v)?.clamp(0.0, 1.0);
     Some((p * 200.0 - 100.0).round() as i8)
+}
+
+/// The documented frequency curve: normalized position to Hz.
+fn freq_hz(p: f32, lo: f32, hi: f32) -> u16 {
+    let p = p.clamp(0.0, 1.0);
+    (lo * (hi / lo).powf(p)).round() as u16
+}
+
+fn eq_type(v: &OscType) -> Option<EqBandType> {
+    if let OscType::String(s) = v {
+        return match s.to_ascii_lowercase().as_str() {
+            "off" => Some(EqBandType::Off),
+            "bell" | "peak" => Some(EqBandType::Bell),
+            "lowshelf" | "low" => Some(EqBandType::LowShelf),
+            "highshelf" | "high" => Some(EqBandType::HighShelf),
+            _ => None,
+        };
+    }
+    let p = arg_f32(v)?.clamp(0.0, 1.0);
+    Some(match (p * 3.0).round() as u8 {
+        0 => EqBandType::Off,
+        1 => EqBandType::Bell,
+        2 => EqBandType::LowShelf,
+        _ => EqBandType::HighShelf,
+    })
 }
 
 fn arg_f32(v: &OscType) -> Option<f32> {
@@ -194,6 +220,140 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
             Some(vec![Message::Phantom(idx, arg_on(first)?)])
         }
 
+        // ---- page 2: selected channel ----------------------------------
+        ["2", "volume"] => {
+            let cid = channel(st.bus, st.channel)?;
+            let out = if st.bus == Bus::Output { st.channel } else { st.submix };
+            Some(vec![Message::VolumeChanged(cid, out, fader_gain(first)?)])
+        }
+        ["2", "pan"] => {
+            let cid = channel(st.bus, st.channel)?;
+            let out = if st.bus == Bus::Output { st.channel } else { st.submix };
+            Some(vec![Message::PanChanged(cid, out, pan_value(first)?)])
+        }
+        ["2", "mute"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::Mute(cid, arg_on(first)?)])
+        }
+        ["2", "solo"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::Solo(cid, arg_on(first)?)])
+        }
+        ["2", "stereo"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::StereoLinkChanged(cid, arg_on(first)?)])
+        }
+        ["2", "phase"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::PhaseChanged(cid, arg_on(first)?)])
+        }
+        ["2", "phantom"] if st.bus == Bus::Input => {
+            Some(vec![Message::Phantom(st.channel, arg_on(first)?)])
+        }
+        ["2", "instrument"] if st.bus == Bus::Input => {
+            Some(vec![Message::Instrument(st.channel, arg_on(first)?)])
+        }
+        ["2", "pad"] if st.bus == Bus::Input => {
+            Some(vec![Message::Pad(st.channel, arg_on(first)?)])
+        }
+        ["2", "autoset"] if st.bus == Bus::Input => {
+            Some(vec![Message::Autoset(st.channel, arg_on(first)?)])
+        }
+        ["2", "refLevel"] if st.bus == Bus::Input => {
+            let code = arg_f32(first)?.round().clamp(0.0, 2.0) as u16;
+            Some(vec![Message::LevelChanged(
+                st.channel,
+                InputLevel::from_code(code).unwrap_or(InputLevel::Plus4dBu),
+            )])
+        }
+        ["2", "gain"] if st.bus == Bus::Input => {
+            let db = (arg_f32(first)? * 65.0).round().max(0.0) as u32;
+            Some(vec![Message::Gain(st.channel, db)])
+        }
+        ["2", "msProc"] => match st.bus {
+            Bus::Input => Some(vec![Message::InputMsProcChanged(st.channel, arg_on(first)?)]),
+            Bus::Playback => Some(vec![Message::PlaybackMsProcChanged(
+                st.channel,
+                arg_on(first)?,
+            )]),
+            Bus::Output => None,
+        },
+        ["2", "loopback"] => Some(vec![Message::LoopbackChanged(
+            st.channel,
+            arg_on(first)?,
+        )]),
+        ["2", "cue"] if st.bus == Bus::Output => Some(vec![Message::CueChanged(
+            ChannelId::Output(st.channel),
+            arg_on(first)?,
+        )]),
+        ["2", "talkbackSel"] if st.bus == Bus::Output => Some(vec![
+            Message::TalkbackReceiveChanged(st.channel, arg_on(first)?),
+        ]),
+        ["2", "noTrim"] if st.bus == Bus::Output => Some(vec![Message::NoTrimChanged(
+            st.channel,
+            arg_on(first)?,
+        )]),
+        ["2", "width"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::ChannelWidthChanged(cid, arg_f32(first)?.clamp(0.0, 1.0))])
+        }
+        ["2", "reverbSend"] => {
+            let cid = channel(st.bus, st.channel)?;
+            let db = -65.0 * (1.0 - arg_f32(first)?.clamp(0.0, 1.0));
+            Some(vec![Message::FxSendChanged(cid, db)])
+        }
+        ["2", "reverbReturn"] if st.bus == Bus::Output => {
+            let db = -65.0 * (1.0 - arg_f32(first)?.clamp(0.0, 1.0));
+            Some(vec![Message::FxReturnChanged(st.channel, db)])
+        }
+        ["2", "lowcutEnable"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::EqLowCutEnabled(cid, arg_on(first)?)])
+        }
+        ["2", "lowcutFreq"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::EqLowCutFreq(cid, freq_hz(arg_f32(first)?, 20.0, 500.0))])
+        }
+        ["2", "lowcutGrade"] => {
+            let cid = channel(st.bus, st.channel)?;
+            let p = arg_f32(first)?.clamp(0.0, 1.0);
+            Some(vec![Message::EqLowCutSlope(cid, 6 + (p * 3.0).round() as u8 * 6)])
+        }
+        ["2", "eqEnable"] => {
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::EqEnabled(cid, arg_on(first)?)])
+        }
+        ["2", path] if path.starts_with("eqType") => {
+            let band: usize = path.trim_start_matches("eqType").parse().ok()?;
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::EqBandType(cid, band, eq_type(first)?)])
+        }
+        ["2", path] if path.starts_with("eqGain") => {
+            let band: usize = path.trim_start_matches("eqGain").parse().ok()?;
+            let cid = channel(st.bus, st.channel)?;
+            let db = arg_f32(first)? * 48.0 - 24.0;
+            Some(vec![Message::EqBandGain(cid, band, db.clamp(-24.0, 24.0))])
+        }
+        ["2", path] if path.starts_with("eqFreq") => {
+            let band: usize = path.trim_start_matches("eqFreq").parse().ok()?;
+            let cid = channel(st.bus, st.channel)?;
+            Some(vec![Message::EqBandFreq(cid, band, freq_hz(arg_f32(first)?, 20.0, 20_000.0))])
+        }
+        ["2", path] if path.starts_with("eqQ") => {
+            let band: usize = path.trim_start_matches("eqQ").parse().ok()?;
+            let cid = channel(st.bus, st.channel)?;
+            let q = 10f32.powf(-1.0 + arg_f32(first)?.clamp(0.0, 1.0) * 2.0);
+            Some(vec![Message::EqBandQ(cid, band, q.clamp(0.05, 10.0))])
+        }
+
+        // ---- page 3: snapshots, undo -----------------------------------
+        ["3", "snapshots", n, _] => {
+            let n: u8 = n.parse().ok()?;
+            (1..=8).contains(&n).then_some(vec![Message::SnapshotClicked(n)])
+        }
+        ["3", "undo"] => Some(vec![Message::Undo]),
+        ["3", "redo"] => Some(vec![Message::Redo]),
+
         // ---- monitor controls ------------------------------------------
         ["1", "mainDim"] => Some(vec![Message::Dim(arg_on(first)?)]),
         ["1", "mainRecall"] => Some(vec![Message::ControlRoomRecall]),
@@ -299,6 +459,6 @@ mod tests {
     fn unsupported_paths_return_none() {
         let mut st = RmeState::default();
         assert!(parse("/1/select/1/1", &[OscType::Int(1)], &mut st).is_none());
-        assert!(parse("/2/mute", &[OscType::Int(1)], &mut st).is_none());
+        assert!(parse("/2/compexpGain", &[OscType::Float(0.5)], &mut st).is_none());
     }
 }
