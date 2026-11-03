@@ -19,6 +19,7 @@ mod icon;
 mod layouts;
 mod matrix;
 mod osc;
+mod osc_rme;
 mod prefs;
 mod scenes;
 mod sidebar;

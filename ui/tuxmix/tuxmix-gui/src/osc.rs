@@ -560,6 +560,7 @@ pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
         let send_addr = SocketAddr::new(config.send_host, config.send_port);
 
         let (tx, mut rx) = mpsc::channel::<OscOutbound>(4096);
+        let mut rme = crate::osc_rme::RmeState::default();
         if output.send(Message::OscReady(tx)).await.is_err() {
             return;
         }
@@ -575,7 +576,15 @@ pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
                         let _ = output
                             .send(Message::OscLog(log_line("IN ", &msg.addr, &msg.args)))
                             .await;
-                        if let Some(cmd) = OscCommand::parse(&msg.addr, &msg.args) {
+                        if let Some(messages) =
+                            crate::osc_rme::parse(&msg.addr, &msg.args, &mut rme)
+                        {
+                            for message in messages {
+                                if output.send(message).await.is_err() {
+                                    return;
+                                }
+                            }
+                        } else if let Some(cmd) = OscCommand::parse(&msg.addr, &msg.args) {
                             if output.send(Message::OscCommand(cmd)).await.is_err() {
                                 return;
                             }
