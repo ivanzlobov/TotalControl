@@ -44,6 +44,32 @@ Authoritative files:
 All UI layout and interaction rules live in `docs/spec/TUXMIX-SPEC.md`.
 Do not duplicate them here; when a rule is missing, add it to the spec.
 
+## Git workflow
+
+`main` is the protected integration branch. Every change lands through a pull
+request; do not commit or push directly to `main`.
+
+- Start from current `main`: `git switch main && git pull --ff-only`, then
+  create a short-lived branch.
+- Use one branch and one PR per logical change. Branch prefixes are `fix/`,
+  `feat/`, `perf/`, `docs/`, `test/` and `chore/`.
+- Keep commits atomic. Explain why the change is needed in the commit message
+  and in the PR description, using `.github/pull_request_template.md`.
+- Push the branch, open a draft PR early, and wait for CI. Do not merge with a
+  failing or missing required check.
+- Use squash merge by default so `main` stays linear and each PR has one
+  revert point. Use rebase-and-merge only for a deliberately clean commit
+  series; do not add merge commits.
+- After merging, delete the branch, fast-forward local `main`, and run
+  `git fetch --prune`.
+- Rebase a feature branch on `origin/main` when needed and push it with
+  `--force-with-lease`. Never force-push `main`.
+- Do not mix unrelated driver, UI, documentation and tooling changes in one
+  PR unless they are required for the same tested behaviour.
+- Hardware and driver PRs record the device model, transport, firmware,
+  quantum, test evidence, and confirmation that the user scene and
+  `~/.config/tuxmix/gui.json` were preserved.
+
 ## Working rules
 
 - Use the NAS mailbox in `/media/nas_data/John/Electronica/rme/coordination/`
