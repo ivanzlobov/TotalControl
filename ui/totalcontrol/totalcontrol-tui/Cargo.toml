@@ -1,0 +1,18 @@
+[package]
+name = "totalcontrol-tui"
+version = "0.3.1"
+edition = "2021"
+description = "TUI for TotalControl — control your RME interface from the terminal"
+license = "GPL-3.0-only"
+
+[dependencies]
+totalcontrol-core = { path = "../totalcontrol-core", default-features = false, features = ["usb"] }
+ratatui = "0.29"
+crossterm = "0.28"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["alsa"]
+# ALSA class-compliant backend (Linux only) — pass-through to totalcontrol-core.
+alsa = ["totalcontrol-core/alsa"]

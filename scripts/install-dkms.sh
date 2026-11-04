@@ -68,4 +68,4 @@ $SUDO dkms status
 echo
 echo "DKMS is active for $KVER."
 echo "The boot loader unit is enabled; the installed module takes effect on"
-echo "the next boot, or after stopping PipeWire/TuxMix and running modprobe."
+echo "the next boot, or after stopping PipeWire/TotalControl and running modprobe."

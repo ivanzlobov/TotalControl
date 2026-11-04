@@ -1,0 +1,52 @@
+[package]
+name = "totalcontrol-core"
+version = "0.3.1"
+edition = "2021"
+description = "Core library for controlling RME audio interfaces (ALSA and proprietary USB backends)"
+license = "MIT"
+
+[dependencies]
+log = "0.4"
+rand = "0.8"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strum = { version = "0.26", features = ["derive"] }
+libc = "0.2"
+alsa = { version = "0.9", optional = true }
+totalcontrol-usb = { version = "0.3.0", path = "../totalcontrol-usb", optional = true }
+
+[features]
+default = ["alsa"]
+# ALSA class-compliant backend (Linux only).
+alsa = ["dep:alsa"]
+# Proprietary USB backend (the TotalMix protocol, see totalcontrol-usb).
+usb = ["dep:totalcontrol-usb", "totalcontrol-usb/driver"]
+
+[[example]]
+name = "alsa-scan"
+required-features = ["alsa"]
+
+[[example]]
+name = "panel-watch"
+required-features = ["alsa"]
+
+[[example]]
+name = "ucx-scan"
+required-features = ["alsa"]
+
+[[example]]
+name = "fireface-scan"
+required-features = ["alsa"]
+
+[[example]]
+name = "fireface-events"
+required-features = ["alsa"]
+
+[[example]]
+name = "fireface-ctl"
+required-features = ["alsa"]
+
+[[example]]
+name = "fireface-levels"
+required-features = ["alsa"]

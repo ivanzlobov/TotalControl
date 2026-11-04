@@ -1,0 +1,16 @@
+pkgbase = totalcontrol
+	pkgdesc = Open-source TotalMix replacement for RME audio interfaces on Linux
+	pkgver = 0.3.1
+	pkgrel = 1
+	url = https://github.com/jspx-projects/TotalControl
+	arch = x86_64
+	license = GPL3
+	makedepends = cargo
+	depends = alsa-lib
+	depends = libgl
+	depends = systemd-libs
+	options = !lto
+	source = https://github.com/jspx-projects/TotalControl/archive/v0.3.1/TotalControl-0.3.1.tar.gz
+	sha256sums = 2ad00bdc366cc51af3efcbf28d5ecd600951d247cb6ea114e1d5eb07aac3d7c1
+
+pkgname = totalcontrol

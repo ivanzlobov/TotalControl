@@ -1,6 +1,6 @@
 #!/bin/sh
 # LEGACY: the 2026-10-25 kernel refactor creates no ALSA mixer controls.
-# This demo only works with an old module.  Use TuxMix / the hwdep API.
+# This demo only works with an old module.  Use TotalControl / the hwdep API.
 # Demo: route rear input 5 (matrix source 4) to the phones (outputs 1/2).
 # 0 dB is 0x2000 = 8192.  The other crosspoints are cleared.
 set -eu

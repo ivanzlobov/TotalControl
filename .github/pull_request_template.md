@@ -15,15 +15,15 @@ user-visible behaviour and the device writes involved.
 
 ## Tests
 
-- [ ] `cargo test -p tuxmix-core --lib --features alsa`
-- [ ] `cargo test -p tuxmix-gui`
+- [ ] `cargo test -p totalcontrol-core --lib --features alsa`
+- [ ] `cargo test -p totalcontrol-gui`
 - [ ] Kernel build, when `kernel/` changed
 - [ ] `scripts/audio-health.sh`, when the driver or audio path changed
 - [ ] Hardware test, when the device transport or DSP changed
 
 Describe the commands, counters, and results. For hardware tests, state the
 device model, transport, firmware, quantum, and whether the user scene and
-`~/.config/tuxmix/gui.json` were preserved.
+`~/.config/totalcontrol/gui.json` were preserved.
 
 ## Risk and rollback
 
@@ -33,5 +33,5 @@ workaround, remaining test gap, or follow-up needed in `docs/work/`.
 ## Documentation
 
 - [ ] Specifications updated when the implemented model changed
-- [ ] `docs/TUXMIX_Manual.md` updated for user-facing behaviour
+- [ ] `docs/TOTALCONTROL_Manual.md` updated for user-facing behaviour
 - [ ] Working notes and open questions kept in `docs/work/`

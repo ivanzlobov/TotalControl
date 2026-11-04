@@ -7,8 +7,8 @@
 # inversion the two captured channels cancel; flipping either channel's
 # phase turns the sum into a strong signal.
 #
-# This is a DIGITAL loopback test, not an analog cable test.  TuxMix must
-# be stopped (one mixer writer).  Restart TuxMix afterwards to restore the
+# This is a DIGITAL loopback test, not an analog cable test.  TotalControl must
+# be stopped (one mixer writer).  Restart TotalControl afterwards to restore the
 # saved scene; the probe leaves the hardware matrix in its test state.
 #
 # Usage:
@@ -20,13 +20,13 @@
 #   --out DIR     output directory (default /tmp/opencode/uc-phase-<stamp>)
 #   --run-cmd C   run C between the baseline and the after capture
 #
-# Requires: fireface-ctl (cargo build -p tuxmix-core --example fireface-ctl
+# Requires: fireface-ctl (cargo build -p totalcontrol-core --example fireface-ctl
 # --features alsa), pactl, pw-play, pw-record, python3+numpy.
 
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-CTL="$ROOT/ui/tuxmix/target/debug/examples/fireface-ctl"
+CTL="$ROOT/ui/totalcontrol/target/debug/examples/fireface-ctl"
 CARD=2
 STAMP=$(date +%Y%m%dT%H%M%S)
 OUT="/tmp/opencode/uc-phase-$STAMP"
@@ -47,8 +47,8 @@ while [ $# -gt 0 ]; do
 done
 
 [ -x "$CTL" ] || { echo "missing $CTL; build the fireface-ctl example" >&2; exit 1; }
-if pgrep -x tuxmix-gui >/dev/null 2>&1; then
-    echo "TuxMix is running; stop it first (one mixer writer)" >&2
+if pgrep -x totalcontrol-gui >/dev/null 2>&1; then
+    echo "TotalControl is running; stop it first (one mixer writer)" >&2
     exit 1
 fi
 mkdir -p "$OUT"

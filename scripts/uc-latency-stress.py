@@ -12,7 +12,7 @@ Examples:
     scripts/uc-latency-stress.py --quantum 64 --seconds 60 --load 8 --writes-per-sec 150
 
 Requires: pw-metadata, pw-top.  Transport counters come from the built
-`ui/tuxmix/target/debug/examples/fireface-events` (or amixer when present).
+`ui/totalcontrol/target/debug/examples/fireface-events` (or amixer when present).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def run(args: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVENTS = ROOT / "ui/tuxmix/target/debug/examples/fireface-events"
+EVENTS = ROOT / "ui/totalcontrol/target/debug/examples/fireface-events"
 
 
 def hwdep_stats(card: str) -> dict[str, int] | None:

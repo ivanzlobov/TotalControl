@@ -14,11 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tuxmix:
+  totalcontrol:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ui/tuxmix
+        working-directory: ui/totalcontrol
     steps:
       - uses: actions/checkout@v4
 
@@ -40,5 +40,5 @@ jobs:
 
       - name: Test
         run: |
-          cargo test -p tuxmix-core --lib --features alsa
-          cargo test -p tuxmix-gui
+          cargo test -p totalcontrol-core --lib --features alsa
+          cargo test -p totalcontrol-gui

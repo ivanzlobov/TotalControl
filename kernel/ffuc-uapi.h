@@ -9,7 +9,7 @@
  * hwdep node.
  *
  * This header is the single source of truth for the ABI.  The Rust side
- * lives in ui/tuxmix/tuxmix-core/src/fireface/abi.rs and must be updated
+ * lives in ui/totalcontrol/totalcontrol-core/src/fireface/abi.rs and must be updated
  * together with it.
  */
 #ifndef _FFUC_UAPI_H

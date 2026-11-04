@@ -9,12 +9,12 @@
 #
 # Run a load in parallel, e.g.:
 #   scripts/audio-health.sh 60 &
-#   touch ui/tuxmix/tuxmix-gui/src/app.rs
-#   taskset -c 0-3,6-8,10-15 nice -n 19 cargo build --profile profiling -p tuxmix-gui
+#   touch ui/totalcontrol/totalcontrol-gui/src/app.rs
+#   taskset -c 0-3,6-8,10-15 nice -n 19 cargo build --profile profiling -p totalcontrol-gui
 set -u
 secs=${1:-30}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${TMPDIR:-/tmp}/tuxmix-ffuc-counters
+bin=${TMPDIR:-/tmp}/totalcontrol-ffuc-counters
 gcc -O2 -I"$root/kernel" -o "$bin" "$root/tools/ffuc-counters.c" || exit 1
 node=/dev/snd/hwC2D0
 get() { "$bin" "$node" 2>/dev/null | sed -n "s/.*[[:space:]]$1=\([0-9][0-9]*\).*/\1/p"; }

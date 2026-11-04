@@ -68,7 +68,7 @@ request; do not commit or push directly to `main`.
   PR unless they are required for the same tested behaviour.
 - Hardware and driver PRs record the device model, transport, firmware,
   quantum, test evidence, and confirmation that the user scene and
-  `~/.config/tuxmix/gui.json` were preserved.
+  `~/.config/totalcontrol/gui.json` were preserved.
 
 ## Working rules
 
@@ -76,14 +76,14 @@ request; do not commit or push directly to `main`.
   for Windows/oracle questions and acknowledgements. Linux owns
   `LINUX-STATUS.md`, `LINUX-REQUESTS.md`, `DECISIONS.md`, `analysis/*` and
   `coordination/inbox/windows/*`.
-- Push only to our own repository, `jspx-projects/tuxmix-fireface`.
-- The UI is part of this repository. Do not add an external TuxMix development
+- Push only to our own repository, `jspx-projects/TotalControl`.
+- The UI is part of this repository. Do not add an external TotalControl development
   remote; the imported upstream history is on `archive/tuxmix-upstream`.
-- Preserve the user scene and `~/.config/tuxmix/gui.json`. Leave the device on
+- Preserve the user scene and `~/.config/totalcontrol/gui.json`. Leave the device on
   the user's scene after hardware tests.
 - One Fireface at a time.
-- Verify with `cargo test -p tuxmix-core --lib --features alsa` and
-  `cargo test -p tuxmix-gui`.
+- Verify with `cargo test -p totalcontrol-core --lib --features alsa` and
+  `cargo test -p totalcontrol-gui`.
 - Do not replace device-backed behaviour with host-side approximations. If the
   unit supports something and the register is unknown, add it to
   `docs/work/` and request a capture.

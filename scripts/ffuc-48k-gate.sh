@@ -30,7 +30,7 @@
 #
 # Requirements: the fireface-ctl example, Python 3, alsa-utils, pipewire,
 # wireplumber and pulseaudio-utils (pactl).  Build the control example with:
-#   cargo build -p tuxmix-core --example fireface-ctl --features alsa
+#   cargo build -p totalcontrol-core --example fireface-ctl --features alsa
 #
 # This gate covers the UC only.  UCX and Babyface Pro FS have separate
 # transport/protocol validation.
@@ -40,7 +40,7 @@
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-CTL="$ROOT/ui/tuxmix/target/debug/examples/fireface-ctl"
+CTL="$ROOT/ui/totalcontrol/target/debug/examples/fireface-ctl"
 MAKE_TONE="$ROOT/scripts/make_test_wav.py"
 
 MODE="all"
@@ -86,7 +86,7 @@ done
 for cmd in python3 aplay arecord pactl pw-play pw-record pw-link pw-metadata fuser; do
     command -v "$cmd" >/dev/null 2>&1 || fail "missing command: $cmd"
 done
-[ -x "$CTL" ] || fail "missing $CTL — run: cargo build -p tuxmix-core --example fireface-ctl --features alsa"
+[ -x "$CTL" ] || fail "missing $CTL — run: cargo build -p totalcontrol-core --example fireface-ctl --features alsa"
 [ -f "$MAKE_TONE" ] || fail "missing $MAKE_TONE"
 
 find_card() {
@@ -117,8 +117,8 @@ esac
 
 MODEL=$("$CTL" "$CARD" info 2>/dev/null | sed -n 's/.*model=\([0-9]*\).*/\1/p' || true)
 [ "$MODEL" = "1" ] || fail "this gate is validated for the UC only (model=$MODEL)"
-if pgrep -x tuxmix-gui >/dev/null 2>&1; then
-    fail "TuxMix is running; stop it so only one writer owns the mixer"
+if pgrep -x totalcontrol-gui >/dev/null 2>&1; then
+    fail "TotalControl is running; stop it so only one writer owns the mixer"
 fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ffuc-48k-gate.XXXXXX")

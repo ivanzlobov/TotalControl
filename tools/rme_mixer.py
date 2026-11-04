@@ -3,7 +3,7 @@
 
 NOTE: since the 2026-10-25 transport-core refactor the kernel module creates
 no ALSA mixer controls.  This tool only works against an old module; the
-current path is the hwdep API (docs/HWDEP-ABI.md) and TuxMix.
+current path is the hwdep API (docs/HWDEP-ABI.md) and TotalControl.
 
 Uses libasound.so.2 through ctypes, so alsa-lib-devel is not required.
 

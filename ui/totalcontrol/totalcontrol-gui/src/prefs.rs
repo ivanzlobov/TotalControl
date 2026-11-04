@@ -1,0 +1,249 @@
+//! The GUI's own preferences — how the window was laid out, not what the
+//! mixer is doing (that is the shared auto-saved scene, see
+//! `totalcontrol_core::scene`). One JSON file in the XDG config directory
+//! (`$XDG_CONFIG_HOME/totalcontrol/gui.json`, else `~/.config/totalcontrol/gui.json`):
+//! the open view, the sidebar's state, the mixer row count, the zoom, and
+//! the user's channel names, the PipeWire rate / buffer size forced here.
+//!
+//! Every field is optional on read (`#[serde(default)]`), so a file from
+//! an older build, or a hand-edited one missing keys, still loads and
+//! leaves the rest at the app's defaults. A file that does not parse at
+//! all is ignored the same way: preferences are a convenience, never a
+//! reason not to start.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use totalcontrol_core::ChannelId;
+
+use crate::app::View;
+use crate::widgets::strip::FlyoutKind;
+
+/// What to do on the first connect: read the device into the GUI (the safe
+/// default, no writes), or write the saved GUI/auto scene into the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SyncDirection {
+    #[default]
+    DeviceToGui,
+    GuiToDevice,
+}
+
+/// Control Room settings. These are application preferences, not mixer
+/// scene values; they configure the monitoring functions rather than the
+/// current routing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControlRoomSettings {
+    /// Mono hardware input index, or `None`.
+    pub talkback_input: Option<usize>,
+    pub talkback_dim_db: f32,
+    pub listenback_input: Option<usize>,
+    pub listenback_dim_db: f32,
+    pub recall_db: f32,
+    pub main_dim_db: f32,
+    /// Stereo hardware-input pair index, or `None`.
+    pub external_input: Option<usize>,
+    pub external_gain_db: f32,
+    pub pfl_replaces_solo: bool,
+    pub exclusive_solo_pfl: bool,
+}
+
+impl Default for ControlRoomSettings {
+    fn default() -> Self {
+        Self {
+            talkback_input: None,
+            talkback_dim_db: -20.0,
+            listenback_input: None,
+            listenback_dim_db: -20.0,
+            recall_db: -10.0,
+            main_dim_db: -20.0,
+            external_input: None,
+            external_gain_db: -3.0,
+            pfl_replaces_solo: false,
+            exclusive_solo_pfl: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Prefs {
+    pub view: Option<View>,
+    /// Last selected device kind label (`Fireface UCX`, `Fireface UC`, …).
+    /// Applied at startup; changing it in the UI also switches live.
+    pub device: Option<String>,
+    /// Serial number of the last selected physical unit.  This is the
+    /// stable identity across reconnects and card-index changes; the model
+    /// label above is only a fallback for older preference files.
+    pub device_serial: Option<String>,
+    pub sidebar_open: Option<bool>,
+    /// The FX column between the mixer and the sidebar (Reverb/Echo).
+    /// Missing = shown, which is TotalMix's own default.
+    #[serde(default)]
+    pub fx_panel: Option<bool>,
+    /// Control Room monitoring assignments, by `ASSIGN_DESTS` index.
+    #[serde(default)]
+    pub assign: [Option<usize>; 7],
+    /// Control Room monitoring settings, configured in the settings dialog.
+    #[serde(default)]
+    pub control_room: ControlRoomSettings,
+    pub sidebar_width: Option<f32>,
+    /// Options, Snapshots, Groups, Mixer Layout, in that order.
+    pub panels_open: Option<[bool; 4]>,
+    /// Superseded by `row_mode`; still read, so an older file keeps its
+    /// choice, and no longer written.
+    #[serde(skip_serializing)]
+    pub two_row: Option<bool>,
+    pub row_mode: Option<crate::app::RowMode>,
+    pub ui_scale: Option<f32>,
+    /// User channel names, keyed by the strip they were typed on. A list
+    /// of pairs rather than a map: JSON object keys must be strings, and
+    /// `ChannelId` serializes as a tagged value.
+    pub labels: Vec<(ChannelId, String)>,
+    /// TotalMix's "Show Names": display the original names even where the
+    /// user renamed a channel.
+    pub show_original_names: bool,
+    /// The PipeWire rate / buffer size forced from the Settings panel
+    /// (`0` = PipeWire's own), applied again at launch.
+    pub engine_force_rate: Option<u32>,
+    /// Logical size of the window at the last close.
+    pub window_size: Option<(f32, f32)>,
+    /// Closing the window hides it in the tray instead of quitting.
+    pub keep_in_tray: Option<bool>,
+    pub engine_force_quantum: Option<u32>,
+    /// Per-strip UI state: collapsed strips and the Settings/EQ/Trim
+    /// panels that were left open.  This is GUI state, like TotalMix's
+    /// Workspace, not mixer/device state.
+    pub collapsed: Vec<ChannelId>,
+    pub flyouts: Vec<(ChannelId, FlyoutKind)>,
+    /// Last selected hardware-output submix (output-pair index).
+    pub sel_out: Option<usize>,
+    /// First-connect direction.  Missing = DeviceToGui (safe, no writes).
+    pub sync_direction: Option<SyncDirection>,
+    /// RME's "Always init DSP devices with TotalMix FX settings": suppress
+    /// the startup mismatch prompt and write the saved TotalControl scene.
+    #[serde(default)]
+    pub always_init_device: bool,
+    /// Stereo-link groupings (pure GUI model state, no device writes).
+    pub input_pair_link: Vec<bool>,
+    pub output_link: Vec<bool>,
+}
+
+/// Where the preferences live. `None` only if neither `XDG_CONFIG_HOME`
+/// nor `HOME` is set, in which case nothing is persisted.
+pub fn path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("totalcontrol").join("gui.json"))
+}
+
+pub fn load(path: &Path) -> Prefs {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save(path: &Path, prefs: &Prefs) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
+    // Write-then-rename, so a crash mid-write never leaves a truncated
+    // file behind (which `load` would then silently discard).
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_partial_file_loads_with_defaults_for_the_rest() {
+        let p: Prefs = serde_json::from_str(r#"{ "two_row": true }"#).unwrap();
+        assert_eq!(p.two_row, Some(true));
+        assert_eq!(p.view, None);
+        assert!(p.labels.is_empty());
+    }
+
+    #[test]
+    fn prefs_round_trip_through_a_file() {
+        let dir = std::env::temp_dir().join(format!("totalcontrol-prefs-test-{}", std::process::id()));
+        let file = dir.join("gui.json");
+        let prefs = Prefs {
+            view: Some(View::Matrix),
+            sidebar_open: Some(false),
+            sidebar_width: Some(260.0),
+            panels_open: Some([true, false, true, false]),
+            two_row: None,
+            row_mode: Some(crate::app::RowMode::Two),
+            ui_scale: Some(1.25),
+            labels: vec![(ChannelId::Input(0), "Vocal".into())],
+            show_original_names: true,
+            engine_force_rate: Some(96_000),
+            window_size: Some((1600.0, 900.0)),
+            keep_in_tray: Some(false),
+            engine_force_quantum: Some(128),
+            ..Default::default()
+        };
+        save(&file, &prefs).unwrap();
+        assert_eq!(load(&file), prefs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn control_room_defaults_match_the_reference_values() {
+        let cr = ControlRoomSettings::default();
+        assert_eq!(cr.talkback_input, None);
+        assert_eq!(cr.talkback_dim_db, -20.0);
+        assert_eq!(cr.listenback_input, None);
+        assert_eq!(cr.listenback_dim_db, -20.0);
+        assert_eq!(cr.recall_db, -10.0);
+        assert_eq!(cr.main_dim_db, -20.0);
+        assert_eq!(cr.external_input, None);
+        assert_eq!(cr.external_gain_db, -3.0);
+        assert!(!cr.pfl_replaces_solo);
+        assert!(!cr.exclusive_solo_pfl);
+    }
+
+    #[test]
+    fn control_room_settings_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "totalcontrol-prefs-control-room-{}",
+            std::process::id()
+        ));
+        let file = dir.join("gui.json");
+        let prefs = Prefs {
+            control_room: ControlRoomSettings {
+                talkback_input: Some(2),
+                talkback_dim_db: -21.5,
+                listenback_input: Some(3),
+                listenback_dim_db: -18.0,
+                recall_db: -12.5,
+                main_dim_db: -24.0,
+                external_input: Some(1),
+                external_gain_db: -4.0,
+                pfl_replaces_solo: true,
+                exclusive_solo_pfl: true,
+            },
+            ..Default::default()
+        };
+        save(&file, &prefs).unwrap();
+        assert_eq!(load(&file), prefs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_corrupt_file_is_ignored() {
+        let dir = std::env::temp_dir().join(format!("totalcontrol-prefs-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("gui.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        assert_eq!(load(&file), Prefs::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

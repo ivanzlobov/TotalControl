@@ -16,7 +16,7 @@
  *
  * Everything that is policy or a device model - matrix routing, faders, pan,
  * preamps, EQ/dynamics, clock preferences, meters, scenes - is implemented
- * in userspace (TuxMix) on top of the hwdep ABI in ffuc-uapi.h.  Do not add
+ * in userspace (TotalControl) on top of the hwdep ABI in ffuc-uapi.h.  Do not add
  * model-specific ALSA controls here; add a userspace profile instead.
  *
  * Transport summary

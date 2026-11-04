@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TotalControl
+GenericName=Audio Mixer
+Comment=Open-source TotalMix replacement for RME audio interfaces on Linux
+Exec=totalcontrol
+Icon=totalcontrol
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=RME;TotalMix;Babyface;Fireface;mixer;audio interface;

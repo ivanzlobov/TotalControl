@@ -7,7 +7,7 @@
 #   sudo make install    install into /lib/modules/$(uname -r)/updates
 #
 # This module is a transport core: USB, PCM and the snd-hwdep raw control
-# node.  Mixer/device policy lives in TuxMix (userspace).
+# node.  Mixer/device policy lives in TotalControl (userspace).
 
 snd-fireface-uc-y := ffuc.o ffuc-hwdep.o ffuc-midi.o
 obj-m += snd-fireface-uc.o

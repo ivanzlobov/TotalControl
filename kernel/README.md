@@ -9,7 +9,7 @@ The kernel module is a transport core:
 - one `snd-hwdep` control node per card;
 - the UC output-latch watchdog and engine recovery.
 
-Mixer state, routing, preamps, EQ, meters and scenes live in TuxMix
+Mixer state, routing, preamps, EQ, meters and scenes live in TotalControl
 userspace.  See [`../docs/DRIVER-ARCHITECTURE.md`](../docs/DRIVER-ARCHITECTURE.md)
 for the host/device/buffer picture and the measured latency budget.  The
 older protocol notes are in the archive (`docs/archive/`).
@@ -70,9 +70,9 @@ and two at 96 and above.  This covers the queued USB URBs and their margin.
 ## Userspace
 
 ```sh
-cd ../ui/tuxmix
-cargo run -p tuxmix-core --example fireface-scan --features alsa
-cargo run -p tuxmix-gui
+cd ../ui/totalcontrol
+cargo run -p totalcontrol-core --example fireface-scan --features alsa
+cargo run -p totalcontrol-gui
 ```
 
 The hwdep ABI is versioned (`FFUC_ABI_VERSION`); the Rust binding checks it

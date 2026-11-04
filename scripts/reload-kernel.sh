@@ -16,13 +16,13 @@ if lsmod | grep -q '^snd_fireface_uc '; then
 		echo "module still in use; checking holders..." >&2
 		echo "  refcnt: $(cat /sys/module/snd_fireface_uc/refcnt 2>/dev/null || echo '?')" >&2
 		# An unplugged unit can leave a process holding the removed hwdep
-		# node (TuxMix is the usual one), keeping the module reference.
+		# node (TotalControl is the usual one), keeping the module reference.
 		lsof +L1 2>/dev/null | grep -E 'snd/(hwC|pcmC)' >&2 || true
 		IFACE=$(ls -d /sys/bus/usb/drivers/snd-fireface-uc/*:*.* 2>/dev/null |
 			head -1 | xargs -r -n1 basename)
 		if [ -z "$IFACE" ]; then
 			echo "no bound USB interface to unbind." >&2
-			echo "Close TuxMix, or stop the audio services:" >&2
+			echo "Close TotalControl, or stop the audio services:" >&2
 			echo "  systemctl --user stop wireplumber pipewire-pulse pipewire" >&2
 			echo "then rerun this script." >&2
 			exit 1
@@ -30,7 +30,7 @@ if lsmod | grep -q '^snd_fireface_uc '; then
 		echo "unbinding $IFACE" >&2
 		echo -n "$IFACE" | sudo tee /sys/bus/usb/drivers/snd-fireface-uc/unbind >/dev/null
 		if ! sudo rmmod snd_fireface_uc; then
-			echo "module is still in use; close TuxMix or unplug the Fireface, then rerun." >&2
+			echo "module is still in use; close TotalControl or unplug the Fireface, then rerun." >&2
 			exit 1
 		fi
 	fi
@@ -46,5 +46,5 @@ echo '--- card ---'
 aplay -l | grep -A2 -i fireface || true
 echo '--- hwdep control node ---'
 # The kernel exposes raw vendor/register/meter transports here; mixer state
-# lives in TuxMix (see docs/HWDEP-ABI.md).
+# lives in TotalControl (see docs/HWDEP-ABI.md).
 ls -l /dev/snd/hwC*D* 2>/dev/null || true
