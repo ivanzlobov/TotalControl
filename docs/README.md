@@ -2,6 +2,9 @@
 
 Architecture and latency orientation: [`DRIVER-ARCHITECTURE.md`](DRIVER-ARCHITECTURE.md).
 
+Mixer, device-service and control-surface architecture:
+[`CONTROL-ARCHITECTURE.md`](CONTROL-ARCHITECTURE.md).
+
 The authoritative specification is in [`spec/`](spec/README.md):
 
 - [UC control specification](spec/UC-CONTROL-SPEC.md)
