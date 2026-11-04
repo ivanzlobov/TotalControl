@@ -7,8 +7,9 @@ projects.  Their notices apply to the parts they contributed.
 
 <https://github.com/ismail-bahloul/TuxMix>
 
-MIT License, Copyright (c) 2026 Iswad.  The license and copyright notice are
-kept verbatim in [`ui/tuxmix/LICENSE`](ui/tuxmix/LICENSE).
+MIT core, GPL-3.0-only GUI and TUI, Copyright (c) 2026 Iswad.  The license
+and copyright notices are kept in [`ui/tuxmix/LICENSE`](ui/tuxmix/LICENSE) and
+[`ui/tuxmix/COPYING`](ui/tuxmix/COPYING).
 
 ## snd-fireface-uc — Fireface UC kernel driver
 

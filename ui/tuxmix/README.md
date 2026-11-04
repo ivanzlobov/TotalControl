@@ -6,7 +6,7 @@
 
 **The TotalMix experience for RME interfaces, native on Linux.**
 
-[![AUR](https://img.shields.io/aur/version/tuxmix?style=flat-square&logo=archlinux&logoColor=white&label=AUR&color=1793d1)](https://aur.archlinux.org/packages/tuxmix) ![Rust](https://img.shields.io/badge/Rust-iced-b7410e?style=flat-square&logo=rust&logoColor=white) ![Platform](https://img.shields.io/badge/Linux-ALSA%20%C2%B7%20PipeWire-333?style=flat-square&logo=linux&logoColor=white) [![License](https://img.shields.io/badge/license-MIT%20%2F%20GPL--3.0-555?style=flat-square)](docs/guide.md#license)
+[![AUR](https://img.shields.io/aur/version/tuxmix?style=flat-square&logo=archlinux&logoColor=white&label=AUR&color=1793d1)](https://aur.archlinux.org/packages/tuxmix) ![Rust](https://img.shields.io/badge/Rust-iced-b7410e?style=flat-square&logo=rust&logoColor=white) ![Platform](https://img.shields.io/badge/Linux-ALSA%20%C2%B7%20PipeWire-333?style=flat-square&logo=linux&logoColor=white) [![License](https://img.shields.io/badge/license-MIT%20%2F%20GPL--3.0--only-555?style=flat-square)](docs/guide.md#license)
 
 <br>
 

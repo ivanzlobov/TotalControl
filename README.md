@@ -162,8 +162,13 @@ The repository contains separate works under different licenses:
   kernel and the GPL-2.0 sources it builds on.
 - Tools, scripts and documentation — **GPL-3.0-or-later**.  See
   [LICENSE](LICENSE).
-- `ui/tuxmix/` — TuxMix, **MIT**, with its own notices in
-  [ui/tuxmix/LICENSE](ui/tuxmix/LICENSE).
+- `ui/tuxmix/tuxmix-core` — **MIT**.
+- `ui/tuxmix/tuxmix-gui` and `ui/tuxmix/tuxmix-tui` — **GPL-3.0-only**.
+- `ui/tuxmix/tuxmix-usb` — **GPL-3.0-or-later**;
+  `ui/tuxmix/tuxmix-sys` — **GPL-3.0**.
+
+The UI notices are in [ui/tuxmix/LICENSE](ui/tuxmix/LICENSE) and
+[ui/tuxmix/COPYING](ui/tuxmix/COPYING).
 
 The module and the mixer meet at the kernel's hwdep ioctl interface; they are
 not combined into a single work.
@@ -172,11 +177,12 @@ not combined into a single work.
 
 This project is built on prior work, and we are grateful to its authors.
 
-- [TuxMix](https://github.com/ismail-bahloul/TuxMix) by Ismaïl Bahloul (MIT)
-  is the base of the mixer application: its device model, the Babyface Pro FS
-  support, the TUI and the scene system. His commit history is archived on the
-  `archive/tuxmix-upstream` branch, and the license and copyright notice stay in
-  [`ui/tuxmix/LICENSE`](ui/tuxmix/LICENSE).
+- [TuxMix](https://github.com/ismail-bahloul/TuxMix) by Ismaïl Bahloul
+  (MIT core, GPL-3.0-only GUI/TUI) is the base of the mixer application: its
+  device model, the Babyface Pro FS support, the TUI and the scene system. His
+  commit history is archived on the `archive/tuxmix-upstream` branch, and the
+  license and copyright notice stay in [`ui/tuxmix/LICENSE`](ui/tuxmix/LICENSE)
+  and [`ui/tuxmix/COPYING`](ui/tuxmix/COPYING).
 - [snd-fireface-uc](https://github.com/berndie/snd-fireface-uc) by Bernd Accou
   (MIT) is the earlier Fireface UC kernel driver; our UC transport follows its
   device modes, packet layout and status path.

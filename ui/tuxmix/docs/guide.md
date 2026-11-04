@@ -103,9 +103,8 @@ by the AUR package) and `tuxmix-tui`.
 
 ## License
 
-MIT for the application: `tuxmix-core`, `tuxmix-gui`, `tuxmix-tui` and the
-rest of the tree, see [`LICENSE`](../LICENSE).
-
-Two crates are copyleft: `tuxmix-usb` is GPL-3.0-or-later and `tuxmix-sys` is
-GPL-3.0. The built binaries link both, so as a whole they are GPL-3.0, which
-is the license the AUR package declares.
+`tuxmix-core` is MIT. `tuxmix-gui` and `tuxmix-tui` are GPL-3.0-only.
+`tuxmix-usb` is GPL-3.0-or-later and `tuxmix-sys` is GPL-3.0. The built
+binaries link the GPL crates, so as a whole they are GPL-3.0, which is the
+license the AUR package declares. See [`LICENSE`](../LICENSE) and
+[`COPYING`](../COPYING).
