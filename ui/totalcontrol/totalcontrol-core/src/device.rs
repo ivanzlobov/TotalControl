@@ -706,6 +706,22 @@ pub trait RmeDevice {
         ))
     }
 
+    /// Control-room Mono Main Out.
+    fn set_mono(&mut self, on: bool) -> Result<(), Error> {
+        let _ = on;
+        Err(Error::InvalidChannel(
+            "Mono is not supported on this backend".into(),
+        ))
+    }
+
+    /// Link Speaker B to the Main Out level.
+    fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), Error> {
+        let _ = on;
+        Err(Error::InvalidChannel(
+            "Speaker B link is not supported on this backend".into(),
+        ))
+    }
+
     /// EQ for Record toggle (settings keepalive bit 6).
     fn set_eq_for_record(&mut self, on: bool) -> Result<(), Error> {
         let _ = on;

@@ -308,14 +308,26 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3c24` | Echo high cut | 0 Off, 1 16k, 2 12k, 3 8k, 4 4k, 5 2k |
 | `0x3c25` | Echo volume | 0.1 dB, signed |
 | `0x3c26` | Echo width | 0..100 |
-| `0x1802` / `0x1902` | Phones/Main mode word | bit 1 = Speaker B |
-| `0x3d00` | control-room state | bit 3 = Speaker B |
+| `NN02` | output mode word | bit 0 mute, bit 1 monitor routing |
+| `0x3d00` | control-room state | 0 idle, 1 Speaker B active |
 | `0x3d03` | DIM / Recall | 0/1 |
 | `0x3f00` | heartbeat / window | sequence |
 | `0x3f98` | monitor mask; `0x83ff` with Mono, `0xfc40` with Cue, `0xffff` idle | — |
 | `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 Mono Main Out | — |
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
+
+Mono Main Out writes `0x3f9e` bit 1 and `0x3f98 = 0x83ff`; switching it off
+writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`.
+
+Assigning Speaker B to an output pair writes `NN02 = 2` on that pair and
+`0x3d00 = 0` while Speaker B is off. Clearing the assignment writes
+`NN02 = 0` on the old pair and `0x3d00 = 0`.
+
+Switching Speaker B on writes `NN02` bit 1 on the Main pair, clears it on the
+Speaker B pair, and writes `0x3d00 = 1`. Switching it off reverses the two
+mode words and writes `0x3d00 = 0`. Bit 0 is the output mute and is preserved
+in both writes.
 
 ## 5. Channel topology
 

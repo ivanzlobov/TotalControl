@@ -709,17 +709,30 @@ Settings stays lit while its dialog is open. `assign` is a selector, not a
 monitoring button: it uses the same compact row and white drop decoration as a
 strip's output-bus trigger, and its row stays lit while the menu is open.
 
-Dim and Recall act on the assigned Main Out pair. Dim attenuates the current
-Main Out level by the configured Main Out Dim amount and restores it on
-release. Recall sets the underlying Main Out level to the configured listening
-volume once; it does not latch. Without an assigned Main Out both controls
-leave the mix unchanged and never fall back to a Phones pair.
+Dim and Recall act on the assigned Main Out pair. Without an assigned Main
+Out both controls leave the mix unchanged and never fall back to a Phones
+pair.
 
-Dim is a runtime monitoring state. Applying a scene, reconnecting, or a
-stream-start or sample-rate reapply leaves it off and does not attenuate the
-Main Out again. The saved scene contains the level that was audible, not a
-pending Dim operation. Speaker B uses the UCX control-room register. Mono and
-Mute FX are stored in the device scene.
+Dim saves the current Main Out levels, lowers that pair by the configured Dim
+amount and engages the device Dim state. Releasing Dim restores the saved
+levels. A Main Out fader move while Dim is engaged changes the audible level
+but not the saved pre-Dim levels; releasing Dim returns to the saved levels.
+Changing the Main Dim amount while Dim is engaged re-applies the new amount to
+the saved levels. Reassigning or clearing the Main Out releases Dim first.
+
+Recall sets the underlying Main Out level to the configured listening volume
+once; it does not latch. When Dim is engaged, Recall updates the saved pre-Dim
+levels and the current dimmed levels together.
+
+Dim and Speaker B are runtime monitoring states. Applying a scene,
+reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
+not attenuate the Main Out again. The saved scene contains the level that was
+audible, not a pending Dim operation. Speaker B requires assigned Main and
+Speaker B outputs; its button switches the monitor routing between those
+pairs, and clearing the Speaker B assignment also clears Speaker B. The
+`Link to Main` setting makes Speaker B follow Main fader, Recall and Dim
+changes; unlinked it keeps its own level. Mono and Mute FX are stored in the
+device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
@@ -734,7 +747,7 @@ destinations in this order, using the same names as the Control Room channels:
 | Destination | Device |
 |---|---|
 | Main | output mode word `0xNN02` bit 1 on the chosen pair |
-| Speaker B | the same bit, plus control-room state word `0x3d00 = 3` |
+| Speaker B | the same bit, plus control-room state word `0x3d00 = 1` while active |
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 
@@ -854,7 +867,7 @@ and a click outside the dialog discard the draft.
 |---|---|
 | Talkback | Input, Dim |
 | Listenback | Input, Dim |
-| Main Out | Recall, Dim, External Input, Gain |
+| Main Out | Recall, Dim, External Input, Gain, Speaker B link |
 | Solo / PFL Mode | Live Mode, PFL replaces Solo; Exclusive Solo/PFL Mode |
 
 The input lists start with `None`, then the mono hardware inputs by their
@@ -864,8 +877,9 @@ one-decimal value display.
 
 `OK` stores the settings in `gui.json` for the selected device. The settings
 are not part of the mixer scene, snapshot, undo stack or OSC scene state.
-The Control Room button state (`Dim`, `Talkback`, `Speaker B`, `Mono`,
-`Mute FX`) remains runtime state and is not stored in these settings.
+`Dim` and `Speaker B` remain runtime state. `Mono` and `Mute FX` are mixer
+scene state. External Input and the Solo/PFL modes are stored as settings;
+their runtime signal paths are not implemented.
 
 ## 13. Latency display
 
@@ -911,5 +925,6 @@ layout slots, the current auto-saved mix and the GUI preference file.
 - Input and playback meters are post-trim: a constant input tone falls and
   rises with the trim value. Output meters remain post-fader.
 - Width is host-side and has no width register: it rewrites the pair's
-  matrix cells. Playback stereo/mono, Mono, No Trim and Talkback receive are
-  host-side and do not produce device writes.
+  matrix cells. Playback stereo/mono, No Trim and Talkback receive are
+  host-side and do not produce device writes. Mono writes the monitor flags
+  `0x3f9e` and `0x3f98`.

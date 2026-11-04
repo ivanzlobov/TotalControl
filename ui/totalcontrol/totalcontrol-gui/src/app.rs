@@ -573,6 +573,12 @@ impl RmeDevice for DeviceHandle {
     fn set_speaker_b(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_speaker_b(on))
     }
+    fn set_mono(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_mono(on))
+    }
+    fn set_speaker_b_linked(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_speaker_b_linked(on))
+    }
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_main_out(pair))
     }
@@ -2045,6 +2051,7 @@ pub enum Message {
     ControlRoomListenbackDim(f32),
     ControlRoomRecallDb(f32),
     ControlRoomMainDim(f32),
+    ControlRoomSpeakerBLinked(bool),
     ControlRoomExternalInput(Option<usize>),
     ControlRoomExternalGain(f32),
     ControlRoomPflReplacesSolo(bool),
@@ -3180,6 +3187,17 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
 pub fn apply_control_room_assignments(
     state: &mut TotalControl,
 ) -> Result<(), totalcontrol_core::Error> {
+    // Preferences can outlive the device that wrote them.  Drop destinations
+    // this unit cannot address and keep a hardware pair in one slot only.
+    let pairs = state.device.output_pair_count();
+    let mut seen = HashSet::new();
+    for slot in state.assign.iter_mut().take(OUTPUT_DESTS) {
+        if let Some(pair) = *slot {
+            if pair >= pairs || !seen.insert(pair) {
+                *slot = None;
+            }
+        }
+    }
     let main = state.assign.first().copied().flatten();
     if state.device.settings().main_out != main {
         state.device.set_main_out(main)?;
@@ -3189,6 +3207,9 @@ pub fn apply_control_room_assignments(
             state.device.set_main_out_b(Some(b))?;
         }
     }
+    state
+        .device
+        .set_speaker_b_linked(state.control_room.speaker_b_linked)?;
     enforce_control_room_stereo(state);
     Ok(())
 }
@@ -4738,6 +4759,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ControlRoomListenbackDim(_)
             | Message::ControlRoomRecallDb(_)
             | Message::ControlRoomMainDim(_)
+            | Message::ControlRoomSpeakerBLinked(_)
             | Message::ControlRoomExternalInput(_)
             | Message::ControlRoomExternalGain(_)
             | Message::ControlRoomPflReplacesSolo(_)
@@ -6900,7 +6922,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             if let Err(e) = state.device.set_speaker_b(on) {
                 fail(state, "speaker_b", &e);
             }
-            notify_osc_bool(state, "/speaker_b", on);
+            notify_osc_bool(state, "/speaker_b", state.device.settings().speaker_b);
         }
         Message::ControlRoomRecall => {
             if let Err(e) = state.device.set_main_recall(state.control_room.recall_db) {
@@ -6910,7 +6932,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ControlRoomMono(on) => {
             state.device.settings_mut().mono = on;
             state.device.sync_settings_to_device();
-            notify_osc_bool(state, "/mono", on);
+            if let Err(e) = state.device.set_mono(on) {
+                fail(state, "mono", &e);
+            }
+            notify_osc_bool(state, "/mono", state.device.settings().mono);
         }
         Message::ControlRoomMuteFx(on) => {
             if let Err(e) = state.device.set_mute_fx(on) {
@@ -6939,6 +6964,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.control_room_settings_open = false;
             state.prefs_dirty = true;
             flush_prefs(state);
+            if state.device.settings().dim {
+                if let Err(e) = state
+                    .device
+                    .set_dim_with(true, state.control_room.main_dim_db)
+                {
+                    fail(state, "dim", &e);
+                }
+            }
+            if let Err(e) = state
+                .device
+                .set_speaker_b_linked(state.control_room.speaker_b_linked)
+            {
+                fail(state, "speaker B link", &e);
+            }
         }
         Message::ResetControlRoomSettings => {
             state.control_room_draft = ControlRoomSettings::default();
@@ -6960,6 +6999,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::ControlRoomMainDim(db) => {
             state.control_room_draft.main_dim_db = round_half_db(db);
+        }
+        Message::ControlRoomSpeakerBLinked(on) => {
+            state.control_room_draft.speaker_b_linked = on;
         }
         Message::ControlRoomExternalInput(pair) => {
             state.control_room_draft.external_input = pair;
@@ -13030,6 +13072,14 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
                 scale,
             ),
         ),
+        row_with(
+            "Speaker B",
+            checkbox(draft.speaker_b_linked)
+                .label("Link to Main")
+                .text_size(text_size)
+                .on_toggle(Message::ControlRoomSpeakerBLinked)
+                .into(),
+        ),
         section("SOLO / PFL MODE"),
         checkbox(draft.pfl_replaces_solo)
             .label("Live Mode, PFL replaces Solo")
@@ -13964,7 +14014,7 @@ mod tests {
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
-        apply_startup_sync, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
+        apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
@@ -14413,6 +14463,20 @@ mod tests {
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn restored_assignments_drop_unknown_and_duplicate_pairs() {
+        let mut state = new(true, None, None);
+        let pairs = state.device.output_pair_count();
+        state.assign[0] = Some(pairs + 8);
+        state.assign[2] = Some(1);
+        state.assign[3] = Some(1);
+
+        apply_control_room_assignments(&mut state).unwrap();
+        assert_eq!(state.assign[0], None);
+        assert_eq!(state.assign[2], Some(1));
+        assert_eq!(state.assign[3], None);
     }
 
     #[test]

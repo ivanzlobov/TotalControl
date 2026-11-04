@@ -390,19 +390,60 @@ The button stack, on one channel, has:
 | `speaker B` | switches monitoring from Main to the Speaker B output |
 | `mono` | sums the Main monitor signal to mono |
 | `talkback` | sends the talkback source to the performers’ Phones outputs and dims the other Phones signals |
-| `ext. input` | replaces the Main mix with the selected stereo external input |
+| `ext. input` | selects the configured external input; its runtime path is not active in this build |
 | `mute FX` | removes Reverb and Echo from Main |
 | `settings` | opens the Control Room Settings dialog |
 | `assign` | assigns Main, Speaker B and Phones outputs and selects the Cue/PFL destination |
 
-Talkback and External Input are temporary listening states. Recall changes the
-underlying monitor level; it is not a second volume control that is restored
-on release.
+### Monitoring states
 
 Dim and Recall need an assigned Main Out. Without one they leave the mix
-unchanged; they never act on a Phones output. Dim is a live monitoring state
-and is not stored in a scene: applying a scene or changing the sample rate
-turns it off without lowering the monitor level a second time.
+unchanged; they never act on a Phones output.
+
+**Dim** saves the current Main Out level, lowers the Main Out by the configured
+Dim amount and engages the device Dim state. Releasing Dim restores the saved
+level. Moving the Main Out fader while Dim is engaged changes the level you
+hear, but not the saved pre-Dim level: releasing Dim returns to the level saved
+when Dim was engaged. Changing the Main Dim amount while Dim is engaged updates
+the current attenuation immediately. Reassigning or clearing the Main Out
+releases Dim first. Dim is runtime only and is not stored in a scene; applying
+a scene or changing the sample rate leaves Dim off without lowering the level
+again.
+
+**Recall** sets the Main Out level to the configured listening volume. When
+Dim is engaged, Recall changes the saved pre-Dim level and the current dimmed
+level together. Recall is momentary and does not latch.
+
+**Speaker B** switches monitoring to the output assigned to Speaker B. Both
+the Main Out and Speaker B must be assigned first. Speaker B is runtime only:
+loading a scene or recalling a snapshot does not switch it back on.
+
+`Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
+to Main. Linked, the Speaker B pair follows Main fader, Recall and Dim changes;
+unlinked, it keeps its own level.
+
+**Mono** sums the Main monitor signal to mono. **Mute FX** removes the Reverb
+and Echo returns from the Control Room outputs. Both are part of the mixer
+scene.
+
+Talkback and Listenback are temporary monitoring states. Releasing Talkback
+returns the monitor mix to its previous state; Talkback is not stored in a
+scene.
+
+External Input and the Solo/PFL modes have settings in the Control Room
+Settings dialog. Their runtime signal paths are not yet connected in this
+build.
+
+### What is stored where
+
+| State | Stored in |
+|---|---|
+| Main and Speaker B assignments | TotalControl preferences |
+| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences |
+| Dim and Speaker B active state | Runtime only |
+| Talkback and Listenback active state | Runtime only |
+| Mono, Mute FX and the mixer levels | Mixer scene |
+| Phones 1–4 destinations | TotalControl preferences |
 
 ### Control Room Settings
 
@@ -414,7 +455,7 @@ The dialog has four sections:
 
 - **Talkback**: source and Dim.
 - **Listenback**: source and Dim.
-- **Main Out**: Recall, Dim, External Input and Gain.
+- **Main Out**: Recall, Dim, External Input, Gain and `Speaker B → Link to Main`.
 - **Solo / PFL Mode**: `Live Mode, PFL replaces Solo` and
   `Exclusive Solo/PFL Mode`.
 

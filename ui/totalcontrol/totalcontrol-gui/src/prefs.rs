@@ -41,6 +41,8 @@ pub struct ControlRoomSettings {
     pub listenback_dim_db: f32,
     pub recall_db: f32,
     pub main_dim_db: f32,
+    /// Speaker B follows Main Out level changes.
+    pub speaker_b_linked: bool,
     /// Stereo hardware-input pair index, or `None`.
     pub external_input: Option<usize>,
     pub external_gain_db: f32,
@@ -57,6 +59,7 @@ impl Default for ControlRoomSettings {
             listenback_dim_db: -20.0,
             recall_db: -10.0,
             main_dim_db: -20.0,
+            speaker_b_linked: false,
             external_input: None,
             external_gain_db: -3.0,
             pfl_replaces_solo: false,
@@ -225,6 +228,7 @@ mod tests {
                 listenback_dim_db: -18.0,
                 recall_db: -12.5,
                 main_dim_db: -24.0,
+                speaker_b_linked: true,
                 external_input: Some(1),
                 external_gain_db: -4.0,
                 pfl_replaces_solo: true,
