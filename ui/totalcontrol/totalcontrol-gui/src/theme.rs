@@ -426,16 +426,18 @@ pub fn db_slider(
     let fill = Background::Color(TEXT_PRIMARY);
     slider::Style {
         rail: Rail {
-            backgrounds: (Background::Color(BORDER), fill),
-            width: 3.0,
+            // The empty part is the same near-black slot as a channel
+            // fader; the filled part and handle carry the white chrome.
+            backgrounds: (Background::Color(BG_DEEP), fill),
+            width: 6.0,
             border: Border {
-                color: BORDER,
+                color: BG_DEEP,
                 width: 0.0,
                 radius: RADIUS_SM.into(),
             },
         },
         handle: Handle {
-            shape: HandleShape::Circle { radius: 5.0 },
+            shape: HandleShape::Circle { radius: 8.0 },
             background: fill,
             border_width: 0.0,
             border_color: TEXT_PRIMARY,

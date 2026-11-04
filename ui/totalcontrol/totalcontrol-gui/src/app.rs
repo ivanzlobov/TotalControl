@@ -2037,6 +2037,8 @@ pub enum Message {
     OpenControlRoomSettings,
     CancelControlRoomSettings,
     ApplyControlRoomSettings,
+    /// Restore the draft dialog values to their defaults without closing it.
+    ResetControlRoomSettings,
     ControlRoomTalkbackInput(Option<usize>),
     ControlRoomTalkbackDim(f32),
     ControlRoomListenbackInput(Option<usize>),
@@ -4708,6 +4710,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::OpenControlRoomSettings
             | Message::CancelControlRoomSettings
             | Message::ApplyControlRoomSettings
+            | Message::ResetControlRoomSettings
             | Message::ControlRoomTalkbackInput(_)
             | Message::ControlRoomTalkbackDim(_)
             | Message::ControlRoomListenbackInput(_)
@@ -6913,6 +6916,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.control_room_settings_open = false;
             state.prefs_dirty = true;
             flush_prefs(state);
+        }
+        Message::ResetControlRoomSettings => {
+            state.control_room_draft = ControlRoomSettings::default();
         }
         Message::ControlRoomTalkbackInput(input) => {
             state.control_room_draft.talkback_input = input;
@@ -12849,18 +12855,34 @@ fn choice_index(choices: &[String], label: &str) -> Option<usize> {
 }
 
 fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<'static, Message> {
-    row![
+    let wheel = move |delta: iced::mouse::ScrollDelta| {
+        let dy = match delta {
+            iced::mouse::ScrollDelta::Lines { y, .. } => y,
+            iced::mouse::ScrollDelta::Pixels { y, .. } => y,
+        };
+        let step = if dy >= 0.0 { 0.5 } else { -0.5 };
+        on_change(round_half_db(value + step))
+    };
+    let row = row![
         slider(-65.0..=0.0, value, move |v| on_change(round_half_db(v)))
             .step(0.5_f32)
             .style(theme::db_slider)
-            .width(Length::Fill),
+            .width(Length::Fixed(250.0 * scale))
+            .height(24.0 * scale),
         text(format!("{value:+.1} dB"))
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_XS * scale)
-            .width(Length::Fixed(64.0 * scale)),
+            .size(16.0 * scale)
+            .width(Length::Fixed(84.0 * scale)),
     ]
     .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center)
+    .align_y(iced::Alignment::Center);
+    // The whole row, including its vertical padding, is the wheel target.
+    mouse_area(
+        container(row)
+            .padding([theme::SPACE_SM * scale, 0.0])
+            .width(Length::Fill),
+    )
+    .on_scroll(wheel)
     .into()
 }
 
@@ -12869,29 +12891,31 @@ fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<
 fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     let draft = &state.control_room_draft;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
+    let content_w = 500.0 * scale;
 
     let section = |label: &'static str| -> Element<'static, Message> {
         container(
             row![
                 text(label)
-                    .color(theme::TEXT_SEC)
-                    .size(theme::TEXT_MICRO * ts),
+                    .color(theme::TEXT_PRIMARY)
+                    .size(text_size),
                 iced::widget::rule::horizontal(1),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
         )
         .padding(iced::Padding {
-            top: theme::SPACE_MD * scale,
+            top: (theme::SPACE_XXL + theme::SPACE_SM) * scale,
             ..iced::Padding::ZERO
         })
+        .width(Length::Fill)
         .into()
     };
     let label = |text_value: &'static str| -> Element<'static, Message> {
         text(text_value)
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_XS * ts)
+            .size(text_size)
             .width(Length::Fixed(150.0 * scale))
             .into()
     };
@@ -12899,9 +12923,19 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         row![label(label_text), control]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center)
+            .width(Length::Fill)
     };
 
     let mono_choices = mono_input_choices(state);
+    let ext_choices = stereo_input_choices(state);
+    let longest = mono_choices
+        .iter()
+        .chain(ext_choices.iter())
+        .map(|choice| choice.chars().count())
+        .max()
+        .unwrap_or(0);
+    let pick_w = (longest as f32 * 9.0 + 40.0) * scale;
+
     let tb_choices = mono_choices.clone();
     let tb_pick = pick_list(
         tb_choices.clone(),
@@ -12909,7 +12943,8 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         move |choice| Message::ControlRoomTalkbackInput(choice_index(&tb_choices, &choice)),
     )
     .style(theme::pick_list)
-    .width(Length::Fill);
+    .text_size(text_size)
+    .width(Length::Fixed(pick_w));
 
     let lb_choices = mono_choices.clone();
     let lb_pick = pick_list(
@@ -12918,9 +12953,9 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         move |choice| Message::ControlRoomListenbackInput(choice_index(&lb_choices, &choice)),
     )
     .style(theme::pick_list)
-    .width(Length::Fill);
+    .text_size(text_size)
+    .width(Length::Fixed(pick_w));
 
-    let ext_choices = stereo_input_choices(state);
     let ext_pick_choices = ext_choices.clone();
     let ext_pick = pick_list(
         ext_pick_choices.clone(),
@@ -12928,12 +12963,13 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         move |choice| Message::ControlRoomExternalInput(choice_index(&ext_pick_choices, &choice)),
     )
     .style(theme::pick_list)
-    .width(Length::Fill);
+    .text_size(text_size)
+    .width(Length::Fixed(pick_w));
 
     let body = column![
         text("CONTROL ROOM SETTINGS")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(text_size),
         section("TALKBACK"),
         row_with("Input", tb_pick.into()),
         row_with(
@@ -12971,41 +13007,50 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         section("SOLO / PFL MODE"),
         checkbox(draft.pfl_replaces_solo)
             .label("Live Mode, PFL replaces Solo")
+            .text_size(text_size)
+            .width(Length::Fill)
             .on_toggle(Message::ControlRoomPflReplacesSolo),
         checkbox(draft.exclusive_solo_pfl)
             .label("Exclusive Solo/PFL Mode")
+            .text_size(text_size)
+            .width(Length::Fill)
             .on_toggle(Message::ControlRoomExclusiveSoloPfl),
     ]
-    .spacing(theme::SPACE_SM * scale)
+    .spacing(theme::SPACE_MD * scale)
     .width(Length::Fill);
 
     let footer = row![
+        hint(
+            button(text("default").size(text_size))
+                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::ResetControlRoomSettings),
+            "restore the default values",
+            scale,
+        ),
         iced::widget::Space::new().width(Length::Fill),
-        button(text("Cancel").size(theme::TEXT_XS * ts))
+        button(text("Cancel").size(text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
             .style(theme::ghost_button)
             .on_press(Message::CancelControlRoomSettings),
-        button(text("OK").size(theme::TEXT_XS * ts))
+        button(text("OK").size(text_size))
             .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
             .style(theme::toggle_button(true, theme::ACCENT))
             .on_press(Message::ApplyControlRoomSettings),
     ]
     .spacing(theme::SPACE_MD * scale)
-    .align_y(iced::Alignment::Center);
+    .align_y(iced::Alignment::Center)
+    .width(Length::Fill);
 
     let card = opaque(
         container(
-            column![
-                scrollable(body).height(Length::Fixed(455.0 * scale)),
-                footer,
-            ]
-            .spacing(theme::SPACE_LG * scale)
-            .width(Length::Fill),
+            column![body, footer]
+                .spacing(theme::SPACE_LG * scale)
+                .width(Length::Fill),
         )
         .style(theme::dialog)
         .padding(theme::SPACE_XL * scale)
-        .width(Length::Fill)
-        .max_width(560.0 * scale),
+        .width(Length::Fixed(content_w + 2.0 * theme::SPACE_XL * scale)),
     );
 
     opaque(
@@ -14438,6 +14483,18 @@ mod tests {
             CONTROL_ROOM_W + 2.0 * theme::SPACE_SM,
             "only the six output assignments count"
         );
+    }
+
+    #[test]
+    fn control_room_default_resets_the_draft_without_closing() {
+        let mut state = new(true, None, None);
+        state.control_room_settings_open = true;
+        state.control_room_draft.talkback_input = Some(2);
+        state.control_room_draft.recall_db = -3.0;
+        let _ = update(&mut state, Message::ResetControlRoomSettings);
+        assert!(state.control_room_settings_open);
+        assert_eq!(state.control_room_draft.talkback_input, None);
+        assert_eq!(state.control_room_draft.recall_db, -10.0);
     }
 
     #[test]
