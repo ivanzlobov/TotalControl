@@ -122,6 +122,38 @@ fn banked(st: &RmeState, n: usize) -> Option<usize> {
     (idx < CHANNELS).then_some(idx)
 }
 
+fn reverb_field(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "reverbEnable" => "on",
+        "reverbType" => "type",
+        "reverbPredelay" => "predelay",
+        "reverbLowcut" => "lowcut",
+        "reverbHighcut" => "highcut",
+        "reverbRoomscale" => "roomscale",
+        "reverbAttack" => "attack",
+        "reverbHold" => "hold",
+        "reverbRelease" => "release",
+        "reverbTime" => "time",
+        "reverbHighdamp" => "highdamp",
+        "reverbSmooth" => "smooth",
+        "reverbWidth" => "width",
+        "reverbVolume" => "volume",
+        _ => return None,
+    })
+}
+
+fn echo_field(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "echoEnable" => "on",
+        "echoType" => "type",
+        "echoDelaytime" => "delay",
+        "echoFeedback" => "feedback",
+        "echoWidth" => "width",
+        "echoVolume" => "volume",
+        _ => return None,
+    })
+}
+
 /// Parse one message.  Returns the messages to dispatch, or `None` when the
 /// path is outside this slice.
 pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Message>> {
@@ -346,6 +378,24 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
             Some(vec![Message::EqBandQ(cid, band, q.clamp(0.05, 10.0))])
         }
 
+        // ---- page 3: reverb and echo -----------------------------------
+        ["3", path] if path.starts_with("reverb") => {
+            let field = reverb_field(path)?;
+            Some(vec![Message::OscRmeFx {
+                echo: false,
+                field,
+                value: arg_f32(first)?,
+            }])
+        }
+        ["3", path] if path.starts_with("echo") => {
+            let field = echo_field(path)?;
+            Some(vec![Message::OscRmeFx {
+                echo: true,
+                field,
+                value: arg_f32(first)?,
+            }])
+        }
+
         // ---- page 3: snapshots, undo -----------------------------------
         ["3", "snapshots", n, _] => {
             let n: u8 = n.parse().ok()?;
@@ -353,6 +403,11 @@ pub fn parse(addr: &str, args: &[OscType], st: &mut RmeState) -> Option<Vec<Mess
         }
         ["3", "undo"] => Some(vec![Message::Undo]),
         ["3", "redo"] => Some(vec![Message::Redo]),
+        ["3", "muteGroups", ..] | ["3", "soloGroups", ..] | ["3", "faderGroups", ..] => {
+            Some(Vec::new())
+        }
+        ["3", rec] if rec.starts_with("record") => Some(Vec::new()),
+        ["4", ..] => Some(Vec::new()),
 
         // ---- monitor controls ------------------------------------------
         ["1", "mainDim"] => Some(vec![Message::Dim(arg_on(first)?)]),

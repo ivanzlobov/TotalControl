@@ -1847,6 +1847,8 @@ pub enum Message {
     /// Global FX panel.
     ReverbChanged(Reverb),
     EchoChanged(Echo),
+    /// A TotalMix FX page-3 parameter applied to the current Reverb/Echo.
+    OscRmeFx { echo: bool, field: &'static str, value: f32 },
     /// Per-output FX Return level in dB.
     FxReturnChanged(usize, f32),
     /// Per-channel FX send level in dB.
@@ -5865,6 +5867,46 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 format!("{base}/auto/rise"),
                 vec![OscType::Float(d.auto_rise_s)],
             );
+        }
+        Message::OscRmeFx { echo, field, value } => {
+            if echo {
+                let mut e = state.device.settings().echo.unwrap_or_default();
+                match field {
+                    "on" => e.on = value >= 0.5,
+                    "type" => e.kind = value.round().clamp(0.0, 2.0) as u8,
+                    "delay" => e.delay_ms = (value * 2000.0).round() as u16,
+                    "feedback" => e.feedback = (value * 100.0).round().clamp(0.0, 100.0) as u8,
+                    "highcut" => e.high_cut = (value * 5.0).round().clamp(0.0, 5.0) as u8,
+                    "volume" => e.volume_db = value * 65.0 - 65.0,
+                    "width" => e.width = (value * 100.0).round().clamp(0.0, 100.0),
+                    _ => {}
+                }
+                if let Err(err) = state.device.set_echo(&e) {
+                    fail(state, "set_echo", &err);
+                }
+            } else {
+                let mut r = state.device.settings().reverb.unwrap_or_default();
+                match field {
+                    "on" => r.on = value >= 0.5,
+                    "type" => r.kind = value.round().clamp(0.0, 9.0) as u8,
+                    "predelay" => r.pre_delay_ms = (value * 999.0).round() as u16,
+                    "lowcut" => r.low_cut_hz = (20.0 * 25.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
+                    "highcut" => r.high_cut_hz = (5000.0 * 4.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
+                    "roomscale" => r.room_scale = 0.5 + value.clamp(0.0, 1.0) * 2.5,
+                    "attack" => r.attack_ms = (5.0 + value.clamp(0.0, 1.0) * 395.0).round() as u16,
+                    "hold" => r.hold_ms = (5.0 + value.clamp(0.0, 1.0) * 395.0).round() as u16,
+                    "release" => r.release_ms = (5.0 + value.clamp(0.0, 1.0) * 495.0).round() as u16,
+                    "time" => r.reverb_time_ds = (1.0 + value.clamp(0.0, 1.0) * 49.0).round() as u16,
+                    "highdamp" => r.high_damp_hz = (1000.0 * 20.0f32.powf(value.clamp(0.0, 1.0))).round() as u16,
+                    "smooth" => r.smoothness = (value * 100.0).round().clamp(0.0, 100.0) as u8,
+                    "width" => r.width = (value * 100.0).round().clamp(0.0, 100.0),
+                    "volume" => r.volume_db = value * 65.0 - 65.0,
+                    _ => {}
+                }
+                if let Err(err) = state.device.set_reverb(&r) {
+                    fail(state, "set_reverb", &err);
+                }
+            }
         }
         Message::ReverbChanged(r) => {
             if let Err(e) = state.device.set_reverb(&r) {
