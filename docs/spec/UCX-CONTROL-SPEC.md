@@ -1,15 +1,13 @@
 # Fireface UCX control specification
 
-This document defines the USB transport, register map, channel model and
-device capabilities of the Fireface UCX backend.
+This document defines the USB transport, register map, channel model and device capabilities of the Fireface UCX backend.
 
-Units and ranges are the values used by the backend. A register value is
-16-bit unless stated otherwise.
+Units and ranges are the values used by the backend. A register value is 16-bit unless stated otherwise.
 
 ## 1. Device model
 
 | Property | Value |
-|---|---|
+| - | - |
 | Logical inputs | 18 |
 | Logical outputs | 18 |
 | Software playback channels | 18 |
@@ -19,15 +17,19 @@ Units and ranges are the values used by the backend. A register value is
 | ALSA PCM channels | 18 at every rate |
 | Default transport | isochronous interface 0 |
 | Alternate transport | interrupt interface 5 |
-| Front panel | one rotary encoder: selects an output channel and sets its volume |
+| Front panel | One rotary push/encoder: push to select item, push again and rotate to modify its setting. Available items:  
+i1-i4: Input gain.   
+For output channels: Fader level.   
+L1-L6 (AN1-AN6 out), PH (AN7/8), SP (SPDIF  out), A1-A8 (ADAT1-8) .   
+SU: Setup. 1-7: select stored preset, FA=factory mode. Only when not connected: Ad (Ad mode) and CC (Class Compliant mode) |
 
-The serial string is the stable unit identity. The ALSA card index changes
-across reconnects and personality changes.
+
+The serial string is the stable unit identity. The ALSA card index changes across reconnects and personality changes.
 
 ## 2. USB transport
 
 | Interface | Purpose | Endpoints |
-|---|---|---|
+| - | - | - |
 | IF0 | ISO audio | OUT `0x0e`, IN `0x8f` |
 | IF1 | Register and state transport | OUT `0x0c`, IN `0x8d` |
 | IF1 | Meter pages | IN `0x85` |
@@ -35,8 +37,9 @@ across reconnects and personality changes.
 | IF4 | Stream status | IN `0x8b` |
 | IF5 | Interrupt audio | OUT `0x01`, IN `0x02` |
 
+
 | Traffic | Endpoint or request | When |
-|---|---|---|
+| - | - | - |
 | Live parameters | bulk OUT `0x0c`, 4-byte words; bursts of 8 or 252 bytes | always |
 | State echo | bulk IN `0x8d`, 4-byte words | always |
 | Meters | bulk IN `0x85`, 244 bytes | always |
@@ -46,14 +49,19 @@ across reconnects and personality changes.
 | Vendor write | EP0 `0x40` | connect, stream open/close, rate apply, dialog apply |
 | Vendor read | EP0 `0xC0` (`0x1c`, `0x1e`, `0x1f`, `0x11`) | continuous poll |
 
+
 ### 2.1 EP0 contexts
 
 EP0 `0x40` handles:
 
 - connect initialisation;
+
 - audio stream open and close;
+
 - sample-rate family apply;
+
 - settings-dialog apply;
+
 - loopback (`0x15`).
 
 Live faders, mutes, pans, preamps, EQ, dynamics and FX use bulk `0x0c`.
@@ -62,11 +70,11 @@ Live faders, mutes, pans, preamps, EQ, dynamics and FX use bulk `0x0c`.
 
 The device is polled with a 0..15 window sequence:
 
-```text
-WRITE bulk 0x0c: 0x3f00 = n
-READ  EP0 0xc0:  0x1c, wLength 8
-READ  EP0 0xc0:  0x1e, wLength 8
-READ  EP0 0xc0:  0x1f, wLength 8
+```
+WRITE bulk 0x0c: 0x3f00 = n  
+READ  EP0 0xc0:  0x1c, wLength 8  
+READ  EP0 0xc0:  0x1e, wLength 8  
+READ  EP0 0xc0:  0x1f, wLength 8  
 READ  EP0 0xc0:  0x11, wLength 8
 ```
 
@@ -74,49 +82,37 @@ Each read returns 4 bytes. The payloads are available on Linux.
 
 ### 2.3 Alternate settings
 
-The unit accepts one SET_INTERFACE at connect: interface 5, alternate
-setting 1. It remains selected for streaming at 1x rates and is not reissued
-for stream open/close or a 44.1↔48 kHz change.
+The unit accepts one SET\_INTERFACE at connect: interface 5, alternate setting 1. It remains selected for streaming at 1x rates and is not reissued for stream open/close or a 44.1↔48 kHz change.
 
 ### 2.4 Write pacing
 
-IF1 words are coalesced into bursts of up to 63 words (252 bytes). The
-backend waits 5 ms after a burst of up to 8 words and 16 ms after a larger
-burst. A full scene is sent as 63-word bursts; closer spacing overflows the
-device receive FIFO and the bulk transfer times out.
+IF1 words are coalesced into bursts of up to 63 words (252 bytes). The backend waits 5 ms after a burst of up to 8 words and 16 ms after a larger burst. A full scene is sent as 63-word bursts; closer spacing overflows the device receive FIFO and the bulk transfer times out.
 
-Live width, pan and volume changes use the same queue: one control event is
-sent as one or more bursts rather than one transfer per register. A live
-change made while a scene is being applied joins the scene batch.
+Live width, pan and volume changes use the same queue: one control event is sent as one or more bursts rather than one transfer per register. A live change made while a scene is being applied joins the scene batch.
 
 ### 2.5 MIDI
 
-The unit exposes a class-compliant USB-MIDI 1.0 streaming interface on IF2 with
-bulk IN `0x86` and bulk OUT `0x07`. Events are 4-byte USB-MIDI packets: cable
-number in the high nibble of byte 0, code index number in the low nibble, then
-one to three MIDI bytes. The wired MIDI input and output use cable 0.
+The unit exposes a class-compliant USB-MIDI 1.0 streaming interface on IF2 with bulk IN `0x86` and bulk OUT `0x07`. Events are 4-byte USB-MIDI packets: cable number in the high nibble of byte 0, code index number in the low nibble, then one to three MIDI bytes. The wired MIDI input and output use cable 0.
 
-The driver claims IF2 and exposes one ALSA rawmidi port. Input URBs are
-submitted only while the input substream is open; output data is packed into
-the same event packets and written to the bulk OUT endpoint.
+The driver claims IF2 and exposes one ALSA rawmidi port. Input URBs are submitted only while the input substream is open; output data is packed into the same event packets and written to the bulk OUT endpoint.
 
 ## 3. IF1 register words
 
 A word is 32-bit little-endian:
 
-```text
-bit 31      bits 30..16      bits 15..0
+```
+bit 31      bits 30..16      bits 15..0  
 parity      address:15       value:16
 ```
 
 The parity bit is odd parity over the address and value fields:
 
-```c
-w = (address & 0x7fff) << 16 | value;
-p = w;
-p ^= p >> 16; p ^= p >> 8; p ^= p >> 4;
-p ^= p >> 2;  p ^= p >> 1;
-if (!(p & 1))
+```
+w = (address & 0x7fff) \<\< 16 | value;  
+p = w;  
+p ^= p \>\> 16; p ^= p \>\> 8; p ^= p \>\> 4;  
+p ^= p \>\> 2;  p ^= p \>\> 1;  
+if (!(p & 1))  
         w |= 0x80000000;
 ```
 
@@ -124,13 +120,12 @@ Device-to-host words on `0x8d` use the same layout.
 
 ### 3.1 Heartbeat
 
-The backend writes `0x3f00 = 0..15` every 100 ms. The heartbeat makes the unit
-stream live state changes.
+The backend writes `0x3f00 = 0..15` every 100 ms. The heartbeat makes the unit stream live state changes.
 
 ### 3.2 Decoded state words
 
 | Address | Meaning |
-|---|---|
+| - | - |
 | `0x3f00` | heartbeat counter |
 | `0x3f01` | constant `0xffff` |
 | `0x3f02` | rolling status value |
@@ -146,23 +141,17 @@ stream live state changes.
 | `0x1200..0x2300`, offset 0 | hardware-output volume, signed 0.1 dB |
 | `0x12a0`, `0x22a0` | selected-submix fader record |
 
-Input gains are reported when the physical encoder moves. Output-volume state
-is mapped to the Phones-first output order. The encoder reports the `NN00` of
-the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
 
-Front-panel 48 V, Inst and Level changes write `NN08`/`NN09` on both sides of
-a linked pair and emit no state word.
+Input gains are reported when the physical encoder moves. Output-volume state is mapped to the Phones-first output order. The encoder reports the `NN00` of the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
 
-The state stream is sparse. It is not a full scene dump and it does not echo
-every writable register. It carries no observed word for 48 V, Inst, Level,
-reference level, the options word, EQ, dynamics or FX. The full mixer scene is
-written by the host at connect; gain, output volume, DIM, Talkback and MS
-state are the live controls read back from this stream.
+Front-panel 48 V, Inst and Level changes write `NN08`/`NN09` on both sides of a linked pair and emit no state word.
+
+The state stream is sparse. It is not a full scene dump and it does not echo every writable register. It carries no observed word for 48 V, Inst, Level, reference level, the options word, EQ, dynamics or FX. The full mixer scene is written by the host at connect; gain, output volume, DIM, Talkback and MS state are the live controls read back from this stream.
 
 ### 3.3 State readback
 
 | State | Source |
-|---|---|
+| - | - |
 | Input gain 1–4 | `0xNN07` state word |
 | Output volume | `0xNN00` state word |
 | DIM | `0x3d03` state word |
@@ -174,21 +163,22 @@ state are the live controls read back from this stream.
 | Options word | unit-owned |
 | EQ, dynamics, FX | host scene only |
 
+
 ## 4. Register model
 
 DSP channels:
 
-```text
-hardware inputs   0x00..0x11
+```
+hardware inputs   0x00..0x11  
 hardware outputs  0x12..0x23
 ```
 
-A channel register is `(channel << 8) | offset`.
+A channel register is `(channel \<\< 8) | offset`.
 
 ### 4.1 Input channel block
 
 | Offset | Meaning | Encoding |
-|---|---|---|
+| - | - | - |
 | `0x00` | mute | 0/1 |
 | `0x01` | FX send | 0.1 dB, signed |
 | `0x02` | stereo mode | 0 mono, 1 stereo |
@@ -227,12 +217,13 @@ A channel register is `(channel << 8) | offset`.
 | `0x82` | AutoLevel headroom | 0.1 dB |
 | `0x83` | AutoLevel rise time | 0.1 s |
 
+
 ### 4.2 Output channel block
 
 Output registers are the input layout mirrored at `+0x1200`:
 
 | Offset | Meaning | Encoding |
-|---|---|---|
+| - | - | - |
 | `0x00` | volume | 0.1 dB, signed |
 | `0x01` | balance | −100..+100 |
 | `0x02` | mute | 0/1 |
@@ -243,32 +234,32 @@ Output registers are the input layout mirrored at `+0x1200`:
 | `0x40..0x4b` | EQ and low cut | as inputs |
 | `0x60..0x83` | dynamics and AutoLevel | as inputs |
 
+
 ### 4.3 Matrix and fader records
 
 | Address | Meaning |
-|---|---|
-| `0x4000 + dsp_output*0x40 + source` | matrix coefficient |
+| - | - |
+| `0x4000 + dsp\_output\*0x40 + source` | matrix coefficient |
 | `source = 0..17` | hardware input |
 | `source = 0x20..0x31` | software playback channel |
-| `(0x12 + dsp_output) << 8 | (0xe0 + input)` | input fader/pan record |
+| `(0x12 + dsp\_output) \<\< 8 | (0xe0 + input)` | input fader/pan record |
 
-The matrix coefficient is 15-bit signed with a scale flag. Bit 15 selects the
-coarse scale (`value / 4096`); otherwise the scale is `value / 32768`.
+
+The matrix coefficient is 15-bit signed with a scale flag. Bit 15 selects the coarse scale (`value / 4096`); otherwise the scale is `value / 32768`.
 
 The fader record carries two writes on the same address:
 
-```text
-level = tenths_db << 4        (-650 .. +60)
-pan   = (pan << 4) | 0x8      (-100 .. +100)
+```
+level = tenths\_db \<\< 4        (-650 .. +60)  
+pan   = (pan \<\< 4) | 0x8      (-100 .. +100)
 ```
 
-The fader base is submix-dependent: the selected hardware output chooses the
-`0x12e0` / `0x22e0` family.
+The fader base is submix-dependent: the selected hardware output chooses the `0x12e0` / `0x22e0` family.
 
 ### 4.4 Global registers
 
 | Address | Meaning | Encoding |
-|---|---|---|
+| - | - | - |
 | `0x3c00` | Reverb enable | 0/1 |
 | `0x3c01` | Reverb type | algorithm index |
 | `0x3c02` | Reverb pre-delay | ms |
@@ -296,27 +287,27 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3f98` | monitor mask; `0x83ff` with Mono, `0xfc40` with Cue, `0xffff` idle | — |
 | `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 Mono Main Out | — |
 
+
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
 ## 5. Channel topology
 
 ### 5.1 Inputs
 
-```text
-AN1, AN2, AN3, AN4, AN5, AN6, AN7, AN8,
-SPDIF L, SPDIF R,
+```
+AN1, AN2, AN3, AN4, AN5, AN6, AN7, AN8,  
+SPDIF L, SPDIF R,  
 ADAT 1..8
 ```
 
-Inputs 1–4 are mono preamps. Inputs 5/6, 7/8, SPDIF and the ADAT pairs are
-stereo pairs.
+Inputs 1–4 are mono preamps. Inputs 5/6, 7/8, SPDIF and the ADAT pairs are stereo pairs.
 
 ### 5.2 Outputs
 
 The DSP pair order is Phones-first. The display row is TotalMix order.
 
 | Internal pair | Display row | Name | DSP pair |
-|---|---|---|---|
+| - | - | - | - |
 | 0 | 4 | Phones 7/8 | 6 |
 | 1 | 1 | AN1/2 | 0 |
 | 2 | 2 | AN3/4 | 2 |
@@ -327,12 +318,13 @@ The DSP pair order is Phones-first. The display row is TotalMix order.
 | 7 | 8 | ADAT 5/6 | 14 |
 | 8 | 9 | ADAT 7/8 | 16 |
 
+
 ### 5.3 Software playback
 
 The playback row is:
 
-```text
-AN1/2, AN3/4, AN5/6, Phones 7/8, SPDIF,
+```
+AN1/2, AN3/4, AN5/6, Phones 7/8, SPDIF,  
 AS 1/2, ADAT 3/4, ADAT 5/6, ADAT 7/8
 ```
 
@@ -343,201 +335,139 @@ Playback channels are numbered 0..17 in that row.
 ### 6.1 Preamp
 
 | Control | Inputs | Register |
-|---|---|---|
+| - | - | - |
 | Gain | AN1–AN4 | `NN07`, 0.1 dB |
 | 48 V | AN1/2 | `NN08`, 0/1 |
 | Level | AN3/4 | `NN08`, 0/1/2 |
 | Inst | AN3/4 | `NN09`, 0/1 |
 | AutoSet | AN1/2 | `NN0A`, 0/1 |
 
+
 Level values:
 
 | Value | Label |
-|---|---|
+| - | - |
 | 0 | −10 dBV |
 | 1 | +4 dBu |
 | 2 | LoGain |
 
-Gain is reported back when the physical encoder moves: the IF1 state stream
-carries `NN07` in 0.1 dB. AN1/2 step in 1 dB; AN3/4 step in 0.5 dB, stored as
-raw half-dB units 0..24. 48 V, Level and Inst have no observed readback.
+
+Gain is reported back when the physical encoder moves: the IF1 state stream carries `NN07` in 0.1 dB. AN1/2 step in 1 dB; AN3/4 step in 0.5 dB, stored as raw half-dB units 0..24. 48 V, Level and Inst have no observed readback.
 
 ### 6.2 Signal processing
 
 | Control | Register | Encoding |
-|---|---|---|
+| - | - | - |
 | Phase | `NN06` | 0/1 |
 | MS processing | `NN05` | 0/1 |
 | FX send | `NN01` | 0.1 dB, signed |
 
-The unit has no register for these; the host computes them and rewrites
-the affected sends:
 
-- **Width** — the pair's 2x2 send matrix, rewritten only while the pair
-  has a live send; with every send at -infinity the sweep writes nothing.
-  The equal-power law is `theta = (1 - w) * pi / 4`, `a = G * cos(theta)`,
-  `b = G * sin(theta)`, where `G` is the send gain of each source. One
-  routing writes `(dsp L, src L) = a`, `(dsp L, src R) = b`,
-  `(dsp R, src L) = b`, `(dsp R, src R) = a`. Each send occupies one
-  matrix cell; no second copy is written. The `0x44xx` anchors are the
-  same matrix family with the ADAT 7/8 submix (DSP outputs 16/17) selected.
-- **MS Proc on software playback** — the playback's send words
-  (`0x4020…`, `0x4120…`, `0x41A0…` families).  On hardware inputs MS Proc
-  writes `NN05` on both channels and the same send recompute.  With source
-  gains `gl`/`gr` and the width angle `theta`, the coefficients are
-  `gl*(cos+sin)/2`, `gr*(sin+cos)/2`, `gl*(cos-sin)/2` and
-  `gr*(sin-cos)/2` for L→L, R→L, L→R and R→R.  Mono inputs reject MS Proc.
-- **Talkback receive per output** and **No Trim** — host-side flags; they
-  write nothing.  With a talkback source selected, enabling talkback on an
-  output injects that source as ordinary send words into the output and dims
-  the other active sends by the Dim setting (measured -20 dB on a -20 dB
-  setting).  It also sets the FX-return level of each affected monitored
-  output to `0xFD76` (`-65.0 dB`); the Reverb and Echo processors remain
-  enabled.  The activation flag is a read-modify-write of `0x3f9e` bit 0,
-  preserving bit 1 (Mono Main Out).  Releasing Talkback restores the prior
-  send and FX-return words.
-- **Trim** — a per-channel attenuation applied to every send (see
-  `TUXMIX-SPEC.md`).
+The unit has no register for these; the host computes them and rewrites the affected sends:
 
-**FX send** is an absolute level in 0.1 dB (`0x0000` = 0.0 dB, `NN01`).
-A fader drag writes `0x0000` to the send and restores the knob value when
-the drag ends; the send value itself is the knob value and does not track
-the fader.  The post-fader coupling is not expressed in `NN01`.
+- **Width** — the pair's 2x2 send matrix, rewritten only while the pair has a live send; with every send at -infinity the sweep writes nothing. The equal-power law is `theta = (1 - w) \* pi / 4`, `a = G \* cos(theta)`, `b = G \* sin(theta)`, where `G` is the send gain of each source. One routing writes `(dsp L, src L) = a`, `(dsp L, src R) = b`, `(dsp R, src L) = b`, `(dsp R, src R) = a`. Each send occupies one matrix cell; no second copy is written. The `0x44xx` anchors are the same matrix family with the ADAT 7/8 submix (DSP outputs 16/17) selected.
+
+- **MS Proc on software playback** — the playback's send words (`0x4020…`, `0x4120…`, `0x41A0…` families).  On hardware inputs MS Proc writes `NN05` on both channels and the same send recompute.  With source gains `gl`/`gr` and the width angle `theta`, the coefficients are `gl\*(cos+sin)/2`, `gr\*(sin+cos)/2`, `gl\*(cos-sin)/2` and `gr\*(sin-cos)/2` for L→L, R→L, L→R and R→R.  Mono inputs reject MS Proc.
+
+- **Talkback receive per output** and **No Trim** — host-side flags; they write nothing.  With a talkback source selected, enabling talkback on an output injects that source as ordinary send words into the output and dims the other active sends by the Dim setting (measured -20 dB on a -20 dB setting).  It also sets the FX-return level of each affected monitored output to `0xFD76` (`-65.0 dB`); the Reverb and Echo processors remain enabled.  The activation flag is a read-modify-write of `0x3f9e` bit 0, preserving bit 1 (Mono Main Out).  Releasing Talkback restores the prior send and FX-return words.
+
+- **Trim** — a per-channel attenuation applied to every send (see `TUXMIX-SPEC.md`).
+
+**FX send** is an absolute level in 0.1 dB (`0x0000` = 0.0 dB, `NN01`). A fader drag writes `0x0000` to the send and restores the knob value when the drag ends; the send value itself is the knob value and does not track the fader.  The post-fader coupling is not expressed in `NN01`.
 
 ### 6.2.1 Talkback activation
 
-Talkback is a host-driven rewrite of the monitored sends. The source route
-uses a four-word block per side. For a hardware input at zero-based index
-`i`, the Talkback block is:
+Talkback is a host-driven rewrite of the monitored sends. The source route uses a four-word block per side. For a hardware input at zero-based index `i`, the Talkback block is:
 
-For a receiving output pair whose DSP output is `D`, and hardware input
-index `i`:
+For a receiving output pair whose DSP output is `D`, and hardware input index `i`:
 
 | Field | Address |
-|---|---|
-| source level | `((0x12 + D) << 8) \| (0xE0 + i)` |
+| - | - |
+| source level | `((0x12 + D) \<\< 8) \\| (0xE0 + i)` |
 | source pan | the same address, second word |
-| source send | `0x4000 + D * 0x40 + i` |
-| right-side level | `((0x13 + D) << 8) \| (0xE0 + i)` |
+| source send | `0x4000 + D \* 0x40 + i` |
+| right-side level | `((0x13 + D) \<\< 8) \\| (0xE0 + i)` |
 | right-side pan | the same address, second word |
-| right-side send | `0x4000 + (D + 1) * 0x40 + i` |
+| right-side send | `0x4000 + (D + 1) \* 0x40 + i` |
 
-The measured Phones 1 receiver had DSP output 2, so its 18 inputs occupied
-`0x14e0..0x14f1`, `0x15e0..0x15f1`, `0x4080..0x4091` and
-`0x40c0..0x40d1`. The addresses move with the receiving output; they are not
-fixed to Phones 1. Level and pan are written as two consecutive words at the
-same address; pan is `(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8`
-hard left and `0x0648` hard right.
 
-The source send is a matrix coefficient. At source fader `0 dB` and pan
-centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and
-`-21 dB` is `0x07FC`. The coefficient is the matrix encoding of the source
-fader gain multiplied by the equal-power pan gain. At `-65 dB` the source
-block is omitted. The source level word remained `0xD760` (`-65.0 dB`) in
-the measured Phones 1 routing; the route gain is carried by the companion
-matrix word.
+The measured Phones 1 receiver had DSP output 2, so its 18 inputs occupied `0x14e0..0x14f1`, `0x15e0..0x15f1`, `0x4080..0x4091` and `0x40c0..0x40d1`. The addresses move with the receiving output; they are not fixed to Phones 1. Level and pan are written as two consecutive words at the same address; pan is `(pan \<\< 4) | 0x8`, with `0x0008` at centre, `0xF9C8` hard left and `0x0648` hard right.
 
-The source block is followed by the attenuated active sends and the FX
-returns. A normal ON/OFF burst is 60 bytes (15 words). The periodic monitor
-refresh described below can add a leading `0x3f98` word to the same transfer,
-making it 64 bytes. With no active sends, the burst is shorter. When
-the Listenback source is the same input as the Talkback source, no source
-block is written; the captured form is 36 bytes, containing only the
-active sends, FX returns and `0x3f9e`.
+The source send is a matrix coefficient. At source fader `0 dB` and pan centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and `-21 dB` is `0x07FC`. The coefficient is the matrix encoding of the source fader gain multiplied by the equal-power pan gain. At `-65 dB` the source block is omitted. The source level word remained `0xD760` (`-65.0 dB`) in the measured Phones 1 routing; the route gain is carried by the companion matrix word.
+
+The source block is followed by the attenuated active sends and the FX returns. A normal ON/OFF burst is 60 bytes (15 words). The periodic monitor refresh described below can add a leading `0x3f98` word to the same transfer, making it 64 bytes. With no active sends, the burst is shorter. When the Listenback source is the same input as the Talkback source, no source block is written; the captured form is 36 bytes, containing only the active sends, FX returns and `0x3f9e`.
 
 The activation sequence also:
 
-- attenuates active sends into the Talkback-receiving outputs by the
-  Talkback Dim amount, and active sends into Main by the Listenback Dim
-  amount;
-- writes each affected output's FX-return level (`0x1203`, `0x1303`, …) to
-  `0xFD76` (`-65.0 dB`), without disabling the Reverb or Echo processors;
-- sets bit 0 of `0x3f9e` with a read-modify-write, preserving bit 1 (Mono
-  Main Out).
+- attenuates active sends into the Talkback-receiving outputs by the Talkback Dim amount, and active sends into Main by the Listenback Dim amount;
 
-A `0 dB` Dim writes no active-send word at all. At `-65 dB` the affected
-send is `0x0000`. Listenback Dim is independent of the Listenback input:
-with the input at `None`, Main sends still use the configured Listenback Dim.
+- writes each affected output's FX-return level (`0x1203`, `0x1303`, …) to `0xFD76` (`-65.0 dB`), without disabling the Reverb or Echo processors;
 
-Listenback with a different source adds a second source block at the Main
-output's DSP addresses: `0x12e0 + i` / `0x13e0 + i` with matrix
-`0x4000 + i` / `0x4040 + i` when Main is DSP 0. With the same source as
-Talkback, only the first source block is present.
+- sets bit 0 of `0x3f9e` with a read-modify-write, preserving bit 1 (Mono Main Out).
 
-Deactivation restores the words captured before activation and clears bit 0.
-A source change while Talkback is inactive emitted a 4-byte
-`0x0001 = 0x0000` cleanup in the measured scene; a live source change also
-rewrote the old and new source blocks. A `None` source emits no activation
-burst.
+A `0 dB` Dim writes no active-send word at all. At `-65 dB` the affected send is `0x0000`. Listenback Dim is independent of the Listenback input: with the input at `None`, Main sends still use the configured Listenback Dim.
 
-The host rewrites the monitor mask (`0x3f98`) and the monitor flags
-(`0x3f9e`) together every 1.5–1.9 s while it is connected. `0x3f98` is
-`0x83ff` while Mono Main Out is active, `0xfc40` while a Cue output is
-active, and `0xffff` otherwise. The refresh is independent of Talkback and
-can share a USB transfer with an unrelated burst.
+Listenback with a different source adds a second source block at the Main output's DSP addresses: `0x12e0 + i` / `0x13e0 + i` with matrix `0x4000 + i` / `0x4040 + i` when Main is DSP 0. With the same source as Talkback, only the first source block is present.
+
+Deactivation restores the words captured before activation and clears bit 0. A source change while Talkback is inactive emitted a 4-byte `0x0001 = 0x0000` cleanup in the measured scene; a live source change also rewrote the old and new source blocks. A `None` source emits no activation burst.
+
+The host rewrites the monitor mask (`0x3f98`) and the monitor flags (`0x3f9e`) together every 1.5–1.9 s while it is connected. `0x3f98` is `0x83ff` while Mono Main Out is active, `0xfc40` while a Cue output is active, and `0xffff` otherwise. The refresh is independent of Talkback and can share a USB transfer with an unrelated burst.
 
 ### 6.3 Mute, solo and stereo mode
 
 | Control | Behaviour |
-|---|---|
+| - | - |
 | Mute | `NN00 = 1`; active sends are zeroed and restored on unmute |
 | Solo | host-side monitoring state; no solo register |
 | Stereo mode | `NN02`, 0 mono / 1 stereo |
 
-Solo writes no device word of its own. With active sends, solo and unsolo
-rewrite the affected send cells; with no active send, the toggle produces no
-host-to-device traffic.
+
+Solo writes no device word of its own. With active sends, solo and unsolo rewrite the affected send cells; with no active send, the toggle produces no host-to-device traffic.
 
 ### 6.4 Mode buttons
 
-Stereo, 48 V, Inst, AutoSet and Phase are per-channel states. Link state is
-`NN02`. The linked-pair parameter rules are defined in
-[`OSC-CONTROL-SPEC.md`](OSC-CONTROL-SPEC.md) §11.
+Stereo, 48 V, Inst, AutoSet and Phase are per-channel states. Link state is `NN02`. The linked-pair parameter rules are defined in [`OSC-CONTROL-SPEC.md`](OSC-CONTROL-SPEC.md) §11.
 
 ## 7. Output controls
 
 ### 7.1 Volume, balance and mute
 
 | Control | Register | Encoding |
-|---|---|---|
+| - | - | - |
 | Volume | `NN00` | 0.1 dB, signed; −650 = −∞ |
 | Balance | `NN01` | −100..+100 |
 | Mute | `NN02` | 0/1 |
 | Stereo mode | `NN04` | 0 mono / 1 stereo |
 
-The front-panel VOLUME encoder writes the `NN00` registers of the output
-selected on the unit's display (`L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8`). The
-selection is independent of the Control Room Main and Phones assignments;
-`PH` always addresses channels 7/8.
 
-Balance writes the same value to both channels of a linked pair. It is
-independent of the pair volume.
+The front-panel VOLUME encoder writes the `NN00` registers of the output selected on the unit's display (`L.1`–`L.6`, `PH`, `SP`, `A.1`–`A.8`). The selection is independent of the Control Room Main and Phones assignments; `PH` always addresses channels 7/8.
+
+Balance writes the same value to both channels of a linked pair. It is independent of the pair volume.
 
 Balance addresses:
 
-```text
-AN1/2       0x1201 / 0x1301
-AN3/4       0x1401 / 0x1501
-AN5/6       0x1601 / 0x1701
-Phones 7/8  0x1801 / 0x1901
-SPDIF       0x1a01 / 0x1b01
-ADAT 1/2    0x1c01 / 0x1d01
-ADAT 3/4    0x1e01 / 0x1f01
-ADAT 5/6    0x2001 / 0x2101
+```
+AN1/2       0x1201 / 0x1301  
+AN3/4       0x1401 / 0x1501  
+AN5/6       0x1601 / 0x1701  
+Phones 7/8  0x1801 / 0x1901  
+SPDIF       0x1a01 / 0x1b01  
+ADAT 1/2    0x1c01 / 0x1d01  
+ADAT 3/4    0x1e01 / 0x1f01  
+ADAT 5/6    0x2001 / 0x2101  
 ADAT 7/8    0x2201 / 0x2301
 ```
 
 ### 7.2 FX Return
 
-`NN03` sets the effect return for one output channel: 0.1 dB, signed. A
-linked pair writes both channels.
+`NN03` sets the effect return for one output channel: 0.1 dB, signed. A linked pair writes both channels.
 
 ### 7.3 Loopback
 
 Loopback uses EP0 request `0x15`:
 
-```text
-value = 1 on, 0 off
+```
+value = 1 on, 0 off  
 index = DSP output channel 0..17
 ```
 
@@ -549,12 +479,10 @@ Cue is a host-side monitoring flag on an output.
 
 ### 7.5 Phase and No Trim
 
-Each hardware output side has its own phase register: left at `base + 0x07`,
-right at `base + 0x107`, with `base = 0x12 + 2 x pair`. The value is `1` for
-inverted, `0` for normal.
+Each hardware output side has its own phase register: left at `base + 0x07`, right at `base + 0x107`, with `base = 0x12 + 2 x pair`. The value is `1` for inverted, `0` for normal.
 
 | Pair | Ø L | Ø R |
-|---|---|---|
+| - | - | - |
 | AN 1/2 | `0x1207` | `0x1307` |
 | AN 3/4 | `0x1407` | `0x1507` |
 | AN 5/6 | `0x1607` | `0x1707` |
@@ -562,19 +490,17 @@ inverted, `0` for normal.
 | SPDIF | `0x1a07` | `0x1b07` |
 | ADAT 1/2 … 7/8 | `0x1c07` … `0x2307` | `+0x100` |
 
-No Trim is a host-side flag per output channel: sends into a No-Trim
-destination use a trim factor of 1, so Trim Gain changes leave that
-destination untouched.
+
+No Trim is a host-side flag per output channel: sends into a No-Trim destination use a trim factor of 1, so Trim Gain changes leave that destination untouched.
 
 ## 8. Equalizer and low cut
 
-EQ and low cut are available on every hardware input and every hardware
-output.
+EQ and low cut are available on every hardware input and every hardware output.
 
 ### 8.1 EQ
 
 | Parameter | Range | Register |
-|---|---|---|
+| - | - | - |
 | Enable | on/off | `NN40` |
 | Band 1 type | Bell, Shelf | `NN41` |
 | Band 1 gain | ±20 dB | `NN42` |
@@ -588,15 +514,17 @@ output.
 | Band 3 frequency | 20 Hz..20 kHz | `NN4a` |
 | Band 3 Q | 0.7..5.0 | `NN4b` |
 
+
 The writer maps frequency directly in Hz and Q as Q × 10.
 
 ### 8.2 Low cut
 
 | Parameter | Range | Register |
-|---|---|---|
+| - | - | - |
 | Enable | on/off | `NN20` |
 | Frequency | 20..500 Hz | `NN21` |
 | Slope | 6/12/18/24 dB/oct | `NN22` |
+
 
 The slope writer maps 6/12/18/24 to 0/1/2/3.
 
@@ -605,7 +533,7 @@ The slope writer maps 6/12/18/24 to 0/1/2/3.
 Dynamics are available on every hardware input and every hardware output.
 
 | Parameter | Range | Register | Encoding |
-|---|---|---|---|
+| - | - | - | - |
 | Dynamics enable | on/off | `NN60` | 0/1 |
 | CompEx gain | −30..+30 dB | `NN61` | 0.1 dB, signed |
 | CompEx attack | 0..200 ms | `NN62` | ms + 1 |
@@ -619,153 +547,170 @@ Dynamics are available on every hardware input and every hardware output.
 | AutoLevel headroom | 3..12 dB | `NN82` | 0.1 dB |
 | AutoLevel rise time | 0.1..9.9 s | `NN83` | 0.1 s |
 
+
 Gain, attack and release are shared between compressor and expander.
 
 ## 10. FX bus
 
 The Reverb and Echo registers are listed in §4.4.
 
-- Reverb: enable, type, pre-delay, low cut, room scale, high cut, smoothness,
-  volume, width.
+- Reverb: enable, type, pre-delay, low cut, room scale, high cut, smoothness, volume, width.
+
 - Echo: enable, type, delay, feedback, high cut, volume, width.
+
 - Each output has an FX Return level (`NN03`).
 
-The output meter pages carry two extra power channels for the FX bus and two
-extra peak words at meter offsets 232..239. The FX values follow the FX send
-level.
+The output meter pages carry two extra power channels for the FX bus and two extra peak words at meter offsets 232..239. The FX values follow the FX send level.
 
-The backend applies the whole Reverb block and the whole Echo block in one
-IF1 burst each.
+The backend applies the whole Reverb block and the whole Echo block in one IF1 burst each.
 
 ## 11. Clock, rate and options
 
 ### 11.1 Rate family
 
 | Change | EP0 write |
-|---|---|
+| - | - |
 | 44.1 kHz | `0x10`, index 48, value `0x0010` |
 | 48 kHz | `0x10`, index 48, value `0x0020` |
+
 
 ### 11.2 Clock source
 
 The clock index is written with request `0x10`:
 
-```text
-value = index << 1
+```
+value = index \<\< 1  
 mask  = 0x0006
 ```
 
 | Index | Source |
-|---|---|
+| - | - |
 | 0 | Internal |
 | 1 | SPDIF Coaxial |
 | 2 | Optical |
 | 3 | Word Clock |
 
+
 The unit has no LTC source; the clock field is two bits.
 
 ### 11.3 Connect initialisation
 
-1. `SET_CONFIGURATION`
-2. `SET_INTERFACE(5, 1)`
+1. `SET\_CONFIGURATION`
+
+2. `SET\_INTERFACE(5, 1)`
+
 3. 60 × `0x16` (indices 0..29 and 32..61)
+
 4. 4 × `0x1b` clock quad
+
 5. `0x10/0x05ff = 0x0028`
+
 6. `0x17/0x0fc0 = 0x3c00`
+
 7. the `0x10/0x3000` and `0x10/0x0800` group
+
 8. 30 × `0x15` loopback bank
+
 9. `0x3f99 = 0x0812`
+
 10. 1087-word bulk scene
 
 The `0x1b` quad is:
 
-```text
-(wValue 0xc350, wIndex 0x0000)
-(0x8db9, 0x2d01)
-(0x8235, 0x5502)
+```
+(wValue 0xc350, wIndex 0x0000)  
+(0x8db9, 0x2d01)  
+(0x8235, 0x5502)  
 (0x7d00, 0x0003)
 ```
 
 ### 11.4 Application reconnect
 
-When TotalMix FX opens with the USB driver already attached, it does not
-reissue `SET_CONFIGURATION`, `SET_INTERFACE` or the `0x16`/`0x1b` vendor
-initialisation. It writes:
+When TotalMix FX opens with the USB driver already attached, it does not reissue `SET\_CONFIGURATION`, `SET\_INTERFACE` or the `0x16`/`0x1b` vendor initialisation. It writes:
 
 1. 30 × `0x15` loopback bank, indices 0..29, value 0;
+
 2. a 1106-word bulk scene in 18 bursts: 17 × 252 bytes and 140 bytes;
+
 3. the normal heartbeat.
 
-The scene begins with the fader/matrix records and ends with the global FX and
-monitor words.
+The scene begins with the fader/matrix records and ends with the global FX and monitor words.
 
 ### 11.5 Options word
 
 Request `0x10`, index 1487, carries the unit's options as one full word:
 
 | Bit | Mask | Meaning |
-|---|---|---|
+| - | - | - |
 | 3 | `0x0008` | word-clock input termination |
 | 6 | `0x0040` | word-clock output single speed |
 | 7 | `0x0080` | SPDIF professional |
 | 8 | `0x0100` | EQ+D for Record disabled (active low) |
 | 10 | `0x0400` | optical output ADAT (0 = SPDIF) |
 
-Every option change writes the whole word, including the current clock source
-in bits 1–2. Bit 10 is not an index of its own. No options-word readback is
-exposed: request `0x10` in returns a status word. The device-owned values are
-kept in the scene and written when they change.
+
+Every option change writes the whole word, including the current clock source in bits 1–2. Bit 10 is not an index of its own. No options-word readback is exposed: request `0x10` in returns a status word. The device-owned values are kept in the scene and written when they change.
 
 ## 12. Streaming
 
 ### 12.1 ISO interface 0
 
 | Rate class | Alt | Words/frame | Packet frames | IN max packet | OUT max packet |
-|---|---|---|---|---|---|
+| - | - | - | - | - | - |
 | 1x | 1 | 18 | 8 | 508 | 532 |
 | 2x | 2 | 14 | 16 | 732 | 780 |
 | 4x | 3 | 12 | 32 | 1208 | 1304 |
 
+
 Input packet:
 
 - 4-byte header: bits 0..4 frame count, bits 5..17 position, bits 18..31 phase;
+
 - block/planar 32-bit samples;
+
 - position wraps at 3072;
+
 - up to 8 ISO packets per URB.
 
 Output packet:
 
-- interleaved `lead_word + nch float32` frames;
+- interleaved `lead\_word + nch float32` frames;
+
 - every lead word is written;
+
 - the ring wraps at 3072.
 
 ### 12.2 Interrupt interface 5
 
 - Alt 1: 48 kHz.
+
 - Alt 2: 18 words at 1x, 14 at 2x.
+
 - Alt 3: two endpoints, 6 words each.
+
 - 32-bit integer samples, no ISO header.
+
 - URB size 1024 frames.
 
 ### 12.3 Stream setup
 
-```text
-channel init 0x16 (18 inputs and 18 playback channels)
-settings     0x10 value 0x0800 index 0xb800
+```
+channel init 0x16 (18 inputs and 18 playback channels)  
+settings     0x10 value 0x0800 index 0xb800  
 enable       0x20 value 0x0001 index 0x0000
 ```
 
 Start:
 
-```text
-settings 0x10  0x8000 / 0x8000
-0x1d           0x0000 / 0x0000
+```
+settings 0x10  0x8000 / 0x8000  
+0x1d           0x0000 / 0x0000  
 unmute mask    request 0x14
 ```
 
 Stop:
 
-```text
+```
 mute mask      request 0x13
 ```
 
@@ -776,39 +721,34 @@ The playback mask covers channels 2..31. Channel bit `n` is mask bit `n+2`.
 The meter endpoint is IF1 IN `0x85`. A packet is 244 bytes.
 
 | Bytes | Contents |
-|---|---|
+| - | - |
 | 0..159 | 20 little-endian `u64` mean-square values: 18 channel values, then two FX bus values |
 | 160..231 | 18 little-endian `u32` channel peak values |
 | 232..239 | two little-endian `u32` FX bus peak values |
 | 240..243 | tag |
 
-The two FX values are zero on input and playback pages. On output pages they
-follow the FX send level and are meter data, not protocol status. An FX peak
-at full scale (`2^27`) is the overload indication; there is no separate
-overload flag register.
+
+The two FX values are zero on input and playback pages. On output pages they follow the FX send level and are meter data, not protocol status. An FX peak at full scale (`2^27`) is the overload indication; there is no separate overload flag register.
 
 | Tag | Bank |
-|---|---|
+| - | - |
 | `0x11111111` | input A |
 | `0x55555555` | input B |
 | `0x22222222` | software playback |
 | `0x33333333` | output pre-fader |
 | `0x66666666` | output post-fader |
 
+
 Scales:
 
-```text
-power dBFS = 10 * log10(power / 2^55)
-peak  dBFS = 20 * log10(peak  / 2^27)
-power <= 31 = below range
+```
+power dBFS = 10 \* log10(power / 2^55)  
+peak  dBFS = 20 \* log10(peak  / 2^27)  
+power \<= 31 = below range  
 peak == 0   = below range
 ```
 
-Input meters use the larger of input A and input B. Playback meters use the
-playback page. Hardware-output meters use the post-fader page, reordered from
-DSP order to the Phones-first output order. TuxMix's meters use the peak
-word; the power word is mean square and reads several dB below the peak for
-music.
+Input meters use the larger of input A and input B. Playback meters use the playback page. Hardware-output meters use the post-fader page, reordered from DSP order to the Phones-first output order. TuxMix's meters use the peak word; the power word is mean square and reads several dB below the peak for music.
 
 ## 14. State and scenes
 
@@ -817,29 +757,29 @@ The host scene is authoritative.
 A scene stores:
 
 - matrix cells and pan values;
+
 - input, playback and output faders and mutes;
+
 - input and output EQ, low cut, dynamics and AutoLevel;
+
 - output balance and FX Return;
+
 - loopback flags;
+
 - Reverb and Echo settings;
+
 - channel names and trim values.
 
-The backend writes the mixer scene at connect and after relevant rate or
-stream changes.  The options word (clock source, optical format, SPDIF
-professional, word-clock rate and termination, EQ+D for Record), the reference
-levels and the 48 V/Inst/Level switches are held by the unit: TuxMix does not
-write them at connect and has no readback for them.  The saved scene keeps the
-last value written from TuxMix for display.
+The backend writes the mixer scene at connect and after relevant rate or stream changes.  The options word (clock source, optical format, SPDIF professional, word-clock rate and termination, EQ+D for Record), the reference levels and the 48 V/Inst/Level switches are held by the unit: TuxMix does not write them at connect and has no readback for them.  The saved scene keeps the last value written from TuxMix for display.
 
-Input gain, front-panel output volume, DIM and MS state are read from the IF1
-state stream.  A read-back gain is not overwritten by the saved scene.
+Input gain, front-panel output volume, DIM and MS state are read from the IF1 state stream.  A read-back gain is not overwritten by the saved scene.
 
 Scenes are keyed by unit serial. Each unit keeps its own scene file.
 
 ## 15. Capabilities
 
 | Feature | UCX |
-|---|---|
+| - | - |
 | Matrix pair routing | yes |
 | Per-cell mono matrix | no |
 | Input/output faders, mute, solo | yes |
@@ -859,7 +799,7 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Pitch | no |
 | Width | host-side |
 | MS processing | register only |
-| AN 1>2 | no |
+| AN 1\>2 | no |
 | Input Link | host setting |
 | EQ for Record | yes |
 | Optical output format | yes |
@@ -868,10 +808,11 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Word clock input termination | yes |
 | Clock sources | Internal, SPDIF coax., Optical, Word |
 
+
 ## 16. Code map
 
 | Concern | Source |
-|---|---|
+| - | - |
 | IF1 word encoding and parity | `kernel/ffuc.c` |
 | hwdep ABI and events | `kernel/ffuc-hwdep.c`, `kernel/ffuc-uapi.h` |
 | Stream start/stop and rate | `kernel/ffuc.c` |
@@ -880,3 +821,5 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Channel DSP registers | `ui/tuxmix/tuxmix-core/src/fireface/settings.rs` |
 | Channel topology | `ui/tuxmix/tuxmix-core/src/profiles/ucx.rs` |
 | Capability guards | `ui/tuxmix/tuxmix-core/src/fireface/models.rs` |
+
+
