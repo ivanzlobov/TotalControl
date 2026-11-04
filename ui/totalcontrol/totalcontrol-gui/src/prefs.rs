@@ -87,6 +87,11 @@ pub struct Prefs {
     /// Control Room monitoring assignments, by `ASSIGN_DESTS` index.
     #[serde(default)]
     pub assign: [Option<usize>; 7],
+    /// Virtual 5.1/7.1 PipeWire outputs created while TotalControl runs.
+    #[serde(default)]
+    pub surround_51: bool,
+    #[serde(default)]
+    pub surround_71: bool,
     /// Control Room monitoring settings, configured in the settings dialog.
     #[serde(default)]
     pub control_room: ControlRoomSettings,
@@ -191,6 +196,8 @@ mod tests {
             window_size: Some((1600.0, 900.0)),
             keep_in_tray: Some(false),
             engine_force_quantum: Some(128),
+            surround_51: true,
+            surround_71: true,
             ..Default::default()
         };
         save(&file, &prefs).unwrap();

@@ -192,6 +192,7 @@ fn main() -> iced::Result {
             if let Err(e) = app::apply_control_room_assignments(&mut state) {
                 log::debug!("Control Room assignments not restored: {e}");
             }
+            app::sync_surround_bridge(&mut state);
             app::restore_engine(&mut state);
             // Startup sync needs the direct handle: it drains the UCX state
             // stream and reads the unit before the mirror exists.  Move the

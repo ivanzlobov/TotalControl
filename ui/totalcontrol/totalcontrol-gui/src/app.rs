@@ -1648,6 +1648,16 @@ pub enum ResetMix {
     TotalReset,
 }
 
+/// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
+/// app-level sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OptionsMenu {
+    #[default]
+    Closed,
+    Root,
+    Reset,
+}
+
 pub const RESET_MIX: [(&str, ResetMix); 10] = [
     ("Straight playback with all to Main Out", ResetMix::StraightToMain),
     ("Straight playback", ResetMix::StraightPlayback),
@@ -1982,6 +1992,19 @@ pub enum Message {
     ToggleFxPanel,
     /// Opens the Assign menu at its first level, or closes it.
     ToggleAssign,
+    /// Opens the top-bar Options menu, or closes it.
+    ToggleOptions,
+    /// Opens the Reset Mix submenu.
+    OptionsReset,
+    /// Returns from Reset Mix to the Options root.
+    OptionsBack,
+    /// Opens the app-level Settings sheet from Options.
+    OptionsSettings,
+    /// Closes the Options menu.
+    CloseOptions,
+    /// Start/stop the virtual 5.1 and 7.1 outputs.
+    SetSurround51(bool),
+    SetSurround71(bool),
     /// First level: open and pin that destination's second level.
     AssignDestinations(usize),
     /// Pointer entered a first-level destination: switch an unpinned
@@ -2396,6 +2419,14 @@ pub struct TotalControl {
     /// links, layered above the whole window (see `about::about_modal`).
     pub show_about: bool,
     pub show_settings: bool,
+    /// Top-bar Options menu state.
+    pub options_menu: OptionsMenu,
+    /// Persisted intent for the virtual surround outputs.
+    pub surround_51: bool,
+    pub surround_71: bool,
+    /// Whether the helper processes are currently running.
+    pub surround_51_running: bool,
+    pub surround_71_running: bool,
     /// RME-style startup mismatch dialog.  `None` = no prompt.
     pub startup_mismatch: Option<StartupMismatch>,
     /// Suppress future mismatch prompts and write the saved TotalControl scene.
@@ -2927,6 +2958,11 @@ pub fn new_with_device(
         assign_anim: None,
         show_about: false,
         show_settings: false,
+        options_menu: OptionsMenu::Closed,
+        surround_51: false,
+        surround_71: false,
+        surround_51_running: false,
+        surround_71_running: false,
         startup_mismatch: None,
         always_init_device: false,
         backend,
@@ -3048,6 +3084,8 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         sidebar_open: Some(state.sidebar_open),
         fx_panel: Some(state.show_fx_panel),
         assign: state.assign,
+        surround_51: state.surround_51,
+        surround_71: state.surround_71,
         control_room: state.control_room.clone(),
         sidebar_width: Some(state.sidebar_width),
         panels_open: Some([p.options, p.snapshots, p.groups, p.layout]),
@@ -3085,6 +3123,8 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         state.show_fx_panel = open;
     }
     state.assign = prefs.assign;
+    state.surround_51 = prefs.surround_51;
+    state.surround_71 = prefs.surround_71;
     state.control_room = prefs.control_room;
     state.control_room_draft = state.control_room.clone();
     // Older files stored an output pair in the seventh slot. It cannot be
@@ -3212,6 +3252,109 @@ pub fn apply_control_room_assignments(
         .set_speaker_b_linked(state.control_room.speaker_b_linked)?;
     enforce_control_room_stereo(state);
     Ok(())
+}
+
+/// Locate the surround helper in a development checkout, through the
+/// environment, or on PATH.
+fn surround_script_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("TOTALCONTROL_SURROUND_SCRIPT") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for dir in exe.ancestors().skip(1) {
+            let candidate = dir.join("scripts/totalcontrol-surround.sh");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("totalcontrol-surround");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            let candidate = dir.join("totalcontrol-surround.sh");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn run_surround_command(command: &str, target: Option<&str>) -> Result<(), String> {
+    let script = surround_script_path()
+        .ok_or_else(|| "surround helper not found".to_string())?;
+    let mut process = std::process::Command::new("bash");
+    process.arg(script).arg(command);
+    if let Some(target) = target {
+        process.arg(target);
+    }
+    let status = process.status().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("helper exited with {status}"))
+    }
+}
+
+/// Start or stop the virtual surround outputs according to the settings.
+pub fn sync_surround_bridge(state: &mut TotalControl) {
+    if state.device.is_mock() {
+        state.surround_51_running = false;
+        state.surround_71_running = false;
+        return;
+    }
+    for (wanted, running, kind) in [
+        (state.surround_51, &mut state.surround_51_running, "51"),
+        (state.surround_71, &mut state.surround_71_running, "71"),
+    ] {
+        if wanted == *running {
+            continue;
+        }
+        let command = if wanted {
+            format!("start{kind}")
+        } else {
+            format!("stop{kind}")
+        };
+        let target = if wanted {
+            pw_clock::fireface_sink_name()
+        } else {
+            None
+        };
+        match run_surround_command(&command, target.as_deref()) {
+            Ok(()) => *running = wanted,
+            Err(e) => {
+                state.notice = Some((
+                    format!("Could not {} virtual {kind}: {e}", if wanted { "start" } else { "stop" }),
+                    Instant::now(),
+                ));
+            }
+        }
+    }
+}
+
+/// Stop active sinks when TotalControl is really quitting.  Hiding to the
+/// tray keeps the application running, so it keeps the sinks too.
+pub fn stop_surround_bridge(state: &mut TotalControl) {
+    if state.surround_51_running {
+        let _ = run_surround_command("stop51", None);
+        state.surround_51_running = false;
+    }
+    if state.surround_71_running {
+        let _ = run_surround_command("stop71", None);
+        state.surround_71_running = false;
+    }
+}
+
+/// Restart active sinks after a device switch or reconnect.
+pub fn restart_surround_bridge(state: &mut TotalControl) {
+    stop_surround_bridge(state);
+    sync_surround_bridge(state);
 }
 
 /// A linked pair is represented by its left/even strip.  Move a saved
@@ -3604,6 +3747,8 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::MonitorSize(_)
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
+            | Message::SetSurround51(_)
+            | Message::SetSurround71(_)
             | Message::EngineRate(_)
             | Message::EngineQuantum(_)
             | Message::SelectDevice(_)
@@ -4732,6 +4877,13 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ToggleDevicePanel
             | Message::ToggleAbout
             | Message::ToggleSettings
+            | Message::ToggleOptions
+            | Message::OptionsReset
+            | Message::OptionsBack
+            | Message::OptionsSettings
+            | Message::CloseOptions
+            | Message::SetSurround51(_)
+            | Message::SetSurround71(_)
             | Message::LineInRefSelected(_)
             | Message::LineInRef58Selected(_)
             | Message::LineOutRefSelected(_)
@@ -5249,6 +5401,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         if let Err(e) = apply_control_room_assignments(state) {
                             log::debug!("Control Room assignments not restored: {e}");
                         }
+                        restart_surround_bridge(state);
                         restore_engine(state);
                         // `fresh` starts with the deferred meter tap (the
                         // global TOTALCONTROL_DEFER_METER_TAP), exactly like the
@@ -5420,7 +5573,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if state.tray_active && state.keep_in_tray {
                     state.window_hidden = true;
                 } else {
-                    return Task::batch([update(state, Message::SaveNow), iced::exit()]);
+                    let saved = update(state, Message::SaveNow);
+                    stop_surround_bridge(state);
+                    return Task::batch([saved, iced::exit()]);
                 }
             }
         }
@@ -5431,6 +5586,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // after a replug are this app's job (see `tray`).
                 return Task::batch([saved, hide_window(state)]);
             }
+            stop_surround_bridge(state);
             return Task::batch([saved, iced::exit()]);
         }
         Message::Tray(event) => match event {
@@ -5453,6 +5609,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             crate::tray::TrayEvent::Quit => {
                 let saved = update(state, Message::SaveNow);
+                stop_surround_bridge(state);
                 return Task::batch([saved, iced::exit()]);
             }
         },
@@ -6034,6 +6191,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_raw(state, "/fx/echo/width", vec![OscType::Float(echo.width)]);
         }
         Message::ResetMix(kind) => {
+            state.options_menu = OptionsMenu::Closed;
             apply_reset_mix(state, kind);
         }
         Message::FxSendChanged(cid, db) => {            if let Err(e) = state.device.set_channel_fx_send(cid, db) {
@@ -6546,6 +6704,30 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ToggleSettings => {
             state.show_settings = !state.show_settings;
             state.show_device_panel = false;
+        }
+        Message::ToggleOptions => {
+            state.options_menu = match state.options_menu {
+                OptionsMenu::Closed => OptionsMenu::Root,
+                _ => OptionsMenu::Closed,
+            };
+        }
+        Message::OptionsReset => state.options_menu = OptionsMenu::Reset,
+        Message::OptionsBack => state.options_menu = OptionsMenu::Root,
+        Message::OptionsSettings => {
+            state.options_menu = OptionsMenu::Closed;
+            state.show_settings = true;
+            state.show_device_panel = false;
+        }
+        Message::CloseOptions => state.options_menu = OptionsMenu::Closed,
+        Message::SetSurround51(on) => {
+            state.surround_51 = on;
+            state.prefs_dirty = true;
+            sync_surround_bridge(state);
+        }
+        Message::SetSurround71(on) => {
+            state.surround_71 = on;
+            state.prefs_dirty = true;
+            sync_surround_bridge(state);
         }
         Message::ToggleAbout => state.show_about = !state.show_about,
         Message::OpenRepoUrl => {
@@ -7237,6 +7419,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     if let Err(e) = apply_control_room_assignments(state) {
         log::debug!("Control Room assignments not restored: {e}");
     }
+    restart_surround_bridge(state);
     // The UC's input meters come from a PipeWire capture tap that is opened
     // only after the scene is applied; without this a live switch to the UC
     // leaves every input VU at zero.  The UCX uses the device meter endpoint,
@@ -7563,6 +7746,12 @@ pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
     }
     if let Some((text, _)) = &state.notice {
         base = stack(vec![base, notice_toast(text, state.ui_scale)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
+    if state.options_menu != OptionsMenu::Closed {
+        base = stack(vec![base, options_menu_layer(state)])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -7977,6 +8166,57 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
     .into()
 }
 
+/// The top-bar Options menu.  Root holds Reset Mix and Settings; Reset Mix
+/// expands into the reset actions.
+fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let ts = scale * 1.15;
+    let item = |label: String, message: Message| {
+        iced::widget::button(text(label).size(theme::TEXT_XS * ts))
+            .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
+            .width(Length::Fill)
+            .style(theme::ghost_button)
+            .on_press(message)
+    };
+    let mut card = column![].spacing(0.0).width(Length::Fixed(250.0 * scale));
+    match state.options_menu {
+        OptionsMenu::Root => {
+            card = card
+                .push(item("Reset Mix  ▸".into(), Message::OptionsReset))
+                .push(item("Settings…".into(), Message::OptionsSettings));
+        }
+        OptionsMenu::Reset => {
+            card = card.push(item("‹  Reset Mix".into(), Message::OptionsBack));
+            for (name, kind) in RESET_MIX {
+                card = card.push(item(name.to_string(), Message::ResetMix(kind)));
+            }
+        }
+        OptionsMenu::Closed => {}
+    }
+    let card = opaque(
+        container(card)
+            .style(theme::dialog)
+            .padding(theme::SPACE_SM * scale),
+    );
+    opaque(
+        mouse_area(
+            container(card)
+                .align_x(iced::Alignment::Start)
+                .padding(iced::Padding {
+                    top: theme::TOP_BAR_H * scale,
+                    // Under the Options button: brand + view tabs + the
+                    // fixed gaps before it in the top bar.
+                    left: 390.0 * scale,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .on_press(Message::CloseOptions),
+    )
+}
+
 /// The app's own settings (as opposed to the device's): how TotalControl behaves
 /// around its window, not what the card does.
 fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
@@ -8035,6 +8275,31 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
+    let surround_section = row![
+        text("SURROUND")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_MICRO * ts),
+        iced::widget::rule::horizontal(1),
+    ]
+    .spacing(theme::SPACE_MD * scale)
+    .align_y(iced::Alignment::Center);
+    let surround = column![
+        surround_section,
+        toggle(
+            "Virtual 5.1 output",
+            state.surround_51,
+            Message::SetSurround51(!state.surround_51),
+        ),
+        toggle(
+            "Virtual 7.1 output",
+            state.surround_71,
+            Message::SetSurround71(!state.surround_71),
+        ),
+        text("Active while TotalControl runs. Select the device in KDE or the player.")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * ts),
+    ]
+    .spacing(theme::SPACE_SM * scale);
     let sync_help = text(if state.device.is_uc_model() {
         "The UC keeps input gain, reference levels, clock and rate. TotalControl writes only \
          its mixer scene (matrix, faders, mutes, loopback) on connect."
@@ -8068,7 +8333,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         column![sync_section, sync_help, sync_buttons, always_init]
             .spacing(theme::SPACE_SM * scale)
     };
-    let body = column![header, background, sync]
+    let body = column![header, background, sync, surround]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     popover(state, body.into(), Message::ToggleSettings)
@@ -9048,27 +9313,24 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
         .style(theme::ghost_button)
         .on_press(Message::ToggleAbout);
 
-    // Options > Reset Mix (manual 25.10), beside the view tabs: a pick list
-    // so the menu is the standard anchored one.
-    let reset_opts: Vec<String> = RESET_MIX.iter().map(|(n, _)| n.to_string()).collect();
-    let reset_pick = pick_list(reset_opts, None::<String>, |name: String| {
-        let kind = RESET_MIX
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, k)| *k)
-            .unwrap_or(ResetMix::TotalReset);
-        Message::ResetMix(kind)
-    })
-    .placeholder("RESET MIX")
-    .style(theme::pick_list)
-    .menu_style(theme::menu)
-    .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-    .text_size(theme::TEXT_MD * scale);
+    // Options > Reset Mix and Settings.  Reset Mix is a submenu; Settings
+    // opens the app-level sheet.
+    let options = iced::widget::button(
+        text(if state.options_menu == OptionsMenu::Closed {
+            "OPTIONS"
+        } else {
+            "OPTIONS ▴"
+        })
+        .size(theme::TEXT_MD * scale),
+    )
+    .padding([theme::SPACE_SM * scale, theme::SPACE_XL * scale])
+    .style(theme::tab_toggle(state.options_menu != OptionsMenu::Closed))
+    .on_press(Message::ToggleOptions);
 
     let mut bar = row![
         brand,
         tab_toggle,
-        reset_pick,
+        options,
         // Everything right of here is the tool side of the bar: the
         // flexible space sits in the middle, so the session chip stays
         // against the right edge instead of floating at whatever width it
@@ -14021,7 +14283,7 @@ mod tests {
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
-        is_control_room_cid, strip_params, ResetMix,
+        is_control_room_cid, strip_params, ResetMix, OptionsMenu,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
     };
@@ -14463,6 +14725,34 @@ mod tests {
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"
         );
+    }
+
+    #[test]
+    fn options_menu_opens_the_reset_submenu_and_settings_sheet() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::ToggleOptions);
+        assert_eq!(state.options_menu, OptionsMenu::Root);
+        let _ = update(&mut state, Message::OptionsReset);
+        assert_eq!(state.options_menu, OptionsMenu::Reset);
+        let _ = update(&mut state, Message::OptionsBack);
+        assert_eq!(state.options_menu, OptionsMenu::Root);
+        let _ = update(&mut state, Message::OptionsSettings);
+        assert_eq!(state.options_menu, OptionsMenu::Closed);
+        assert!(state.show_settings);
+    }
+
+    #[test]
+    fn surround_settings_are_remembered_and_never_start_a_bridge_in_mock() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::SetSurround51(true));
+        let _ = update(&mut state, Message::SetSurround71(true));
+        assert!(state.surround_51);
+        assert!(state.surround_71);
+        assert!(!state.surround_51_running);
+        assert!(!state.surround_71_running);
+        let prefs = prefs_of(&state);
+        assert!(prefs.surround_51);
+        assert!(prefs.surround_71);
     }
 
     #[test]
@@ -16375,4 +16665,11 @@ mod tests {
     }
 
 
+}
+
+
+impl Drop for TotalControl {
+    fn drop(&mut self) {
+        stop_surround_bridge(self);
+    }
 }

@@ -32,7 +32,7 @@ reduced control set.
 - [9. FX: sends, reverb and echo](#9-fx-sends-reverb-and-echo)
 - [10. Control Room](#10-control-room)
 - [11. Gestures](#11-gestures)
-- [12. Reset Mix](#12-reset-mix)
+- [12. Options menu](#12-options-menu)
 - [13. Snapshots, layouts, undo and redo](#13-snapshots-layouts-undo-and-redo)
 - [14. Latency](#14-latency)
 - [15. Where TotalControl keeps its data](#15-where-totalcontrol-keeps-its-data)
@@ -138,7 +138,7 @@ TotalControl offers three views:
 - **Matrix**: the complete routing grid; double-click a cell to toggle it
   between off and unity.
 
-These are also the tabs in the top bar, next to the `RESET MIX` button.
+These are also the tabs in the top bar, next to the `OPTIONS` menu.
 
 ## 3. Channel strips
 
@@ -509,9 +509,11 @@ front-panel equivalent controls of the unit.
   it.
 - Ordinary buttons act once per click.
 
-## 12. Reset Mix
+## 12. Options menu
 
-The `RESET MIX` button in the top bar lists the standard mixes:
+The `OPTIONS` menu in the top bar contains `Reset Mix` and `Settings`.
+
+`Reset Mix` lists the standard mixes:
 
 | Entry | Effect |
 |---|---|
@@ -526,6 +528,9 @@ The `RESET MIX` button in the top bar lists the standard mixes:
 | Total reset | straight playback to Main, effects off, output volumes set |
 
 Choosing one rewrites the whole mixer in one go.
+
+`Settings` opens the TotalControl settings sheet: background behaviour,
+startup sync, and the virtual surround outputs described in Appendix B.
 
 ## 13. Snapshots, layouts, undo and redo
 
@@ -606,7 +611,9 @@ kernel driver exposes the PCM device and the hwdep mixer node.
 
 In class-compliant mode the stock `snd-usb-audio` driver carries audio, but the
 vendor mixer is not available. TotalControl cannot control the mixer in that
-mode. Select the normal mode on the unit before starting TotalControl.
+mode. Select the normal mode on the unit before starting TotalControl. On the
+UCX, switch to class-compliant mode only while the unit is disconnected from
+USB; power-cycle it after the change before reconnecting.
 
 Only one application may own the mixer at a time. Close other mixer
 applications before starting TotalControl.
@@ -623,6 +630,25 @@ its own USB queue and device lead; the latency display explains the result.
 The WirePlumber rule in
 [`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
 selects polled scheduling and the 18-channel Pro Audio profile.
+
+### Surround playback
+
+The Pro Audio profile is the right choice for a DAW, but its 18 playback
+channels are presented as `AUX0…AUX17`.  Desktop players that send a 5.1 or
+7.1 stream cannot map those speaker positions onto AUX channels, so PipeWire
+keeps only the front pair.
+
+For surround media, open `Options → Settings` and enable `Virtual 5.1 output`,
+`Virtual 7.1 output`, or both.  The sinks exist while TotalControl runs and
+follow the selected Fireface/MR18 device:
+
+- `TotalControl Surround 5.1` → SW playback 1/2, 3/4 and 5/6
+- `TotalControl Surround 7.1` → SW playback 1/2, 3/4, 5/6 and 7/8
+
+Select the matching sink in KDE or in the player.  An already-playing stream
+keeps its old device; stop and restart it, or move it to the new sink.  The
+bridge is host-side: TotalControl still sees the audio on the SW playback
+channels and can route it like any other playback source.
 
 ## Appendix C — OSC setup
 
