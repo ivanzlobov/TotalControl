@@ -383,6 +383,11 @@ Feedback is event-driven. Selecting a new page sends the complete state of
 that page. Bundles may contain several paths in one datagram; the controller
 must not assume one message per datagram or a fixed ordering.
 
+TotalControl sends the page-1 paths for the eight channels starting at the
+bank start, the page-2 paths for the selected channel, and the page-3 reverb
+and echo paths. A send is reported on page 1 only when it belongs to the
+selected submix. Page-1 and page-2 values outside that window are not sent.
+
 Peak-level feedback is optional. When enabled, TotalMix FX sends the level
 paths for the visible channels:
 

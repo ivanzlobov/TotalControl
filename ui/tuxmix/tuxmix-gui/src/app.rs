@@ -20,7 +20,7 @@ use tuxmix_core::{
 
 use crate::about;
 use crate::matrix;
-use crate::osc::{self, OscCommand, OscConfig, OscOutbound};
+use crate::osc::{self, OscConfig, OscOutbound};
 use crate::prefs::{ControlRoomSettings, SyncDirection};
 use tuxmix_core::pw_clock::{self, CardStream, PwClock};
 use tuxmix_core::pw_meter;
@@ -1948,11 +1948,6 @@ pub enum Message {
     /// used to push outgoing feedback packets back out over UDP. Only
     /// fires if `--osc` was passed; `state.osc_tx` stays `None` otherwise.
     OscReady(mpsc::Sender<OscOutbound>),
-    /// A command decoded from an incoming OSC UDP packet — applied the
-    /// same way a GUI-originated change would be, then echoed back out so
-    /// a connected controller and the GUI stay in sync regardless of
-    /// which one actually moved a fader.
-    OscCommand(OscCommand),
     /// One formatted line for the OSC debug log panel — sent for every
     /// message crossing the bridge in either direction, regardless of
     /// whether the panel is currently open (see `osc::worker`).
@@ -1961,8 +1956,6 @@ pub enum Message {
     /// `--osc` is active).
     ToggleOscLog,
     ClearOscLog,
-    /// `/meters` query: reply with the current input/playback/output values.
-    OscMeters,
     /// Toggles the Settings panel (clock source, SPDIF,
     /// sample rate).
     ToggleDevicePanel,
@@ -2045,8 +2038,6 @@ pub enum Message {
     /// will save into.
     SnapshotClicked(u8),
     SnapshotStore,
-    /// Store the current mix into slot `u8` (1-8) without recalling first.
-    SnapshotStoreTo(u8),
     /// Enters/exits group-assignment mode — while active, clicking a
     /// group's mute/solo/fader cell assigns the current multi-selection
     /// (`state.selected`) as that group's membership.
@@ -4190,6 +4181,14 @@ fn notify_osc_full_state(state: &mut TuxMix) {
             format!("/input/{}/sensitivity", ch.id),
             ch.sensitivity == Some(Sensitivity::Plus4dBu),
         );
+        if let Some(level) = ch.level {
+            notify_osc_raw(
+                state,
+                format!("/input/{}/level", ch.id),
+                vec![OscType::Int(level.code() as i32)],
+            );
+        }
+        notify_osc_bool(state, format!("/input/{}/autoset", ch.id), ch.autoset);
         notify_osc_bool(state, format!("/input/{}/phase", ch.id), ch.phase);
         notify_osc_raw(
             state,
@@ -4248,6 +4247,20 @@ fn notify_osc_full_state(state: &mut TuxMix) {
             format!("/input/{}/stereo", ch.id),
             state.device.input_pair_linked(ch.id / 2),
         );
+        notify_osc_bool(state, format!("/input/{}/ms_proc", ch.id), ch.ms_proc);
+        notify_osc_raw(
+            state,
+            format!("/input/{}/width", ch.id),
+            vec![OscType::Float(ch.width)],
+        );
+        notify_osc_raw(
+            state,
+            format!("/input/{}/fx_send", ch.id),
+            vec![OscType::Float(ch.fx_send_db)],
+        );
+        if let Some(d) = ch.dynamics {
+            notify_osc_dynamics(state, cid, &d);
+        }
     }
     for ch in playbacks {
         let cid = ChannelId::Playback(ch.id);
@@ -4274,6 +4287,17 @@ fn notify_osc_full_state(state: &mut TuxMix) {
             format!("/playback/{}/stereo", ch.id),
             state.device.playback_linked(ch.id / 2),
         );
+        notify_osc_bool(state, format!("/playback/{}/ms_proc", ch.id), ch.ms_proc);
+        notify_osc_raw(
+            state,
+            format!("/playback/{}/width", ch.id),
+            vec![OscType::Float(ch.width)],
+        );
+        notify_osc_raw(
+            state,
+            format!("/playback/{}/fx_send", ch.id),
+            vec![OscType::Float(ch.fx_send_db)],
+        );
     }
     for ch in outputs {
         let cid = ChannelId::Output(ch.id);
@@ -4282,6 +4306,14 @@ fn notify_osc_full_state(state: &mut TuxMix) {
         notify_osc(state, OscOutbound::Solo(cid, ch.solo));
         notify_osc_bool(state, format!("/output/{}/loopback", ch.id), ch.loopback);
         notify_osc_bool(state, format!("/output/{}/cue", ch.id), ch.cue);
+        notify_osc_bool(state, format!("/output/{}/phase", ch.id), ch.phase_l);
+        notify_osc_bool(state, format!("/output/{}/no_trim", ch.id), ch.no_trim);
+        notify_osc_bool(state, format!("/output/{}/talkback", ch.id), ch.talkback);
+        notify_osc_raw(
+            state,
+            format!("/output/{}/fxreturn", ch.id),
+            vec![OscType::Float(ch.fx_return_db)],
+        );
         if let Some(eq) = ch.eq {
             notify_osc_bool(state, format!("/output/{}/eq", ch.id), eq.enabled);
             notify_osc_bool(
@@ -4334,8 +4366,15 @@ fn notify_osc_full_state(state: &mut TuxMix) {
             format!("/output/{}/stereo", ch.id),
             state.device.output_linked(ch.id / 2),
         );
+        if let Some(d) = ch.dynamics {
+            notify_osc_dynamics(state, cid, &d);
+        }
     }
     notify_osc_bool(state, "/dim", settings.dim);
+    notify_osc_bool(state, "/speaker_b", settings.speaker_b);
+    notify_osc_bool(state, "/mono", settings.mono);
+    notify_osc_bool(state, "/mute_fx", settings.mute_fx);
+    notify_osc_bool(state, "/talkback", state.talkback_on);
     notify_osc_bool(state, "/input_link", settings.input_link);
     notify_osc_bool(state, "/eq_for_record", settings.eq_for_record);
     notify_osc_bool(state, "/optical_out_spdif", settings.optical_out_spdif);
@@ -4347,6 +4386,12 @@ fn notify_osc_full_state(state: &mut TuxMix) {
     );
     notify_osc_bool(state, "/ms_proc", settings.ms_proc);
     notify_osc_bool(state, "/an12", settings.an12);
+    if let Some(r) = settings.reverb {
+        notify_osc_reverb(state, &r);
+    }
+    if let Some(echo) = settings.echo {
+        notify_osc_echo(state, &echo);
+    }
     notify_osc_raw(state, "/pitch", vec![OscType::Float(settings.pitch_percent)]);
     notify_osc_raw(state, "/width", vec![OscType::Float(settings.width)]);
     notify_osc_raw(
@@ -4382,6 +4427,138 @@ fn notify_osc_full_state(state: &mut TuxMix) {
     if let Some(n) = state.active_snapshot {
         notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
     }
+}
+
+fn notify_osc_dynamics(state: &mut TuxMix, cid: ChannelId, d: &Dynamics) {
+    let (kind, id) = channel_slug(cid);
+    let base = format!("/{kind}/{id}/dynamics");
+    notify_osc_bool(state, format!("{base}/on"), d.on);
+    notify_osc_raw(state, format!("{base}/gain"), vec![OscType::Float(d.gain_db)]);
+    notify_osc_raw(
+        state,
+        format!("{base}/attack"),
+        vec![OscType::Int(d.attack_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/release"),
+        vec![OscType::Int(d.release_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/comp/threshold"),
+        vec![OscType::Float(d.comp_threshold_db)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/comp/ratio"),
+        vec![OscType::Float(d.comp_ratio)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/exp/threshold"),
+        vec![OscType::Float(d.exp_threshold_db)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/exp/ratio"),
+        vec![OscType::Float(d.exp_ratio)],
+    );
+    notify_osc_bool(state, format!("{base}/auto"), d.auto_level);
+    notify_osc_raw(
+        state,
+        format!("{base}/auto/max"),
+        vec![OscType::Float(d.auto_max_gain_db)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/auto/headroom"),
+        vec![OscType::Float(d.auto_headroom_db)],
+    );
+    notify_osc_raw(
+        state,
+        format!("{base}/auto/rise"),
+        vec![OscType::Float(d.auto_rise_s)],
+    );
+}
+
+fn notify_osc_reverb(state: &mut TuxMix, r: &Reverb) {
+    notify_osc_bool(state, "/fx/reverb/on", r.on);
+    notify_osc_raw(state, "/fx/reverb/type", vec![OscType::Int(r.kind as i32)]);
+    notify_osc_raw(
+        state,
+        "/fx/reverb/predelay",
+        vec![OscType::Int(r.pre_delay_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/lowcut",
+        vec![OscType::Int(r.low_cut_hz as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/highcut",
+        vec![OscType::Int(r.high_cut_hz as i32)],
+    );
+    notify_osc_raw(state, "/fx/reverb/room", vec![OscType::Float(r.room_scale)]);
+    notify_osc_raw(
+        state,
+        "/fx/reverb/attack",
+        vec![OscType::Int(r.attack_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/hold",
+        vec![OscType::Int(r.hold_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/release",
+        vec![OscType::Int(r.release_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/time",
+        vec![OscType::Int(r.reverb_time_ds as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/highdamp",
+        vec![OscType::Int(r.high_damp_hz as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/reverb/smooth",
+        vec![OscType::Int(r.smoothness as i32)],
+    );
+    notify_osc_raw(state, "/fx/reverb/volume", vec![OscType::Float(r.volume_db)]);
+    notify_osc_raw(state, "/fx/reverb/width", vec![OscType::Float(r.width)]);
+}
+
+fn notify_osc_echo(state: &mut TuxMix, echo: &Echo) {
+    notify_osc_bool(state, "/fx/echo/on", echo.on);
+    notify_osc_raw(state, "/fx/echo/type", vec![OscType::Int(echo.kind as i32)]);
+    notify_osc_raw(
+        state,
+        "/fx/echo/delay",
+        vec![OscType::Int(echo.delay_ms as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/echo/feedback",
+        vec![OscType::Int(echo.feedback as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/echo/highcut",
+        vec![OscType::Int(echo.high_cut as i32)],
+    );
+    notify_osc_raw(
+        state,
+        "/fx/echo/volume",
+        vec![OscType::Float(echo.volume_db)],
+    );
+    notify_osc_raw(state, "/fx/echo/width", vec![OscType::Float(echo.width)]);
 }
 
 fn notify_osc_meters(state: &mut TuxMix) {
@@ -4674,11 +4851,9 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ClearSelection
             | Message::StripHovered(_)
             | Message::OscReady(_)
-            | Message::OscCommand(_)
             | Message::OscLog(_)
             | Message::ToggleOscLog
             | Message::ClearOscLog
-            | Message::OscMeters
             | Message::ToggleDevicePanel
             | Message::ToggleAbout
             | Message::ToggleSettings
@@ -4724,7 +4899,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SnapshotStore
-            | Message::SnapshotStoreTo(_)
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
             | Message::GroupClear
@@ -4965,7 +5139,6 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 | Message::EnginePoll
                 | Message::EngineRead(..)
                 | Message::OscLog(_)
-                | Message::OscMeters
                 | Message::WindowResized(_)
                 | Message::WindowSize(..)
         )
@@ -4974,16 +5147,6 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         state.assign_pinned = false;
     }
 
-    // OSC is an input path, not a separate control implementation: decode
-    // it to the same Message the GUI produces, then run the normal update
-    // loop.  That gives OSC the same clamps, undo, host-scene merge and
-    // autosave behaviour as a click.
-    if let Message::OscCommand(cmd) = &message {
-        return match cmd.clone().into_message() {
-            Some(inner) => update(state, inner),
-            None => Task::none(),
-        };
-    }
     // UC startup: the first scene write happens before the meter taps open
     // the card, and the unit can reload its stored mixer on stream start.
     // Reapply the (possibly user-edited) model once the card has settled.
@@ -5091,7 +5254,13 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
         }
         // No model change: the message itself produces the redraw in which
         // the canvases read the now-active snapshot and schedule a frame.
-        Message::MeterWake => {}
+        // Peak-level feedback rides the same edge; the worker keeps only
+        // the paths the controller's current page can address.
+        Message::MeterWake => {
+            if state.osc_tx.is_some() {
+                notify_osc_meters(state);
+            }
+        }
         Message::Tick => {
             // Driver transport health: cumulative counters, shown relative
             // to the first reading of this connection (or the reset button).
@@ -5814,59 +5983,11 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             let (kind, id) = channel_slug(cid);
             notify_osc_bool(state, format!("/{kind}/{id}/dynamics"), on);
         }
-        Message::DynamicsChanged(cid, d) => {            if let Err(e) = state.device.set_dynamics(cid, &d) {
+        Message::DynamicsChanged(cid, d) => {
+            if let Err(e) = state.device.set_dynamics(cid, &d) {
                 fail(state, "set_dynamics", &e);
             }
-            let (kind, id) = channel_slug(cid);
-            let base = format!("/{kind}/{id}/dynamics");
-            notify_osc_bool(state, format!("{base}/on"), d.on);
-            notify_osc_raw(state, format!("{base}/gain"), vec![OscType::Float(d.gain_db)]);
-            notify_osc_raw(
-                state,
-                format!("{base}/attack"),
-                vec![OscType::Int(d.attack_ms as i32)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/release"),
-                vec![OscType::Int(d.release_ms as i32)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/comp/threshold"),
-                vec![OscType::Float(d.comp_threshold_db)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/comp/ratio"),
-                vec![OscType::Float(d.comp_ratio)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/exp/threshold"),
-                vec![OscType::Float(d.exp_threshold_db)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/exp/ratio"),
-                vec![OscType::Float(d.exp_ratio)],
-            );
-            notify_osc_bool(state, format!("{base}/auto"), d.auto_level);
-            notify_osc_raw(
-                state,
-                format!("{base}/auto/max"),
-                vec![OscType::Float(d.auto_max_gain_db)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/auto/headroom"),
-                vec![OscType::Float(d.auto_headroom_db)],
-            );
-            notify_osc_raw(
-                state,
-                format!("{base}/auto/rise"),
-                vec![OscType::Float(d.auto_rise_s)],
-            );
+            notify_osc_dynamics(state, cid, &d);
         }
         Message::OscRmeFx { echo, field, value } => {
             if echo {
@@ -5884,6 +6005,7 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 if let Err(err) = state.device.set_echo(&e) {
                     fail(state, "set_echo", &err);
                 }
+                notify_osc_echo(state, &e);
             } else {
                 let mut r = state.device.settings().reverb.unwrap_or_default();
                 match field {
@@ -5906,77 +6028,20 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 if let Err(err) = state.device.set_reverb(&r) {
                     fail(state, "set_reverb", &err);
                 }
+                notify_osc_reverb(state, &r);
             }
         }
         Message::ReverbChanged(r) => {
             if let Err(e) = state.device.set_reverb(&r) {
                 fail(state, "set_reverb", &e);
             }
-            notify_osc_bool(state, "/fx/reverb/on", r.on);
-            notify_osc_raw(state, "/fx/reverb/type", vec![OscType::Int(r.kind as i32)]);
-            notify_osc_raw(
-                state,
-                "/fx/reverb/predelay",
-                vec![OscType::Int(r.pre_delay_ms as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/lowcut",
-                vec![OscType::Int(r.low_cut_hz as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/highcut",
-                vec![OscType::Int(r.high_cut_hz as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/room",
-                vec![OscType::Float(r.room_scale)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/smooth",
-                vec![OscType::Int(r.smoothness as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/volume",
-                vec![OscType::Float(r.volume_db)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/reverb/width",
-                vec![OscType::Float(r.width)],
-            );
+            notify_osc_reverb(state, &r);
         }
         Message::EchoChanged(echo) => {
             if let Err(e) = state.device.set_echo(&echo) {
                 fail(state, "set_echo", &e);
             }
-            notify_osc_bool(state, "/fx/echo/on", echo.on);
-            notify_osc_raw(state, "/fx/echo/type", vec![OscType::Int(echo.kind as i32)]);
-            notify_osc_raw(
-                state,
-                "/fx/echo/delay",
-                vec![OscType::Int(echo.delay_ms as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/echo/feedback",
-                vec![OscType::Int(echo.feedback as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/echo/highcut",
-                vec![OscType::Int(echo.high_cut as i32)],
-            );
-            notify_osc_raw(
-                state,
-                "/fx/echo/volume",
-                vec![OscType::Float(echo.volume_db)],
-            );
-            notify_osc_raw(state, "/fx/echo/width", vec![OscType::Float(echo.width)]);
+            notify_osc_echo(state, &echo);
         }
         Message::ResetMix(kind) => {
             apply_reset_mix(state, kind);
@@ -6372,11 +6437,8 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
             state.osc_log.push_front(line);
             state.osc_log.truncate(OSC_LOG_MAX);
         }
-        // Handled at the top of `update`, before this match.
-        Message::OscCommand(_) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
-        Message::OscMeters => notify_osc_meters(state),
         Message::ToggleDevicePanel => {
             if !state.connected || state.device.is_mock() {
                 state.show_device_panel = false;
@@ -6953,10 +7015,6 @@ pub fn update(state: &mut TuxMix, message: Message) -> Task<Message> {
                 }
             }
             notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
-        }
-        Message::SnapshotStoreTo(n) => {
-            state.active_snapshot = Some(n as usize);
-            return update(state, Message::SnapshotStore);
         }
         Message::SnapshotStore => {
             if let Some(n) = state.active_snapshot {
@@ -13976,31 +14034,6 @@ mod tests {
         assert!(
             (saved - target).abs() < 0.001,
             "host scene kept {saved}, expected the confirmed {target}"
-        );
-    }
-
-    #[test]
-    fn osc_commands_go_through_the_host_scene_merge() {
-        let mut state = new(true, None, None);
-        state.host_scene = Some(state.device.capture_scene());
-        let _ = update(
-            &mut state,
-            Message::OscCommand(crate::osc::OscCommand::Volume(ChannelId::Input(0), 0, 0.5)),
-        );
-        assert_eq!(
-            state.host_scene.as_ref().unwrap().inputs[0].volumes[0], 0.5,
-            "an OSC fader move must reach the saved host scene"
-        );
-        let _ = update(
-            &mut state,
-            Message::OscCommand(crate::osc::OscCommand::LowCutEnabled(ChannelId::Input(0), true)),
-        );
-        assert!(
-            state.host_scene.as_ref().unwrap().inputs[0]
-                .eq
-                .unwrap()
-                .low_cut_enabled,
-            "an OSC low-cut switch must reach the saved host scene"
         );
     }
 
