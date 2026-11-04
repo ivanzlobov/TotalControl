@@ -645,12 +645,28 @@ pub trait RmeDevice {
         ))
     }
 
-    /// Dim the Phones output by a fixed -20 dB, independent of its
+    /// Dim the Main Out by the configured amount, independent of its
     /// current master volume (disengage restores the pre-dim level).
     fn set_dim(&mut self, on: bool) -> Result<(), Error> {
         let _ = on;
         Err(Error::InvalidChannel(
             "Dim is not supported on this backend".into(),
+        ))
+    }
+
+    /// Dim the Main Out by `amount_db`, independent of its current master
+    /// volume. Backends without a level-controlled Dim fall back to the
+    /// fixed implementation above.
+    fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
+        let _ = amount_db;
+        self.set_dim(on)
+    }
+
+    /// Apply the Control Room Recall listening level to Main Out.
+    fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
+        let _ = db;
+        Err(Error::InvalidChannel(
+            "Recall is not supported on this backend".into(),
         ))
     }
 

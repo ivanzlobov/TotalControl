@@ -564,6 +564,12 @@ impl RmeDevice for DeviceHandle {
     fn set_dim(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_dim(on))
     }
+    fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_dim_with(on, amount_db))
+    }
+    fn set_main_recall(&mut self, db: f32) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_main_recall(db))
+    }
     fn set_speaker_b(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_speaker_b(on))
     }
@@ -6856,7 +6862,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             return update(state, Message::Dim(on));
         }
         Message::Dim(on) => {
-            if let Err(e) = state.device.set_dim(on) {
+            if let Err(e) = state
+                .device
+                .set_dim_with(on, state.control_room.main_dim_db)
+            {
                 fail(state, "dim", &e);
             }
             notify_osc_bool(state, "/dim", on);
@@ -6868,10 +6877,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             notify_osc_bool(state, "/speaker_b", on);
         }
         Message::ControlRoomRecall => {
-            if let Err(e) = state.device.set_dim(false) {
+            if let Err(e) = state.device.set_main_recall(state.control_room.recall_db) {
                 fail(state, "recall", &e);
             }
-            notify_osc_bool(state, "/dim", false);
         }
         Message::ControlRoomMono(on) => {
             state.device.settings_mut().mono = on;
@@ -12271,6 +12279,36 @@ fn control_room_width(state: &TotalControl, scale: f32) -> f32 {
         + 2.0 * theme::SPACE_SM * scale
 }
 
+/// Control Room width including the slideout currently open beside one of its
+/// channels. The header and the page width follow this, so the section grows
+/// left with the panel instead of leaving the header behind.
+fn control_room_visual_width(
+    state: &TotalControl,
+    scale: f32,
+    now: Instant,
+) -> f32 {
+    let mut extra = 0.0f32;
+    for dest in [2usize, 3, 4, 5, 1, 0] {
+        let Some(pair) = state.assign[dest] else {
+            continue;
+        };
+        if pair * 2 + 1 >= state.device.outputs().len() {
+            continue;
+        }
+        let cid = ChannelId::Output(pair * 2);
+        for (kind, width) in [
+            (strip::FlyoutKind::Settings, strip::STRIP_W * scale),
+            (strip::FlyoutKind::Eq, strip::EQ_FLYOUT_W * scale),
+            (strip::FlyoutKind::Dynamics, strip::DYN_FLYOUT_W * scale),
+        ] {
+            if let Some(w) = flyout_slot(state, cid, kind, width, now) {
+                extra = extra.max(w);
+            }
+        }
+    }
+    control_room_width(state, scale) + extra
+}
+
 /// The width an output pair occupies in the Hardware Outputs row. A linked
 /// pair is one strip; a split pair is two strips plus the gap between them.
 fn rendered_pair_width(state: &TotalControl, pair: usize, scale: f32) -> f32 {
@@ -12653,26 +12691,26 @@ fn control_room_panel(
         .on_press_maybe(msg)
         .into()
     };
-    // The Assign button opens the menu card beside the panel. It sits at the
-    // bottom of the stack, below the other controls.
+    // The Assign button opens the menu card beside the panel. It uses the
+    // same compact selector decoration as a strip's output-bus trigger.
     let assign = iced::widget::button(
-        container(
-            text("assign  \u{25be}")
-                .size(theme::TEXT_MD * scale)
-                .center(),
-        )
+        row![
+            text("assign").size(theme::TEXT_MD * scale),
+            iced::widget::Space::new().width(Length::Fill),
+            text("\u{25be}").size(theme::TEXT_MD * scale),
+        ]
+        .spacing(theme::SPACE_TIGHT * scale)
+        .align_y(iced::Alignment::Center)
         .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(iced::Alignment::Center)
-        .align_y(iced::Alignment::Center),
+        .height(Length::Fill),
     )
     .width(Length::Fixed(btn_w))
     .height(Length::Fixed(btn_h))
     .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-    .style(theme::phantom_button(!matches!(
-        state.assign_menu,
-        AssignMenu::Closed
-    )))
+    .style(theme::toggle_button(
+        !matches!(state.assign_menu, AssignMenu::Closed),
+        theme::ACCENT,
+    ))
     // The menu writes the UC/UCX Main Out bit; a unit without that path
     // shows the button dimmed rather than opening a menu that cannot apply.
     .on_press_maybe(state.device.is_uc_family().then_some(Message::ToggleAssign));
@@ -12813,6 +12851,8 @@ fn choice_index(choices: &[String], label: &str) -> Option<usize> {
 fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<'static, Message> {
     row![
         slider(-65.0..=0.0, value, move |v| on_change(round_half_db(v)))
+            .step(0.5_f32)
+            .style(theme::db_slider)
             .width(Length::Fill),
         text(format!("{value:+.1} dB"))
             .color(theme::TEXT_PRIMARY)
@@ -12832,14 +12872,20 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     let ts = scale * 1.15;
 
     let section = |label: &'static str| -> Element<'static, Message> {
-        row![
-            text(label)
-                .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * ts),
-            iced::widget::rule::horizontal(1),
-        ]
-        .spacing(theme::SPACE_MD * scale)
-        .align_y(iced::Alignment::Center)
+        container(
+            row![
+                text(label)
+                    .color(theme::TEXT_SEC)
+                    .size(theme::TEXT_MICRO * ts),
+                iced::widget::rule::horizontal(1),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(iced::Padding {
+            top: theme::SPACE_MD * scale,
+            ..iced::Padding::ZERO
+        })
         .into()
     };
     let label = |text_value: &'static str| -> Element<'static, Message> {
@@ -13360,7 +13406,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // Width of the channel strips alone, so the HARDWARE OUTPUTS rule stops
     // at the last channel instead of running into the Control Room.
     let mut strips_width = 0.0f32;
-    let cr_w = control_room_width(state, scale);
+    let cr_w = control_room_visual_width(state, scale, anim_now);
     let natural_out = if state.device.capabilities().protocol_features {
         out_width + theme::SPACE_MD + cr_w
     } else {
@@ -13465,7 +13511,7 @@ fn mixer_view(state: &TotalControl, fx_width: Option<f32>) -> (Element<'_, Messa
     // Two section titles share this line: HARDWARE OUTPUTS over the channel
     // strips, `control room` starting at the section's leftmost channel.
     let outputs_header: Element<'_, Message> = if state.device.capabilities().protocol_features {
-        let cr_w = control_room_width(state, scale);
+        let cr_w = control_room_visual_width(state, scale, anim_now);
         // The title starts exactly at the section's left edge — the panel's
         // own left edge — so the two line up at any window width. The slack
         // between the strips and the section is the break in the line.
@@ -13853,6 +13899,7 @@ mod tests {
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
+        control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
@@ -14390,6 +14437,24 @@ mod tests {
             control_room_width(&state, 1.0),
             CONTROL_ROOM_W + 2.0 * theme::SPACE_SM,
             "only the six output assignments count"
+        );
+    }
+
+    #[test]
+    fn control_room_header_grows_with_an_open_flyout() {
+        let mut state = new(true, None, None);
+        state.assign = [None; 7];
+        state.assign[0] = Some(2);
+        let now = Instant::now();
+        let before = control_room_visual_width(&state, 1.0, now);
+        let cid = ChannelId::Output(4);
+        state
+            .flyout_open
+            .insert((cid, strip::FlyoutKind::Settings));
+        let after = control_room_visual_width(&state, 1.0, now);
+        assert!(
+            (after - before - strip::STRIP_W).abs() < 1e-3,
+            "the header must follow the open settings slideout"
         );
     }
 

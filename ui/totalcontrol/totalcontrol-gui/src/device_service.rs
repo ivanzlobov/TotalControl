@@ -970,6 +970,20 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
+    fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_dim_with(on, amount_db);
+        });
+        Ok(())
+    }
+
+    fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_main_recall(db);
+        });
+        Ok(())
+    }
+
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_main_out(pair);

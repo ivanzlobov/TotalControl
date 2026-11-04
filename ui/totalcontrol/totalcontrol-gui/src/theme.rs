@@ -2,6 +2,7 @@
 
 use iced::gradient::Linear;
 use iced::widget::overlay::menu;
+use iced::widget::slider::{self, Handle, HandleShape, Rail};
 use iced::widget::{button, container, progress_bar};
 use iced::{Background, Border, Color, Shadow};
 
@@ -414,6 +415,32 @@ pub fn toggle_button(
     active_color: Color,
 ) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     armed_toggle_button(active, false, active_color)
+}
+
+/// Control Room value slider: a white rail and handle, matching the
+/// neutral control chrome rather than the coloured strip controls.
+pub fn db_slider(
+    _theme: &iced::Theme,
+    _status: slider::Status,
+) -> slider::Style {
+    let fill = Background::Color(TEXT_PRIMARY);
+    slider::Style {
+        rail: Rail {
+            backgrounds: (Background::Color(BORDER), fill),
+            width: 3.0,
+            border: Border {
+                color: BORDER,
+                width: 0.0,
+                radius: RADIUS_SM.into(),
+            },
+        },
+        handle: Handle {
+            shape: HandleShape::Circle { radius: 5.0 },
+            background: fill,
+            border_width: 0.0,
+            border_color: TEXT_PRIMARY,
+        },
+    }
 }
 
 /// Shared outline switch: when engaged the text and border take `color`

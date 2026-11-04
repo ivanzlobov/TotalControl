@@ -703,13 +703,17 @@ smaller type tier. The stack runs, top to bottom:
 | mono / talkback / ext. input / mute FX | Mono, Talkback, Ext. input, Mute FX |
 | bottom | Settings, immediately above Assign |
 
-Engaged Control Room buttons use the dark face, orange text and 1 px orange
+Engaged monitoring buttons use the dark face, orange text and 1 px orange
 outline. Recall has no latched state and uses the normal press feedback;
-Settings stays lit while its dialog is open; Assign stays lit while its menu
-is open.
+Settings stays lit while its dialog is open. `assign` is a selector, not a
+monitoring button: it uses the same compact row and white drop decoration as a
+strip's output-bus trigger, and its row stays lit while the menu is open.
 
-Dim, Recall and Speaker B use the UCX control-room registers. Mono and
-Mute FX are stored in the device scene.
+Dim and Recall act on the assigned Main Out pair. Dim attenuates the current
+Main Out level by the configured Main Out Dim amount and restores it on
+release. Recall sets the underlying Main Out level to the configured listening
+volume once; it does not latch. Speaker B uses the UCX control-room register.
+Mono and Mute FX are stored in the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged

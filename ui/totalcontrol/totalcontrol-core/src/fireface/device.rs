@@ -545,8 +545,10 @@ pub struct Fireface {
     mute_saved: HashMap<ChannelId, (Vec<f32>, Vec<i8>)>,
     /// Saved output fader while the output is muted.
     output_mute_saved: HashMap<usize, f32>,
-    /// Phones pair level saved while control-room Dim is engaged.
-    dim_saved: Option<(f32, f32)>,
+    /// Main Out pair and its saved levels while control-room Dim is engaged.
+    dim_saved: Option<(usize, f32, f32)>,
+    /// Attenuation applied by the current control-room Dim.
+    dim_amount_db: f32,
     /// Register words replaced by the current Talkback activation, in write
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
@@ -1043,6 +1045,7 @@ impl Fireface {
             mute_saved: HashMap::new(),
             output_mute_saved: HashMap::new(),
             dim_saved: None,
+            dim_amount_db: -20.0,
             talkback_saved: None,
             talkback_active: false,
             input_settings,
@@ -3775,39 +3778,80 @@ impl RmeDevice for Fireface {
     }
 
     fn set_dim(&mut self, on: bool) -> Result<(), Error> {
+        self.set_dim_with(on, -20.0)
+    }
+
+    fn set_dim_with(&mut self, on: bool, amount_db: f32) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
                 "Dim is not decoded on the UC".into(),
             ));
         }
         if on == self.settings.dim {
+            if on {
+                self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
+            }
             return Ok(());
         }
+        let pair = self.settings.main_out.unwrap_or(0);
+        let left = pair * 2;
+        let right = left + 1;
+        if right >= self.outputs.len() {
+            return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
+        }
         if on {
-            // Dim applies to the Phones pair.  TotalControl uses a fixed -20 dB
-            // offset; the RME dialog amount is not read back.
-            let left = self.outputs[0].volume;
-            let right = self.outputs[1].volume;
-            self.dim_saved = Some((left, right));
-            let db = |v: f32| {
+            let left_level = self.outputs[left].volume;
+            let right_level = self.outputs[right].volume;
+            self.dim_saved = Some((pair, left_level, right_level));
+            self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
+            let amount = self.dim_amount_db;
+            let dim = move |v: f32| {
                 if v <= 0.0 {
                     0.0
                 } else {
-                    db_to_linear(linear_db(v) - 20.0)
+                    db_to_linear(linear_db(v) + amount)
                 }
             };
-            self.set_volume(ChannelId::Output(0), 0, db(left))?;
-            self.set_volume(ChannelId::Output(1), 0, db(right))?;
+            self.set_volume(ChannelId::Output(left), 0, dim(left_level))?;
+            self.set_volume(ChannelId::Output(right), 0, dim(right_level))?;
             self.write_word(ucx::global::DIM, 1)?;
         } else {
-            if let Some((left, right)) = self.dim_saved.take() {
-                self.set_volume(ChannelId::Output(0), 0, left)?;
-                self.set_volume(ChannelId::Output(1), 0, right)?;
+            if let Some((saved_pair, left_level, right_level)) = self.dim_saved.take() {
+                self.set_volume(ChannelId::Output(saved_pair * 2), 0, left_level)?;
+                self.set_volume(ChannelId::Output(saved_pair * 2 + 1), 0, right_level)?;
             }
             self.write_word(ucx::global::DIM, 0)?;
         }
         self.settings.dim = on;
         Ok(())
+    }
+
+    fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
+        if self.is_uc() {
+            return Err(Error::InvalidChannel(
+                "Recall is not decoded on the UC".into(),
+            ));
+        }
+        let pair = self.settings.main_out.unwrap_or(0);
+        let left = pair * 2;
+        let right = left + 1;
+        if right >= self.outputs.len() {
+            return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
+        }
+        let level = db_to_linear(db.clamp(-65.0, 6.0));
+        if self.settings.dim {
+            if let Some((saved_pair, _, _)) = self.dim_saved {
+                if saved_pair == pair {
+                    let dimmed = db_to_linear(linear_db(level) + self.dim_amount_db);
+                    self.dim_saved = Some((pair, level, level));
+                    self.set_volume(ChannelId::Output(left), 0, dimmed)?;
+                    self.set_volume(ChannelId::Output(right), 0, dimmed)?;
+                    return Ok(());
+                }
+            }
+        }
+        self.set_volume(ChannelId::Output(left), 0, level)?;
+        self.set_volume(ChannelId::Output(right), 0, level)
     }
 
     /// Control Room Assign: the Main Out is marked by bit 1 of the output
@@ -5425,24 +5469,56 @@ mod tests {
         }
         assert!(dev.settings().speaker_b);
 
-        let before = (dev.outputs()[0].volume, dev.outputs()[1].volume);
+        dev.set_main_out(Some(3)).unwrap();
+        let before = (dev.outputs()[6].volume, dev.outputs()[7].volume);
+        let untouched = (dev.outputs()[0].volume, dev.outputs()[1].volume);
         writes.lock().unwrap().clear();
-        dev.set_dim(true).unwrap();
-        {
-            let w = writes.lock().unwrap();
-            assert!(w.contains(&Write::Words(vec![(0x3d03, 1)])));
-            assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v[0].0 == 0x1800)));
-            assert!(w.iter().any(|x| matches!(x, Write::Words(v) if v[0].0 == 0x1900)));
-        }
+        dev.set_dim_with(true, -30.0).unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Words(vec![(0x3d03, 1)])));
         assert!(dev.settings().dim);
-        assert!(dev.outputs()[0].volume < before.0);
+        assert!(dev.outputs()[6].volume < before.0);
+        assert!(dev.outputs()[7].volume < before.1);
+        assert!((dev.outputs()[0].volume - untouched.0).abs() < 1e-6);
+        assert!((dev.outputs()[1].volume - untouched.1).abs() < 1e-6);
 
         writes.lock().unwrap().clear();
         dev.set_dim(false).unwrap();
-        assert!(writes.lock().unwrap().contains(&Write::Words(vec![(0x3d03, 0)])));
-        assert!((dev.outputs()[0].volume - before.0).abs() < 1e-6);
-        assert!((dev.outputs()[1].volume - before.1).abs() < 1e-6);
+        assert!(writes
+            .lock()
+            .unwrap()
+            .contains(&Write::Words(vec![(0x3d03, 0)])));
+        assert!((dev.outputs()[6].volume - before.0).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - before.1).abs() < 1e-6);
         assert!(!dev.settings().dim);
+    }
+
+    #[test]
+    fn ucx_recall_sets_main_out_and_respects_dim() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(3)).unwrap();
+
+        dev.set_main_recall(-10.0).unwrap();
+        let level = db_to_linear(-10.0);
+        assert!((dev.outputs()[6].volume - level).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - level).abs() < 1e-6);
+
+        dev.set_dim_with(true, -20.0).unwrap();
+        let dimmed = db_to_linear(-30.0);
+        assert!((dev.outputs()[6].volume - dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - dimmed).abs() < 1e-6);
+
+        dev.set_main_recall(-15.0).unwrap();
+        let recalled = db_to_linear(-15.0);
+        let recalled_dimmed = db_to_linear(-35.0);
+        assert!((dev.outputs()[6].volume - recalled_dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - recalled_dimmed).abs() < 1e-6);
+
+        dev.set_dim(false).unwrap();
+        assert!((dev.outputs()[6].volume - recalled).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - recalled).abs() < 1e-6);
     }
 
     #[test]
