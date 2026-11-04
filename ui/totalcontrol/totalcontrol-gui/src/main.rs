@@ -189,6 +189,9 @@ fn main() -> iced::Result {
                 state.prefs_path = Some(path);
             }
             app::apply_startup_sync(&mut state);
+            if let Err(e) = app::apply_control_room_assignments(&mut state) {
+                log::debug!("Control Room assignments not restored: {e}");
+            }
             app::restore_engine(&mut state);
             // Startup sync needs the direct handle: it drains the UCX state
             // stream and reads the unit before the mirror exists.  Move the

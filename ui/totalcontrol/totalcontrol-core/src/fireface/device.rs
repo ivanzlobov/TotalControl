@@ -3793,36 +3793,41 @@ impl RmeDevice for Fireface {
             }
             return Ok(());
         }
-        let pair = self.settings.main_out.unwrap_or(0);
-        let left = pair * 2;
-        let right = left + 1;
-        if right >= self.outputs.len() {
-            return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
-        }
-        if on {
-            let left_level = self.outputs[left].volume;
-            let right_level = self.outputs[right].volume;
-            self.dim_saved = Some((pair, left_level, right_level));
-            self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
-            let amount = self.dim_amount_db;
-            let dim = move |v: f32| {
-                if v <= 0.0 {
-                    0.0
-                } else {
-                    db_to_linear(linear_db(v) + amount)
-                }
-            };
-            self.set_volume(ChannelId::Output(left), 0, dim(left_level))?;
-            self.set_volume(ChannelId::Output(right), 0, dim(right_level))?;
-            self.write_word(ucx::global::DIM, 1)?;
-        } else {
+        if !on {
             if let Some((saved_pair, left_level, right_level)) = self.dim_saved.take() {
                 self.set_volume(ChannelId::Output(saved_pair * 2), 0, left_level)?;
                 self.set_volume(ChannelId::Output(saved_pair * 2 + 1), 0, right_level)?;
             }
             self.write_word(ucx::global::DIM, 0)?;
+            self.settings.dim = false;
+            return Ok(());
         }
-        self.settings.dim = on;
+        let Some(pair) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "Dim needs an assigned Main Out".into(),
+            ));
+        };
+        let left = pair * 2;
+        let right = left + 1;
+        if right >= self.outputs.len() {
+            return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
+        }
+        let left_level = self.outputs[left].volume;
+        let right_level = self.outputs[right].volume;
+        self.dim_saved = Some((pair, left_level, right_level));
+        self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
+        let amount = self.dim_amount_db;
+        let dim = move |v: f32| {
+            if v <= 0.0 {
+                0.0
+            } else {
+                db_to_linear(linear_db(v) + amount)
+            }
+        };
+        self.set_volume(ChannelId::Output(left), 0, dim(left_level))?;
+        self.set_volume(ChannelId::Output(right), 0, dim(right_level))?;
+        self.write_word(ucx::global::DIM, 1)?;
+        self.settings.dim = true;
         Ok(())
     }
 
@@ -3832,7 +3837,11 @@ impl RmeDevice for Fireface {
                 "Recall is not decoded on the UC".into(),
             ));
         }
-        let pair = self.settings.main_out.unwrap_or(0);
+        let Some(pair) = self.settings.main_out else {
+            return Err(Error::InvalidChannel(
+                "Recall needs an assigned Main Out".into(),
+            ));
+        };
         let left = pair * 2;
         let right = left + 1;
         if right >= self.outputs.len() {
@@ -3864,17 +3873,16 @@ impl RmeDevice for Fireface {
                 "Assign is not decoded on the UC".into(),
             ));
         }
-        let Some(pair) = pair else {
-            return Ok(());
-        };
-        if pair >= BLOCKS / 2 {
-            return Err(Error::InvalidChannel(format!("output pair {pair}")));
+        if let Some(pair) = pair {
+            if pair >= BLOCKS / 2 {
+                return Err(Error::InvalidChannel(format!("output pair {pair}")));
+            }
         }
         let previous = self.settings.main_out;
-        if previous == Some(pair) {
+        if previous == pair {
             return Ok(());
         }
-        self.settings.main_out = Some(pair);
+        self.settings.main_out = pair;
         if let Some(old) = previous {
             if old < BLOCKS / 2 {
                 let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
@@ -3882,9 +3890,11 @@ impl RmeDevice for Fireface {
                 self.ucx_write_output_mode(old * 2 + 1, mute)?;
             }
         }
-        let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-        self.ucx_write_output_mode(pair * 2, mute)?;
-        self.ucx_write_output_mode(pair * 2 + 1, mute)?;
+        if let Some(pair) = pair {
+            let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
+            self.ucx_write_output_mode(pair * 2, mute)?;
+            self.ucx_write_output_mode(pair * 2 + 1, mute)?;
+        }
         Ok(())
     }
 
@@ -4513,6 +4523,11 @@ impl RmeDevice for Fireface {
     }
 
     fn capture_scene(&self) -> Scene {
+        // Dim is a runtime monitor state.  The fader values in the scene
+        // already include its attenuation, so carrying the flag would make
+        // the next scene write dim the same pair again.
+        let mut settings = self.settings.clone();
+        settings.dim = false;
         Scene {
             name: "Auto".into(),
             model: self.canonical_model().to_string(),
@@ -4528,7 +4543,7 @@ impl RmeDevice for Fireface {
             inputs: self.inputs.clone(),
             playbacks: self.playbacks.clone(),
             outputs: self.outputs.clone(),
-            settings: self.settings.clone(),
+            settings,
         }
     }
 
@@ -4657,7 +4672,15 @@ impl RmeDevice for Fireface {
                 saved.dynamics = current.dynamics;
             }
         }
+        // The Control Room assignments are application configuration, not
+        // mixer scene values.  Keep the live assignment when a scene is
+        // recalled or reapplied so Dim and Recall keep addressing the pair
+        // the user assigned.
+        let live_main_out = self.settings.main_out;
+        let live_main_b_out = self.settings.main_b_out;
         self.settings = scene.settings.clone();
+        self.settings.main_out = live_main_out;
+        self.settings.main_b_out = live_main_b_out;
         self.matrix_overrides.clear();
         if self.is_uc() {
             for (idx, (input, saved)) in self.inputs.iter_mut().zip(device_inputs).enumerate() {
@@ -4906,13 +4929,13 @@ impl RmeDevice for Fireface {
             }
             let speaker_b = self.settings.speaker_b;
             self.set_speaker_b(speaker_b)?;
-            let dim = self.settings.dim;
+            // Dim is a runtime monitor state, not part of the scene.  The
+            // scene's fader values already carry the level the user hears;
+            // applying Dim again here attenuated the Main Out by another
+            // amount on every rate change or stream-start reapply.
             self.settings.dim = false;
             self.dim_saved = None;
             self.write_word(ucx::global::DIM, 0)?;
-            if dim {
-                self.set_dim(true)?;
-            }
         }
         let result = match batch {
             Some(batch) => batch.finish_wait(),
@@ -5519,6 +5542,83 @@ mod tests {
         dev.set_dim(false).unwrap();
         assert!((dev.outputs()[6].volume - recalled).abs() < 1e-6);
         assert!((dev.outputs()[7].volume - recalled).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_dim_without_a_main_out_does_not_fall_back_to_phones() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let before = (dev.outputs()[0].volume, dev.outputs()[1].volume);
+
+        let error = dev.set_dim_with(true, -20.0).unwrap_err();
+        assert!(matches!(error, Error::InvalidChannel(_)));
+        assert!(!dev.settings().dim);
+        assert!((dev.outputs()[0].volume - before.0).abs() < 1e-6);
+        assert!((dev.outputs()[1].volume - before.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_recall_without_a_main_out_does_not_fall_back_to_phones() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let before = (dev.outputs()[0].volume, dev.outputs()[1].volume);
+
+        let error = dev.set_main_recall(-10.0).unwrap_err();
+        assert!(matches!(error, Error::InvalidChannel(_)));
+        assert!((dev.outputs()[0].volume - before.0).abs() < 1e-6);
+        assert!((dev.outputs()[1].volume - before.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_scene_apply_does_not_dim_the_main_out_twice() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(3)).unwrap();
+        let level = db_to_linear(-20.0);
+        dev.outputs[6].volume = level;
+        dev.outputs[7].volume = level;
+
+        let mut scene = dev.capture_scene();
+        // A scene written while Dim was active used to carry the flag true.
+        scene.settings.dim = true;
+        dev.apply_scene(&scene).unwrap();
+        assert!(!dev.settings().dim);
+        assert!((dev.outputs()[6].volume - level).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - level).abs() < 1e-6);
+
+        // A stream-start or rate-change reapply must leave the level alone.
+        dev.apply_scene(&scene).unwrap();
+        assert!(!dev.settings().dim);
+        assert!((dev.outputs()[6].volume - level).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - level).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_captured_scene_does_not_persist_dim() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(3)).unwrap();
+        dev.set_dim_with(true, -20.0).unwrap();
+
+        let scene = dev.capture_scene();
+        assert!(!scene.settings.dim);
+    }
+
+    #[test]
+    fn ucx_scene_apply_keeps_the_live_main_out_assignment() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+
+        let mut scene = dev.capture_scene();
+        // A scene can carry an older assignment; the live Control Room
+        // configuration wins.
+        scene.settings.main_out = Some(3);
+        dev.apply_scene(&scene).unwrap();
+        assert_eq!(dev.settings().main_out, Some(1));
+    }
+
+    #[test]
+    fn ucx_clearing_main_out_clears_the_assignment() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out(None).unwrap();
+        assert_eq!(dev.settings().main_out, None);
     }
 
     #[test]

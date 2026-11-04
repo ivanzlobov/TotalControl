@@ -712,8 +712,14 @@ strip's output-bus trigger, and its row stays lit while the menu is open.
 Dim and Recall act on the assigned Main Out pair. Dim attenuates the current
 Main Out level by the configured Main Out Dim amount and restores it on
 release. Recall sets the underlying Main Out level to the configured listening
-volume once; it does not latch. Speaker B uses the UCX control-room register.
-Mono and Mute FX are stored in the device scene.
+volume once; it does not latch. Without an assigned Main Out both controls
+leave the mix unchanged and never fall back to a Phones pair.
+
+Dim is a runtime monitoring state. Applying a scene, reconnecting, or a
+stream-start or sample-rate reapply leaves it off and does not attenuate the
+Main Out again. The saved scene contains the level that was audible, not a
+pending Dim operation. Speaker B uses the UCX control-room register. Mono and
+Mute FX are stored in the device scene.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged
@@ -829,7 +835,11 @@ right, and the Control Room shifts its own channels left by one slot.
 
 The moving channel is drawn once, above the rows and panel, and accepts no
 pointer input until it settles. No motion runs when assignments are restored
-from a scene or from preferences at startup.
+from preferences at startup.
+
+The Main and Speaker B assignments are application configuration stored with
+the GUI preferences. A scene load or reapply keeps the live assignment; a
+scene's stored assignment does not move the Control Room destinations.
 
 The front-panel volume knob follows the output selected on the unit's display,
 not the Control Room Main assignment; `PH` always addresses channels 7/8.

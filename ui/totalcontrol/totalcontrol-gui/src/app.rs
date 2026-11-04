@@ -3172,6 +3172,27 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     state.device.sync_settings_to_device();
 }
 
+/// Push the Control Room Main and Speaker B assignments from the saved
+/// preferences into the open device.  The visual assignment map and the
+/// device's `main_out`/`main_b_out` are separate records; Dim and Recall
+/// read the device model, so the two must agree after startup, a device
+/// switch or a scene load.
+pub fn apply_control_room_assignments(
+    state: &mut TotalControl,
+) -> Result<(), totalcontrol_core::Error> {
+    let main = state.assign.first().copied().flatten();
+    if state.device.settings().main_out != main {
+        state.device.set_main_out(main)?;
+    }
+    if let Some(b) = state.assign.get(1).copied().flatten() {
+        if state.device.settings().main_b_out != Some(b) {
+            state.device.set_main_out_b(Some(b))?;
+        }
+    }
+    enforce_control_room_stereo(state);
+    Ok(())
+}
+
 /// A linked pair is represented by its left/even strip.  Move a saved
 /// per-channel UI entry on the hidden right channel to that representative
 /// so Settings/EQ/Trim panels and collapsed state cannot get stranded.
@@ -5203,6 +5224,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         if state.host_scene.is_none() {
                             state.host_scene = Some(state.device.capture_scene());
                         }
+                        if let Err(e) = apply_control_room_assignments(state) {
+                            log::debug!("Control Room assignments not restored: {e}");
+                        }
                         restore_engine(state);
                         // `fresh` starts with the deferred meter tap (the
                         // global TOTALCONTROL_DEFER_METER_TAP), exactly like the
@@ -6489,12 +6513,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 new: new_outputs,
                 max_ms: (state.window_width + 200.0).clamp(300.0, 1600.0),
             });
-            let result = match dest {
-                0 => state.device.set_main_out(pair),
-                1 => state.device.set_main_out_b(pair),
-                _ => Ok(()),
-            };
-            if let Err(e) = result {
+            // Sync both hardware-backed destinations, not only the slot
+            // just changed: moving a Main or Speaker B pair to a Phones
+            // slot clears the old slot above and must clear its device
+            // assignment too.
+            if let Err(e) = apply_control_room_assignments(state) {
                 fail(state, "assign", &e);
             }
         }
@@ -6871,7 +6894,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             {
                 fail(state, "dim", &e);
             }
-            notify_osc_bool(state, "/dim", on);
+            notify_osc_bool(state, "/dim", state.device.settings().dim);
         }
         Message::SpeakerB(on) => {
             if let Err(e) = state.device.set_speaker_b(on) {
@@ -7168,6 +7191,9 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     }
     if state.host_scene.is_none() {
         state.host_scene = Some(state.device.capture_scene());
+    }
+    if let Err(e) = apply_control_room_assignments(state) {
+        log::debug!("Control Room assignments not restored: {e}");
     }
     // The UC's input meters come from a PipeWire capture tap that is opened
     // only after the scene is applied; without this a live switch to the UC
