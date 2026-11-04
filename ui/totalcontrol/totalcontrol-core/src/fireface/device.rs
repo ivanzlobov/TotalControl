@@ -2885,6 +2885,118 @@ impl Fireface {
         }
     }
 
+    /// The level a channel's send should have on the device after mute and
+    /// the current solo set.  The model volume is never changed by solo.
+    fn input_send_effective(&self, idx: usize, output: usize) -> f32 {
+        let channel = ChannelId::Input(idx);
+        if self.muted.contains(&channel)
+            || (!self.soloed.is_empty() && !self.soloed.contains(&channel))
+        {
+            0.0
+        } else {
+            self.inputs
+                .get(idx)
+                .and_then(|c| c.volumes.get(output))
+                .copied()
+                .unwrap_or(0.0)
+        }
+    }
+
+    fn playback_send_effective(&self, idx: usize, output: usize) -> f32 {
+        let channel = ChannelId::Playback(idx);
+        if self.muted.contains(&channel)
+            || (!self.soloed.is_empty() && !self.soloed.contains(&channel))
+        {
+            0.0
+        } else {
+            self.playbacks
+                .get(idx)
+                .and_then(|c| c.volumes.get(output))
+                .copied()
+                .unwrap_or(0.0)
+        }
+    }
+
+    /// Write one input send without changing the fader model.  The UC/UCX
+    /// register writers read the channel volumes, so the two sides of a
+    /// stereo input are staged together and restored afterwards.
+    fn write_input_send(&mut self, idx: usize, output: usize) -> Result<(), Error> {
+        if idx >= self.inputs.len() || output >= PAIRS {
+            return Err(Error::InvalidChannel(format!("input {idx}/{output}")));
+        }
+        let (base, other) = if idx < 4 {
+            (idx, idx)
+        } else {
+            let base = idx & !1;
+            (base, base ^ 1)
+        };
+        if other >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!("input {idx}/{output}")));
+        }
+        let saved_base = self.inputs[base].volumes[output];
+        let saved_other = self.inputs[other].volumes[output];
+        let eff_base = self.input_send_effective(base, output);
+        let eff_other = if other == base {
+            eff_base
+        } else {
+            self.input_send_effective(other, output)
+        };
+        self.inputs[base].volumes[output] = eff_base;
+        self.inputs[other].volumes[output] = eff_other;
+        let level = self.input_send_effective(idx, output);
+        let result = if self.is_uc() {
+            self.uc_write_input(idx, output, level)
+        } else {
+            self.ucx_write_input(idx, output, level)
+        };
+        self.inputs[base].volumes[output] = saved_base;
+        self.inputs[other].volumes[output] = saved_other;
+        result
+    }
+
+    /// Write one playback send without changing the fader model.  Pair
+    /// writers (width/MS processing) read both channel volumes, so both are
+    /// staged and restored.
+    fn write_playback_send(&mut self, idx: usize, output: usize) -> Result<(), Error> {
+        if idx >= self.playbacks.len() || output >= PAIRS {
+            return Err(Error::InvalidChannel(format!("playback {idx}/{output}")));
+        }
+        let base = idx & !1;
+        let other = base ^ 1;
+        if other >= self.playbacks.len() {
+            return Err(Error::InvalidChannel(format!("playback {idx}/{output}")));
+        }
+        let saved_base = self.playbacks[base].volumes[output];
+        let saved_other = self.playbacks[other].volumes[output];
+        let eff_base = self.playback_send_effective(base, output);
+        let eff_other = self.playback_send_effective(other, output);
+        self.playbacks[base].volumes[output] = eff_base;
+        self.playbacks[other].volumes[output] = eff_other;
+        let level = self.playback_send_effective(idx, output);
+        let result = if self.is_uc() {
+            self.uc_write_playback(idx, output, level)
+        } else {
+            self.ucx_write_playback(idx, output, level)
+        };
+        self.playbacks[base].volumes[output] = saved_base;
+        self.playbacks[other].volumes[output] = saved_other;
+        result
+    }
+
+    fn write_input_channel(&mut self, idx: usize) -> Result<(), Error> {
+        for output in 0..PAIRS {
+            self.write_input_send(idx, output)?;
+        }
+        Ok(())
+    }
+
+    fn write_playback_channel(&mut self, idx: usize) -> Result<(), Error> {
+        for output in 0..PAIRS {
+            self.write_playback_send(idx, output)?;
+        }
+        Ok(())
+    }
+
     fn apply_input_volume(&mut self, idx: usize, output: usize, volume: f32) -> Result<(), Error> {
         if idx >= self.inputs.len() || output >= PAIRS {
             return Err(Error::InvalidChannel(format!("input {idx}/{output}")));
@@ -2900,12 +3012,7 @@ impl Fireface {
             }
             return Ok(());
         }
-        if self.is_uc() {
-            self.uc_write_input(idx, output, volume)?;
-        } else {
-            self.ucx_write_input(idx, output, volume)?;
-        }
-        Ok(())
+        self.write_input_send(idx, output)
     }
 
     fn apply_playback_volume(
@@ -2927,12 +3034,7 @@ impl Fireface {
             }
             return Ok(());
         }
-        if self.is_uc() {
-            self.uc_write_playback(idx, output, volume)?;
-        } else {
-            self.ucx_write_playback(idx, output, volume)?;
-        }
-        Ok(())
+        self.write_playback_send(idx, output)
     }
 
     /// When Speaker B is linked to Main, mirror a Main Out level change onto
@@ -3553,12 +3655,17 @@ impl RmeDevice for Fireface {
                         self.inputs[idx].pans.clone(),
                     );
                     self.mute_saved.insert(channel, saved);
-                    self.muted.insert(channel);
+                    // Zero the sends before marking the channel muted.  The
+                    // apply helper records a muted channel's zero in
+                    // `mute_saved` instead of writing it; inserting `muted`
+                    // first therefore saved zeroes and unmuting restored the
+                    // fader to zero.
                     for p in 0..PAIRS {
                         let volume = self.inputs[idx].volumes[p];
                         self.apply_input_volume(idx, p, 0.0)?;
                         self.inputs[idx].volumes[p] = volume;
                     }
+                    self.muted.insert(channel);
                 } else if let Some((volumes, pans)) = self.mute_saved.remove(&channel) {
                     self.muted.remove(&channel);
                     self.inputs[idx].pans.clone_from(&pans);
@@ -3581,12 +3688,15 @@ impl RmeDevice for Fireface {
                 if mute {
                     let saved = self.playbacks[idx].volumes.clone();
                     self.mute_saved.insert(channel, (saved.clone(), vec![0; PAIRS]));
-                    self.muted.insert(channel);
+                    // See the input branch: mark the channel muted only after
+                    // the zero writes, or `mute_saved` would hold zeroes and
+                    // the second press would drop the fader to zero.
                     for p in 0..PAIRS {
                         let volume = self.playbacks[idx].volumes[p];
                         self.apply_playback_volume(idx, p, 0.0)?;
                         self.playbacks[idx].volumes[p] = volume;
                     }
+                    self.muted.insert(channel);
                 } else if let Some((volumes, _)) = self.mute_saved.remove(&channel) {
                     self.muted.remove(&channel);
                     for (p, volume) in volumes.iter().enumerate().take(PAIRS) {
@@ -3620,26 +3730,82 @@ impl RmeDevice for Fireface {
     }
 
     fn set_solo(&mut self, channel: ChannelId, solo: bool) -> Result<(), Error> {
-        if solo {
-            self.soloed.insert(channel);
-        } else {
-            self.soloed.remove(&channel);
-        }
+        // Solo is a monitoring state, not a fader move.  While any channel
+        // is soloed, every other input/playback send is written as zero; the
+        // fader model keeps its level and unsolo restores the sends.
+        let was_soloed = self.soloed.contains(&channel);
         match channel {
             ChannelId::Output(idx) => {
                 if let Some(o) = self.outputs.get_mut(idx) {
                     o.solo = solo;
                 }
+                return Ok(());
             }
             ChannelId::Input(idx) => {
                 if let Some(c) = self.inputs.get_mut(idx) {
                     c.solo = solo;
+                } else {
+                    return Ok(());
                 }
             }
             ChannelId::Playback(idx) => {
                 if let Some(c) = self.playbacks.get_mut(idx) {
                     c.solo = solo;
+                } else {
+                    return Ok(());
                 }
+            }
+        }
+        if solo == was_soloed {
+            return Ok(());
+        }
+        let had_solo = !self.soloed.is_empty();
+        if solo {
+            self.soloed.insert(channel);
+        } else {
+            self.soloed.remove(&channel);
+        }
+        // A solo change rewrites many sends.  Coalesce them into the same
+        // 63-word bursts as a scene write; one paced write per cell would
+        // take seconds on the UCX.
+        let _batch = self.begin_write_batch();
+
+        if solo {
+            if had_solo {
+                // Another solo is already active and its sends are already
+                // zeroed: restore only this newly soloed channel.
+                match channel {
+                    ChannelId::Input(idx) => self.write_input_channel(idx)?,
+                    ChannelId::Playback(idx) => self.write_playback_channel(idx)?,
+                    ChannelId::Output(_) => {}
+                }
+            } else {
+                // First solo: silence every other channel.
+                for idx in 0..self.inputs.len() {
+                    if channel != ChannelId::Input(idx) {
+                        self.write_input_channel(idx)?;
+                    }
+                }
+                for idx in 0..self.playbacks.len() {
+                    if channel != ChannelId::Playback(idx) {
+                        self.write_playback_channel(idx)?;
+                    }
+                }
+            }
+        } else if self.soloed.is_empty() {
+            // Last solo released: restore every send from the model.
+            for idx in 0..self.inputs.len() {
+                self.write_input_channel(idx)?;
+            }
+            for idx in 0..self.playbacks.len() {
+                self.write_playback_channel(idx)?;
+            }
+        } else {
+            // Other solos remain: this channel goes back to zero.
+            match channel {
+                ChannelId::Input(idx) => self.write_input_channel(idx)?,
+                ChannelId::Playback(idx) => self.write_playback_channel(idx)?,
+                ChannelId::Output(_) => {}
             }
         }
         Ok(())
@@ -5966,6 +6132,84 @@ mod tests {
         dev.set_main_out(Some(1)).unwrap();
         dev.set_main_out(None).unwrap();
         assert_eq!(dev.settings().main_out, None);
+    }
+
+    #[test]
+    fn ucx_playback_mute_preserves_the_fader_level() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_playback_volume(0, 0, 0, 0.4).unwrap();
+        let before = dev.playbacks()[0].volumes.clone();
+        assert!(before[0] > 0.0);
+
+        dev.set_mute(ChannelId::Playback(0), true).unwrap();
+        assert!(dev.playbacks()[0].mute);
+        assert_eq!(dev.playbacks()[0].volumes, before, "muting keeps the fader");
+
+        dev.set_mute(ChannelId::Playback(0), false).unwrap();
+        assert!(!dev.playbacks()[0].mute);
+        assert_eq!(
+            dev.playbacks()[0].volumes,
+            before,
+            "unmuting restores the fader, not zero"
+        );
+    }
+
+    #[test]
+    fn ucx_input_mute_preserves_the_fader_level() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_input_volume(0, 0, 0, 0.35).unwrap();
+        let before = dev.inputs()[0].volumes.clone();
+
+        dev.set_mute(ChannelId::Input(0), true).unwrap();
+        assert!(dev.inputs()[0].mute);
+        assert_eq!(dev.inputs()[0].volumes, before, "muting keeps the fader");
+
+        dev.set_mute(ChannelId::Input(0), false).unwrap();
+        assert!(!dev.inputs()[0].mute);
+        assert_eq!(
+            dev.inputs()[0].volumes,
+            before,
+            "unmuting restores the fader, not zero"
+        );
+    }
+
+    #[test]
+    fn ucx_solo_rewrites_sends_without_moving_the_fader() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_playback_volume(1, 0, 0, 0.5).unwrap();
+        let fader = dev.playbacks()[2].volumes[0];
+        assert!(fader > 0.0);
+
+        let dsp = ucx::output_pair_dsp(0).unwrap() as u8;
+        let reg = ucx::matrix_reg(dsp, Source::Playback(dev.playbacks()[2].id));
+        writes.lock().unwrap().clear();
+
+        dev.set_playback_solo(0, 0, true).unwrap();
+        assert_eq!(
+            dev.playbacks()[2].volumes[0],
+            fader,
+            "solo must not move the non-soloed fader"
+        );
+        assert!(
+            writes.lock().unwrap().iter().any(|w| {
+                matches!(w, Write::Words(v) if v.iter().any(|(a, value)| *a == reg && *value == 0))
+            }),
+            "soloing another playback pair writes a zero send"
+        );
+
+        writes.lock().unwrap().clear();
+        dev.set_playback_solo(0, 0, false).unwrap();
+        assert_eq!(
+            dev.playbacks()[2].volumes[0],
+            fader,
+            "unsolo must not move the fader"
+        );
+        assert!(
+            writes.lock().unwrap().iter().any(|w| {
+                matches!(w, Write::Words(v) if v.iter().any(|(a, value)| *a == reg && *value != 0))
+            }),
+            "unsolo restores the non-soloed send"
+        );
     }
 
     #[test]

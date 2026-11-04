@@ -149,6 +149,10 @@ A channel strip shows, left to right:
   being written (see [section 4](#4-how-the-mixer-works-submixes));
 - **mute** and **solo** (outputs use mute and **cue**);
 - a **level fader** with a meter beside it;
+
+Mute silences a channel without moving its fader; unmuting restores the same
+level. Solo silences the other inputs and software playbacks while the soloed
+channel keeps its fader; releasing the last solo restores the others.
 - a column of small buttons: `T` (trim), the settings gear, `EQ` and `D`
   (dynamics), when the unit provides them;
 - a **thin FX fader** at the top of that column, when the unit has an FX bus.
