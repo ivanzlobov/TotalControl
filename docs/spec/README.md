@@ -1,19 +1,19 @@
-# Fireface UC/UCX specification
+# TotalControl specifications
 
-This directory is the authoritative specification for the Fireface UC and UCX
-control protocols and the TuxMix control surface.
+This directory contains the device and GUI specifications. Runtime structure
+is defined once in [`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md);
+these documents extend it with device-specific and visible detail.
 
 | Document | Contents |
 |---|---|
-| [UC-CONTROL-SPEC.md](UC-CONTROL-SPEC.md) | UC USB control paths, requests, matrix words, phase, output levels and balance, switches, rates and state ownership |
-| [UCX-CONTROL-SPEC.md](UCX-CONTROL-SPEC.md) | UCX IF1 registers, matrix, output order, metering, capability guards and state ownership |
-| [OSC-CONTROL-SPEC.md](OSC-CONTROL-SPEC.md) | TotalMix FX OSC transport, pages, scales, link rules and UCX register mapping |
-| [BABYFACE-PRO-CONTROL-SPEC.md](BABYFACE-PRO-CONTROL-SPEC.md) | Babyface Pro FS channel model, ALSA control surface, vendor USB protocol, DSP EQ blocks, metering, capabilities and persistence |
-| [TUXMIX-SPEC.md](TUXMIX-SPEC.md) | Mixer layout, strip controls, settings panels, output balance, motion, latency and persistence |
+| [TOTALCONTROL-GUI-SPEC.md](TOTALCONTROL-GUI-SPEC.md) | layout, strip controls, panels, gestures, motion and Control Room |
+| [TOTALCONTROL-OSC-SPEC.md](TOTALCONTROL-OSC-SPEC.md) | TotalMix FX OSC transport, pages, scales, feedback and mapping |
+| [FIREFFACE-UCX-PROTOCOL-SPEC.md](FIREFFACE-UCX-PROTOCOL-SPEC.md) | Fireface UCX transport, registers, writes and readback |
+| [FIREFFACE-UC-PROTOCOL-SPEC.md](FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC transport and controls |
+| [BABYFACE-PRO-PROTOCOL-SPEC.md](BABYFACE-PRO-PROTOCOL-SPEC.md) | Babyface Pro FS channel model, ALSA surface, USB protocol and DSP blocks |
 
-These documents are present-tense and describe the current system.  Reference
-and working material live in [`../archive/`](../archive/).  Open questions and
+The end-user manual is
+[`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md). Development-only
+backends and tools are in
+[`../DEVELOPMENT-TOOLS.md`](../DEVELOPMENT-TOOLS.md). Open questions and
 capture requests live in [`../work/`](../work/).
-
-The end-user manual is [`../TUXMIX_Manual.md`](../TUXMIX_Manual.md); it is not
-part of the specification.

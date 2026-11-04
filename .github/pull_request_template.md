@@ -33,5 +33,5 @@ workaround, remaining test gap, or follow-up needed in `docs/work/`.
 ## Documentation
 
 - [ ] Specifications updated when the implemented model changed
-- [ ] `docs/TOTALCONTROL_Manual.md` updated for user-facing behaviour
+- [ ] `docs/TOTALCONTROL-Manual.md` updated for user-facing behaviour
 - [ ] Working notes and open questions kept in `docs/work/`

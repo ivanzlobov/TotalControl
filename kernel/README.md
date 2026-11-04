@@ -10,9 +10,10 @@ The kernel module is a transport core:
 - the UC output-latch watchdog and engine recovery.
 
 Mixer state, routing, preamps, EQ, meters and scenes live in TotalControl
-userspace.  See [`../docs/DRIVER-ARCHITECTURE.md`](../docs/DRIVER-ARCHITECTURE.md)
-for the host/device/buffer picture and the measured latency budget.  The
-older protocol notes are in the archive (`docs/archive/`).
+userspace.  See
+[`../docs/TOTALCONTROL-ARCHITECTURE.md`](../docs/TOTALCONTROL-ARCHITECTURE.md)
+for the host/device/buffer picture and the latency model. The older protocol
+notes are in the archive (`docs/archive/`).
 
 ## Devices
 

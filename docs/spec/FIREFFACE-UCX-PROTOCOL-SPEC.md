@@ -6,6 +6,25 @@ device capabilities of the Fireface UCX backend.
 Units and ranges are the values used by the backend. A register value is
 16-bit unless stated otherwise.
 
+## Contents
+
+- [1. Device model](#1-device-model)
+- [2. USB transport](#2-usb-transport)
+- [3. IF1 register words](#3-if1-register-words)
+- [4. Register model](#4-register-model)
+- [5. Channel topology](#5-channel-topology)
+- [6. Input controls](#6-input-controls)
+- [7. Output controls](#7-output-controls)
+- [8. Equalizer and low cut](#8-equalizer-and-low-cut)
+- [9. Dynamics and AutoLevel](#9-dynamics-and-autolevel)
+- [10. FX bus](#10-fx-bus)
+- [11. Clock, rate and options](#11-clock-rate-and-options)
+- [12. Streaming](#12-streaming)
+- [13. Metering](#13-metering)
+- [14. State and scenes](#14-state-and-scenes)
+- [15. Capabilities](#15-capabilities)
+- [16. Code map](#16-code-map)
+
 ## 1. Device model
 
 | Property | Value |
@@ -397,7 +416,7 @@ the affected sends:
   preserving bit 1 (Mono Main Out).  Releasing Talkback restores the prior
   send and FX-return words.
 - **Trim** — a per-channel attenuation applied to every send (see
-  `TUXMIX-SPEC.md`).
+  `TOTALCONTROL-GUI-SPEC.md`).
 
 **FX send** is an absolute level in 0.1 dB (`0x0000` = 0.0 dB, `NN01`).
 A fader drag writes `0x0000` to the send and restores the knob value when
@@ -492,7 +511,7 @@ host-to-device traffic.
 
 Stereo, 48 V, Inst, AutoSet and Phase are per-channel states. Link state is
 `NN02`. The linked-pair parameter rules are defined in
-[`OSC-CONTROL-SPEC.md`](OSC-CONTROL-SPEC.md) §11.
+[`TOTALCONTROL-OSC-SPEC.md`](TOTALCONTROL-OSC-SPEC.md) §11.
 
 ## 7. Output controls
 
@@ -806,7 +825,7 @@ peak == 0   = below range
 
 Input meters use the larger of input A and input B. Playback meters use the
 playback page. Hardware-output meters use the post-fader page, reordered from
-DSP order to the Phones-first output order. TuxMix's meters use the peak
+DSP order to the Phones-first output order. TotalControl's meters use the peak
 word; the power word is mean square and reads several dB below the peak for
 music.
 
@@ -827,9 +846,9 @@ A scene stores:
 The backend writes the mixer scene at connect and after relevant rate or
 stream changes.  The options word (clock source, optical format, SPDIF
 professional, word-clock rate and termination, EQ+D for Record), the reference
-levels and the 48 V/Inst/Level switches are held by the unit: TuxMix does not
+levels and the 48 V/Inst/Level switches are held by the unit: TotalControl does not
 write them at connect and has no readback for them.  The saved scene keeps the
-last value written from TuxMix for display.
+last value written from TotalControl for display.
 
 Input gain, front-panel output volume, DIM and MS state are read from the IF1
 state stream.  A read-back gain is not overwritten by the saved scene.
@@ -875,8 +894,8 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | IF1 word encoding and parity | `kernel/ffuc.c` |
 | hwdep ABI and events | `kernel/ffuc-hwdep.c`, `kernel/ffuc-uapi.h` |
 | Stream start/stop and rate | `kernel/ffuc.c` |
-| IF1 constants and matrix encoding | `ui/tuxmix/tuxmix-core/src/fireface/protocol.rs` |
-| Device write paths, meters and scenes | `ui/tuxmix/tuxmix-core/src/fireface/device.rs` |
-| Channel DSP registers | `ui/tuxmix/tuxmix-core/src/fireface/settings.rs` |
-| Channel topology | `ui/tuxmix/tuxmix-core/src/profiles/ucx.rs` |
-| Capability guards | `ui/tuxmix/tuxmix-core/src/fireface/models.rs` |
+| IF1 constants and matrix encoding | `ui/totalcontrol/totalcontrol-core/src/fireface/protocol.rs` |
+| Device write paths, meters and scenes | `ui/totalcontrol/totalcontrol-core/src/fireface/device.rs` |
+| Channel DSP registers | `ui/totalcontrol/totalcontrol-core/src/fireface/settings.rs` |
+| Channel topology | `ui/totalcontrol/totalcontrol-core/src/profiles/ucx.rs` |
+| Capability guards | `ui/totalcontrol/totalcontrol-core/src/fireface/models.rs` |

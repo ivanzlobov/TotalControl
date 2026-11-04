@@ -1,19 +1,26 @@
-# TuxMix Manual
+# TotalControl Manual
 
-TuxMix is a control surface for RME Fireface interfaces on Linux. It replaces
-the vendor's mix application on Linux: routing, gains, EQ, dynamics, FX and
-snapshots, driven through the kernel driver or directly over USB.
+TotalControl is a control surface for RME Fireface interfaces on Linux. It
+replaces the vendor's mix application on Linux: routing, gains, EQ, dynamics,
+FX and snapshots, driven through the kernel driver.
 
-This manual is written for the end user. It describes what you see and do.
-The developer specification for the same features is
-[`docs/spec/TUXMIX-SPEC.md`](spec/TUXMIX-SPEC.md); the device protocols are in
-the sibling documents under `docs/spec/`.
+This manual is written for the end user. It describes installation, setup
+and use. The developer specifications are in [`spec/`](spec/README.md); the
+runtime architecture is in
+[`TOTALCONTROL-ARCHITECTURE.md`](TOTALCONTROL-ARCHITECTURE.md).
+
+Only the kernel driver plus hwdep path is supported for users. The legacy
+ALSA backends, direct USB and capture/probe tools are development tools; see
+[`DEVELOPMENT-TOOLS.md`](DEVELOPMENT-TOOLS.md).
 
 Panels and controls appear only where the connected unit has them. Examples
 in this manual assume a Fireface UCX, which has the full set: EQ, Dynamics,
 FX and the Control Room. On a Fireface UC the same layout applies with the
 reduced control set.
 
+## Contents
+
+- [Setup](#setup)
 - [1. The mixer window](#1-the-mixer-window)
 - [2. Views](#2-views)
 - [3. Channel strips](#3-channel-strips)
@@ -28,9 +35,75 @@ reduced control set.
 - [12. Reset Mix](#12-reset-mix)
 - [13. Snapshots, layouts, undo and redo](#13-snapshots-layouts-undo-and-redo)
 - [14. Latency](#14-latency)
-- [15. Where TuxMix keeps its data](#15-where-tuxmix-keeps-its-data)
+- [15. Where TotalControl keeps its data](#15-where-totalcontrol-keeps-its-data)
 - [16. Running in the background](#16-running-in-the-background)
 - [17. Device settings at startup](#17-device-settings-at-startup)
+- [Appendix A — Device modes](#appendix-a--device-modes)
+- [Appendix B — PipeWire](#appendix-b--pipewire)
+- [Appendix C — OSC setup](#appendix-c--osc-setup)
+- [Appendix D — Command-line options](#appendix-d--command-line-options)
+
+## Setup
+
+### Requirements
+
+- A Linux system with ALSA and PipeWire.
+- A supported Fireface in normal vendor mode.
+- A kernel with matching headers and DKMS for the driver.
+
+The supported devices are the Fireface UC and Fireface UCX. The Babyface Pro
+FS backend is present but is not part of the supported installation path yet.
+
+### Install the kernel driver
+
+From the repository root:
+
+```sh
+./scripts/install-dkms.sh
+```
+
+The installer registers `snd-fireface-uc` with DKMS, builds it for the running
+kernel and enables the load service. Keep the kernel headers installed so the
+module is rebuilt after a kernel update.
+
+Check the installation:
+
+```sh
+dkms status
+modinfo -k "$(uname -r)" snd-fireface-uc
+```
+
+If the module is missing after a kernel update:
+
+```sh
+sudo dnf install kernel-devel-"$(uname -r)"
+sudo dkms autoinstall -k "$(uname -r)"
+sudo modprobe snd-fireface-uc
+```
+
+### Start TotalControl
+
+Start the application from the desktop menu or from a terminal:
+
+```sh
+totalcontrol
+```
+
+The window opens on the Quick view. The Mixer and Matrix views are in the top
+bar.
+
+### Check the device
+
+1. Open the device card in the sidebar.
+2. Confirm the model, sample rate and buffer.
+3. Confirm that the input meters move when a source is connected.
+
+From a terminal, `aplay -l` lists the card and
+`ls -l /dev/snd/hwC*D*` lists the hwdep nodes.
+
+If no device appears, check that the unit is in normal vendor mode, that the
+kernel module is loaded, and that another application is not holding the
+device.
 
 ## 1. The mixer window
 
@@ -57,7 +130,7 @@ input formats and firmware and serial information.
 
 ## 2. Views
 
-TuxMix offers three views:
+TotalControl offers three views:
 
 - **Quick**: one source into one destination — the fastest way to build a
   basic mix.
@@ -292,7 +365,7 @@ the cue mix permanently.
 
 Listenback is the reverse direction: a microphone in the recording room is
 sent to Main while Talkback is active, with its own attenuation for the Main
-signal. RME’s Control Room uses both directions; TuxMix currently exposes the
+signal. RME’s Control Room uses both directions; TotalControl currently exposes the
 Talkback button and its receive switches.
 
 Talkback attenuates the active sends in the monitored mix; silent routes are
@@ -342,7 +415,7 @@ The dialog has four sections:
 
 The source lists start with `None` and then use the hardware input names. The
 five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
-are saved per device in TuxMix's own preferences, not in the mixer scene.
+are saved per device in TotalControl's own preferences, not in the mixer scene.
 
 `OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
 The settings in the dialog are not written while it is open.
@@ -406,13 +479,13 @@ Choosing one rewrites the whole mixer in one go.
 
 ## 13. Snapshots, layouts, undo and redo
 
-TuxMix keeps your work in three layers:
+TotalControl keeps your work in three layers:
 
 - **Snapshots** (eight slots) store a complete mix: routing, faders, names,
-  trims and the device settings TuxMix manages. They are mixer-plus files —
+  trims and the device settings TotalControl manages. They are mixer-plus files —
   broader than the device's own snapshot. Recall applies them to the device
   at once. The current mix is saved every few seconds and again when
-  TuxMix closes.
+  TotalControl closes.
 - **Layouts** (six slots) store only which strips are collapsed.
 - **GUI state** (window, sidebar, view, zoom, names, open panels, selected
   output and link groupings) is remembered automatically between sessions.
@@ -421,8 +494,8 @@ Undo restores the scene as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
 you undid. Device settings and window layout are not part of undo.
 
-Groups (multi-select sets) exist only while TuxMix runs; they are not saved.
-There is no RME-style Workspace file — TuxMix keeps the same information in
+Groups (multi-select sets) exist only while TotalControl runs; they are not saved.
+There is no RME-style Workspace file — TotalControl keeps the same information in
 separate files instead.
 
 ## 14. Latency
@@ -440,38 +513,105 @@ show input and output as `in / out`; `urb`, `recover` and `events` are single
 values. A non-zero row means the USB transport is dropping or mis-timing
 packets; reset only clears the display baseline.
 
-## 15. Where TuxMix keeps its data
+## 15. Where TotalControl keeps its data
 
 - Snapshots: `Mix <n>.json` in the scene directory.
 - The continuously saved current mix: `auto.json` in the scene directory.
 - Layouts: `Layout <n>.json` in the layout directory.
-- Window and GUI state: `gui.json` in the `~/.config/tuxmix/` directory.
+- Window and GUI state: `gui.json` in the `~/.config/totalcontrol/` directory.
 
 These are plain JSON files you can back up or copy between machines.
 
 ## 16. Running in the background
 
-With a system tray, closing the window keeps TuxMix running, as TotalMix
+With a system tray, closing the window keeps TotalControl running, as TotalMix
 does: the front-panel DIM button and the restore of your mix after a replug
-are TuxMix's job while it runs. The tray icon toggles the window; its menu
-has dim, recall mix 1–8, settings and quit. `tuxmix --minimized` starts
-hidden, and Settings can start TuxMix with your session. Without a tray,
-closing the window quits; one TuxMix runs per session, and a second launch
+are TotalControl's job while it runs. The tray icon toggles the window; its menu
+has dim, recall mix 1–8, settings and quit. `totalcontrol --minimized` starts
+hidden, and Settings can start TotalControl with your session. Without a tray,
+closing the window quits; one TotalControl runs per session, and a second launch
 tops up the first.
 
-See [`ui/tuxmix/docs/guide.md`](../ui/tuxmix/docs/guide.md) for the Linux
+See [`ui/totalcontrol/docs/guide.md`](../ui/totalcontrol/docs/guide.md) for the Linux
 audio stack, building from source and project status.
 
 ## 17. Device settings at startup
 
-At connect TuxMix compares the readable device state with the saved scene
+At connect TotalControl compares the readable device state with the saved scene
 and lets you choose, with a dialog:
 
-- **Use TuxMix settings** — write the saved scene to the device.
+- **Use TotalControl settings** — write the saved scene to the device.
 - **Use device settings** — keep what the device currently reports where
-  TuxMix can read it (clock, gains, volumes, and similar).
-- **Always use TuxMix settings** — as above and stop asking.
+  TotalControl can read it (clock, gains, volumes, and similar).
+- **Always use TotalControl settings** — as above and stop asking.
 
 Note that on the UCX the hardware-held switches on the front panel (options,
-reference levels, `48V` and similar) are not read back by TuxMix, so the
-panel shows the last value set from TuxMix; the dialog never changes them.
+reference levels, `48V` and similar) are not read back by TotalControl, so the
+panel shows the last value set from TotalControl; the dialog never changes them.
+
+## Appendix A — Device modes
+
+TotalControl needs the normal vendor mode of the interface. In that mode the
+kernel driver exposes the PCM device and the hwdep mixer node.
+
+In class-compliant mode the stock `snd-usb-audio` driver carries audio, but the
+vendor mixer is not available. TotalControl cannot control the mixer in that
+mode. Select the normal mode on the unit before starting TotalControl.
+
+Only one application may own the mixer at a time. Close other mixer
+applications before starting TotalControl.
+
+## Appendix B — PipeWire
+
+TotalControl uses the ALSA PCM exposed by the kernel driver. PipeWire sees it
+as a normal card. Use the Pro Audio profile when the device should expose all
+channels to a DAW.
+
+The buffer-size picker in TotalControl sets the graph quantum. The driver adds
+its own USB queue and device lead; the latency display explains the result.
+
+The WirePlumber rule in
+[`ui/totalcontrol/tools/alsa/wireplumber-uc.conf`](../ui/totalcontrol/tools/alsa/wireplumber-uc.conf)
+selects polled scheduling and the 18-channel Pro Audio profile.
+
+## Appendix C — OSC setup
+
+OSC is opt-in and binds to loopback by default:
+
+```sh
+totalcontrol --osc
+```
+
+| Option | Default | Meaning |
+|---|---:|---|
+| `--osc-port` | 9000 | UDP port TotalControl listens on |
+| `--osc-send-port` | 9001 | UDP port for feedback |
+| `--osc-host` | 127.0.0.1 | Feedback destination |
+
+Configure the controller to send to the `--osc-port` and receive feedback on
+`--osc-send-port`. A TotalMix FX-compatible controller can use its normal
+address space. The address space is defined in
+[`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md).
+
+For a controller on another host, set `--osc-host` to the controller's address
+and allow the feedback port through the firewall. Do not run two controllers
+on the same feedback port.
+
+## Appendix D — Command-line options
+
+| Option | Effect |
+|---|---|
+| `--osc` | Enable the OSC control surface |
+| `--view quick|mixer|matrix` | Start on a view |
+| `--fullscreen` | Start fullscreen |
+| `--minimized` | Start hidden in the tray |
+| `--scale <n>` | Initial UI scale |
+| `--select-out <n>` | Initial submix |
+| `--mock` | Simulate a Babyface Pro FS |
+| `--mock-ucx` | Simulate a Fireface UCX |
+| `--mock-uc` | Simulate a Fireface UC |
+| `--control-only` | Do not open the capture PCM |
+
+The mock modes are for demonstration and development. Device backend switches
+and capture tools are documented in `DEVELOPMENT-TOOLS.md` and are not
+supported installation options.

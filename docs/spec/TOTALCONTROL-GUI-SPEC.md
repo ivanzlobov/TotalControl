@@ -1,12 +1,32 @@
-# TuxMix control surface specification
+# TotalControl GUI specification
 
-This document defines the TuxMix user interface for the Fireface UC and UCX,
-the model behind it and the panel behaviour. It is the developer reference;
-the end-user manual is `docs/TUXMIX_Manual.md`.
+This document defines the visible TotalControl interface for the Fireface UC
+and UCX: layout, controls, panels, gestures and motion. Runtime structure,
+state ownership and device I/O are in
+[`../TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md). The
+end-user manual is [`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md).
+
+## Contents
+
+1. [Mixer layout](#1-mixer-layout)
+2. [Channel strip](#2-channel-strip)
+3. [Runtime reference](#3-runtime-reference)
+4. [Settings panel](#4-settings-panel)
+5. [Equalizer panel](#5-equalizer-panel)
+6. [Dynamics panel](#6-dynamics-panel)
+7. [FX panel](#7-fx-panel)
+8. [Output balance](#8-output-balance)
+9. [Pan and balance](#9-pan-and-balance)
+10. [Motion](#10-motion)
+11. [Stereo link](#11-stereo-link)
+12. [Control Room](#12-control-room)
+13. [Latency display](#13-latency-display)
+14. [State references](#14-state-references)
+15. [Control invariants](#15-control-invariants)
 
 ## 1. Mixer layout
 
-TuxMix presents three channel rows:
+TotalControl presents three channel rows:
 
 1. Hardware Inputs
 2. Software Playback
@@ -195,44 +215,13 @@ collapses the strip, and on a Matrix cell toggles the cell between off and
 unity. Ordinary push buttons act once per click and have no separate double
 click.
 
-## 3. Device service and meter path
+## 3. Runtime reference
 
-The device handle is owned by a service thread.  The UI keeps a mirror of the
-channel model and does not perform a transport call on the UI thread.
-
-| Flow | Direction | Cadence |
-|---|---|---|
-| User edit | UI command queue to the device thread | on interaction |
-| Model snapshot | device thread to the UI mirror | when the model changes, at most 50 ms |
-| Meter frame | device thread to a shared meter snapshot | every device meter packet (about 120 Hz) |
-| Meter redraw | fader canvas reads the meter snapshot | 30 fps while the snapshot is active |
-| Housekeeping tick | UI | 1 s |
-
-The model snapshot is the only input to the visible model.  The UI drains a
-snapshot when the service signals one; it does not poll the model at the meter
-rate.
-
-Meters bypass the view.  The service writes level and peak-hold values to the
-shared snapshot; each strip fader, collapsed-strip meter and FX meter reads it
-in its own canvas `draw`.  A canvas schedules its next frame itself, so a
-meter frame produces no UI message and no view rebuild.  The peak marker holds
-for one second and then falls at 20 dB/s while the service polls at the device
-rate, so a transient between two drawn frames is still shown.
-
-The snapshot is active while a level, a held peak or an FX value is above the
-bottom of the meter scale.  While it is idle the canvases schedule no frames
-and the window stays static.  A rising edge from the service, or a change of
-the FX overload state, wakes the UI with one message; that frame reads the new
-values and the canvases resume their 30 fps loop.  The wake carries no meter
-data.
-
-A dragged fader, knob or FX fader draws its local drag position immediately and
-sends the command in parallel; the next snapshot confirms the value.  Discrete
-controls redraw from the next snapshot, at most 50 ms away.
-
-The one-second tick carries connection probing, auto-save, OSC and the
-front-panel poll.  It is not an interaction clock.  Setting
-`TUXMIX_DEVICE_SERVICE=0` returns the device to the UI thread for comparison.
+The device-service boundary, command queue, model snapshots and meter bus are
+defined in [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §5
+and §6. This specification only describes the visible result: a control shows
+its local drag position immediately, and the next confirmed model snapshot
+settles it.
 
 ## 4. Settings panel
 
@@ -242,6 +231,38 @@ The layout is one vertical stack per channel type. Inputs share a nine-row
 grid; a control a channel lacks leaves its row empty, so the rows below never
 move and `send FX` and the phase pair sit at the same height on every input.
 Empty rows keep the height of the control the grid reserves for them.
+
+### 4.1 Input slideout grid
+
+| Row | Inputs 1/2 | Inputs 3/4 | Inputs 5–8 | Inputs 9+ |
+|---|---|---|---|---|
+| 1 | `stereo` | `stereo` | `stereo` | `stereo` |
+| 2 | space | reference label | reference label | space |
+| 3 | `+48V` | `instr.` + reference | reference | space |
+| 4 | `auto set` | `auto set` | space | space |
+| 5 | gain knob | gain knob | space | space |
+| 6 | `width` | `width` | `width` | `width` |
+| 7 | `send FX` | `send FX` | `send FX` | `send FX` |
+| 8 | `MS proc` | `MS proc` | `MS proc` | `MS proc` |
+| 9 | `Ø L` `Ø R` | `Ø L` `Ø R` | `Ø L` `Ø R` | `Ø L` `Ø R` |
+
+### 4.2 Playback and output slideout grids
+
+| Row | Software playback | Hardware output |
+|---|---|---|
+| 1 | `stereo` | `stereo` |
+| 2 | `width` | reference label |
+| 3 | `send FX` | reference dropdown |
+| 4 | `MS proc` | `return FX` |
+| 5 | `Ø L` `Ø R` | `Ø L` `Ø R` |
+| 6 | — | `no trim` |
+| 7 | — | space |
+| 8 | — | `talkback` |
+| 9 | — | `loopback` |
+
+The row heights are shared across channel types. A missing control keeps its
+row so the controls below stay aligned. The Control Room output keeps its own
+reference group; `talkback` is omitted on Control Room channels.
 
 | Channel | Contents, top to bottom |
 |---|---|
@@ -349,7 +370,7 @@ GLOBAL grid, apart from the device-owned rows.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
 switches are held by the unit: they are not read back and not written at
-connect. The sheet shows the last value written from TuxMix. Input gain is
+connect. The sheet shows the last value written from TotalControl. Input gain is
 read back from the unit and the Gain knob follows it.
 
 The UC reference rows are the unit's global options word. The UCX handles
@@ -567,7 +588,7 @@ pan to that bus. The input/playback fader is the send level to the current
 submix, not a single channel fader. The output strip's fader is the bus
 master.
 
-| Term | Normal mixing desk | TotalMix FX | TuxMix |
+| Term | Normal mixing desk | TotalMix FX | TotalControl |
 |---|---|---|---|
 | Input gain / trim | Preamp trim before the channel fader and meter | Hardware preamp gain; the T button is Trim Gain mode, not a separate gain stage | Trim pre-gain, common to every send of the channel |
 | Channel fader | One per channel, feeding the bus assignment | None | None |
@@ -582,9 +603,9 @@ In TotalMix, T is the **Trim Gain** mode: it gangs the sends of one channel.
 It is not a pre-gain and does not move the input VU. TotalMix therefore has
 an input VU after the preamp and optional FX, not “before trim”.
 
-In TuxMix, T is a true pre-fader trim. The send fader displays the post-trim
+In TotalControl, T is a true pre-fader trim. The send fader displays the post-trim
 level, so its maximum is the trim value at 0 dB send. An analog desk changes
-the meter and signal with trim but leaves the channel fader in place; TuxMix
+the meter and signal with trim but leaves the channel fader in place; TotalControl
 moves the send fader so the post-trim level is visible.
 
 For an analog input, the signal paths are:
@@ -601,7 +622,7 @@ input -> input stage / reference -> preamp gain (where present) -> ADC
       -> send fader for the selected output -> bus sum
       -> output fader -> output VU -> DAC
 
-TuxMix:
+TotalControl:
 input -> input stage / reference -> preamp gain (where present) -> ADC
       -> trim -> input VU -> send fader for the selected submix
       -> bus sum -> output fader -> output VU -> DAC
@@ -609,7 +630,7 @@ input -> input stage / reference -> preamp gain (where present) -> ADC
 
 The preamp gain is present on the UCX analog inputs 1–4. Digital inputs enter
 after the preamp stage. In TotalMix, T is a send-fader mode, not a gain stage.
-In TuxMix, trim is a host-side pre-fader gain after the ADC.
+In TotalControl, trim is a host-side pre-fader gain after the ADC.
 
 Control Room destinations (Main, Speaker B, Phones) are ordinary output buses
 with their assignment controls. Cue/PFL to selects which monitoring output
@@ -832,182 +853,23 @@ are not part of the mixer scene, snapshot, undo stack or OSC scene state.
 The Control Room button state (`Dim`, `Talkback`, `Speaker B`, `Mono`,
 `Mute FX`) remains runtime state and is not stored in these settings.
 
-## 13. Latency chain
+## 13. Latency display
 
-The Quantum picker sets the PipeWire graph quantum, one ALSA period. The
-driver keeps a ring of at least the two queued USB URBs plus two URBs of
-margin. At 1x rates that is 192 frames: four periods at 48 samples, three at
-64, and two at 96. At 128 samples the two periods give 256 frames.
+The Settings panel shows the application/ALSA latency budget and its terms:
+the host ring, USB queue, device lead and converter. The buffer-size picker
+sets the graph quantum. The formulas and the device-side model are in
+[`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §10.
 
-```text
-ring = max(2 × quantum, ceil(192 / quantum) × quantum)
-output latency ≈ ring + 2 × 48 + 48 frames
-```
+The displayed line is an estimate, not a measured acoustic round trip. The
+panel labels it accordingly and keeps the four terms visible.
 
-For the UCX the ring must also cover the output lead plus two URBs of
-margin, rounded to a whole URB:
+## 14. State references
 
-```text
-ucx_floor = round_up(max((nurbs + 2) × frames_per_urb,
-                         (nurbs + 1) × frames_per_urb + 60
-                         + 2 × frames_per_urb),
-                     frames_per_urb)
-ring = max(2 × quantum, ceil(ucx_floor / quantum) × quantum)
-```
-
-With the default 48-frame URB this gives 336 frames at 48 kHz and 576 frames
-at 96 kHz. The old 192-frame floor was smaller than the 204-frame output
-lead and underran at 96 and below.
-
-On the UCX each URB carries up to eight 1 ms ISO packets of
-`ceil(rate / 8000)` frames. The queue is `nurbs + 1` URBs and the unit adds a
-60-frame output lead. With the default `urb_frames = 48` and `nurbs = 2`:
-
-| Rate | Frames/URB | USB queue | Device lead | Device side |
-|---|---|---|---|---|
-| 48 kHz | 48 | 144 (3.0 ms) | 60 (1.25 ms) | 204 frames (4.25 ms) |
-| 96 kHz | 96 | 288 (3.0 ms) | 60 (0.63 ms) | 348 frames (3.63 ms) |
-| 192 kHz | 192 | 576 (3.0 ms) | 60 (0.31 ms) | 636 frames (3.31 ms) |
-
-The Settings **Latency** line shows a round-trip estimate for the UCX:
-
-```text
-RTL ≈ USB queue + 60-frame lead + converter + graph period
-USB queue = (nurbs + 1) × frames_per_urb
-converter = 13 frames at 1x/2x, 12 at 4x
-```
-
-The estimate adds the converter and the graph period to the device side in
-the table. At 128 samples / 44.1 kHz it is 345 frames (7.8 ms). Measured
-loopback values were 314–334 frames (7.1–7.6 ms); the estimate is
-conservative by about 1.2 ms.
-
-The line shows the estimate and its four terms: USB queue, device lead,
-converter and graph period. The **Buffer size** picker's quantum is the
-graph period. The UC line remains a one-way output budget: ring, USB queue,
-endpoint and converter.
-
-The idle ring estimate is the buffer-sizing formula above. The UC uses
-`max(2 × quantum, ceil((nurbs + 2) × frames_per_urb / quantum) × quantum)`;
-the UCX also includes the output lead and its two-URB margin.
-
-The RME Pro Audio nodes use polled scheduling, a graph-owned quantum and at
-least two ALSA periods. TuxMix's graph-quantum override reaches the card at
-48, 64, 96 and 128 samples. The low-latency rule is
-`ui/tuxmix/tools/alsa/wireplumber-uc.conf`.
-
-## 14. State and persistence
-
-A scene stores:
-
-- matrix cells and pan values;
-- input, playback and output faders and mutes;
-- input and output EQ, low cut, dynamics and AutoLevel;
-- output balance and FX Return;
-- loopback flags;
-- Reverb and Echo settings;
-- channel names and trim values.
-
-The UC device group is read at connect: input gain, 48 V, PAD, Inst, reference
-levels, clock source and optical format.
-
-The UCX mixer scene is host-owned and applied at connect. Reverb, Echo,
-dynamics and AutoLevel are host-owned. The options word, reference levels and
-the 48 V/Inst/Level switches are unit-owned: the saved scene keeps the last
-value written from TuxMix, and they are neither read nor written at connect.
-Input gain and output volume are read from the IF1 state stream.
-
-TuxMix restores its remembered engine rate on startup and reconnect. The UC
-sample rate follows the host stream; `Auto` follows the device or graph rate.
-
-The matrix is written before PCM opens. Loopback is written live.
-
-### 13.1 Startup mismatch
-
-At connect the backend drains the readable state, compares it with the saved
-scene, and shows a modal when they differ. `Always use TuxMix settings` is a
-preference that suppresses the comparison.
-
-| Model | Compared | Not compared |
-|---|---|---|
-| UC | clock source, optical format, SPDIF professional, AN1/2 48 V, AN3/4 PAD, AN3/4 Inst, the input gains the front panel reported, the output volumes the front panel reported | matrix, masters, loopback, mute |
-| UCX | the input gains and output volumes the IF1 state stream reported | options word, reference levels, 48 V/Inst/Level, PAD, matrix, faders, pans, EQ, dynamics, FX, loopback |
-
-The UCX comparison therefore covers only the channels the state stream has
-reported; a channel that has not moved can be absent.
-
-The scene is applied before the modal is shown. The choices then correct the
-readable values:
-
-| Choice | UC | UCX |
-|---|---|---|
-| Use TuxMix settings | write the scene's clock, optical, SPDIF, 48 V, PAD, Inst and input gains; output volumes were already applied with the scene | write the scene's input gains; output volumes and mixer were already applied with the scene |
-| Use device settings | write the device's readable clock, optical, SPDIF, 48 V, PAD, Inst, gain and output-volume values back; matrix, faders and loopback stay at the TuxMix scene | write the device's reported gains and output volumes back; options, references, 48 V/Inst/Level and the mixer stay at the TuxMix scene |
-| Always use TuxMix settings | as Use TuxMix settings, and stop asking | as Use TuxMix settings, and stop asking |
-
-The dialog never writes a value that was not compared. In particular, the UCX
-options word, reference levels and 48 V/Inst/Level are not restored by
-`Use device settings`; they remain at the TuxMix scene for display and are
-unchanged on the unit.
-
-The connect write is host → device for the mixer group on both models:
-matrix, faders, pans, sends, EQ, dynamics, FX, loopback and output volume.
-`Use TuxMix settings` adds the scene's input gain host → device.
-`Use device settings` is the only device → host direction: it copies the
-compared values from the device into the scene.
-
-Not read back, so never device → host and never part of the mismatch: the UC
-matrix, masters, loopback and mute; the UCX matrix, faders, pans, EQ,
-dynamics, FX and loopback. They are still written host → device from the
-scene at connect.
-
-The UCX options word, reference levels and 48 V/Inst/Level switches are
-unit-owned: not written at connect, not read back. Only the last value written
-from TuxMix is kept in the scene for display.
-
-### 13.2 Undo and Redo
-
-Undo stores the scene before a mix-changing command. A continuous gesture on
-one control is one step: a fader, pan, width or EQ-band drag coalesces until
-the control is released, another control is used, or the edit pauses. Undo
-restores the previous scene; Redo reapplies the undone scene. Device settings
-and layout preferences are not captured by undo.
-
-### 13.3 Snapshots, layouts and workspaces
-
-TuxMix persists state in three separate layers:
-
-| Layer | Storage | Contents |
-|---|---|---|
-| Snapshot | `Mix <n>.json` in the scene directory | A full `Scene` |
-| Layout | `Layout <n>.json` in the layout directory | The collapsed-strip set |
-| GUI state | `gui.json` in the config directory | Window, sidebar, row mode, zoom, labels, open panels, selected output and link groupings |
-
-The current mix is `auto.json` in the scene directory.
-
-A snapshot is a host-side file. The device stores only its current mixer
-state; recalling a snapshot applies the saved scene to the device. TuxMix has
-eight snapshot slots. A snapshot is a full `Scene`: mixer and routing state,
-channel names, trim, link state and the saved device group. It is broader than
-RME's mixer-only snapshot.
-
-A layout has six slots and stores only which strips are collapsed. It does not
-store channel visibility, remote exclusions or names.
-
-Groups exist only at runtime. They are not written to the scene, a layout, the
-GUI preferences or any other file, so restarting TuxMix clears them.
-
-TuxMix has no Workspace file. A Workspace is the RME container for the current
-mix, all eight snapshots, all layout presets, group definitions and GUI state.
-TuxMix keeps those in separate files, with group state missing.
-
-RME's corresponding scopes are:
-
-| RME concept | Scope |
-|---|---|
-| Snapshot | Mixer and routing state only; no names, visibility, layout or GUI state |
-| Layout Preset | Channel visibility and MIDI/OSC remote exclusions; stored in a Workspace |
-| Workspace | Complete session: current mix, snapshots, Layout Presets, groups, names and GUI state |
+Scene contents, snapshot storage, startup mismatch, undo and the split between
+mixer state and GUI preferences are defined in
+[`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9. This
+specification only names the visible surfaces: eight snapshot slots, six
+layout slots, the current auto-saved mix and the GUI preference file.
 
 ## 15. Control invariants
 

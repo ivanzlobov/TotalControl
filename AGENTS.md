@@ -23,25 +23,29 @@ documents for the current implementation, not as a work log.
   the open question in `docs/work/`.
 - Base UI figures on current TotalMix FX screenshots; the vendor manual can
   lag the shipping application.
-- The end-user documentation is `docs/TUXMIX_Manual.md`. The specifications
+- The end-user documentation is `docs/TOTALCONTROL-Manual.md`. The specifications
   are for developers; user-facing behaviour described in them must have a
   counterpart in the manual, and how-to material belongs in the manual, not
   in a specification.
 
 Authoritative files:
 
-- `docs/spec/UCX-CONTROL-SPEC.md` — UCX transport, registers, controls,
-  metering.
-- `docs/spec/OSC-CONTROL-SPEC.md` — TotalMix FX OSC transport, pages, scales,
-  link rules and UCX register mapping.
-- `docs/spec/TUXMIX-SPEC.md` — visible UI, panels, state and persistence.
-- `docs/spec/UC-CONTROL-SPEC.md` — UC-specific protocol and controls.
-- `docs/spec/BABYFACE-PRO-CONTROL-SPEC.md` — Babyface Pro FS channel model,
+- `docs/TOTALCONTROL-ARCHITECTURE.md` — runtime layers, device service, data
+  flow, state ownership, driver and latency model.
+- `docs/spec/TOTALCONTROL-GUI-SPEC.md` — visible UI, panels, gestures and
+  visible state.
+- `docs/spec/TOTALCONTROL-OSC-SPEC.md` — TotalMix FX OSC transport, pages,
+  scales, feedback and mapping.
+- `docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md` — UCX transport, registers,
+  controls and metering.
+- `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md` — UC protocol and controls.
+- `docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md` — Babyface Pro FS channel model,
   ALSA surface, vendor USB protocol, DSP EQ blocks and metering.
+- `docs/DEVELOPMENT-TOOLS.md` — development-only backends and tools.
 
 ## UI rules
 
-All UI layout and interaction rules live in `docs/spec/TUXMIX-SPEC.md`.
+All UI layout and interaction rules live in `docs/spec/TOTALCONTROL-GUI-SPEC.md`.
 Do not duplicate them here; when a rule is missing, add it to the spec.
 
 ## Git workflow

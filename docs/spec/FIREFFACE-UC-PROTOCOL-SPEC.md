@@ -2,7 +2,19 @@
 
 This specification defines the control protocol and persistent mixer state of
 the Fireface UC in normal RME mode.  It is the authoritative reference for
-the UC control surface implemented by TuxMix.
+the UC control surface implemented by TotalControl.
+
+## Contents
+
+- [1. Device and control paths](#1-device-and-control-paths)
+- [2. EP0 request map](#2-ep0-request-map)
+- [3. Matrix and channel words](#3-matrix-and-channel-words)
+- [4. Output level and balance](#4-output-level-and-balance)
+- [5. Switches and references](#5-switches-and-references)
+- [6. Routing controls](#6-routing-controls)
+- [7. Sample rate and clock](#7-sample-rate-and-clock)
+- [8. State ownership](#8-state-ownership)
+- [9. Host-side mixer operations](#9-host-side-mixer-operations)
 
 ## 1. Device and control paths
 
@@ -113,7 +125,7 @@ Loopback uses request `0x15`.  An index in `0..29` addresses one output
 channel; value `1` feeds that output into the same-numbered input channel.
 The loopback bank is live and changes the running stream.
 
-The matrix is latched when the audio engine starts.  TuxMix writes the
+The matrix is latched when the audio engine starts.  TotalControl writes the
 complete matrix — 36 sources × 18 blocks plus 18 masters — before opening
 PCM.  Subsequent cell writes update the device's stored state and apply at
 the next engine start.  Loopback remains live.
@@ -123,7 +135,7 @@ Input gain uses `0x1a` with 1 dB steps for inputs 1/2 and 0.5 dB steps
 
 ## 7. Sample rate and clock
 
-The host stream owns the UC sample rate.  TuxMix restores its remembered
+The host stream owns the UC sample rate.  TotalControl restores its remembered
 engine rate at startup and on reconnect; `Auto` releases the override and
 follows the device/graph rate.
 
@@ -159,7 +171,7 @@ rate family across a USB reconnect.  A USB reset restores the 1× multiplier.
 The device group is read from the unit at connect: input gain, 48 V, PAD,
 Inst, reference levels, clock source and optical format.
 
-The mixer group is written from the TuxMix scene: matrix, pans, faders,
+The mixer group is written from the TotalControl scene: matrix, pans, faders,
 mutes, loopback, output levels and output balance.  The connect sequence
 writes 30 loopback entries, 18 output-volume words, 18 output masters and
 the 666 matrix words.

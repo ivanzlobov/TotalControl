@@ -1,15 +1,26 @@
 # Babyface Pro control specification
 
-This document specifies the TuxMix support for the RME Babyface Pro FS: the
+This document specifies the TotalControl support for the RME Babyface Pro FS: the
 channel model, the ALSA control surface, the proprietary vendor USB protocol,
 the DSP EQ block format, metering, capabilities and persistence.  UC and UCX
-are specified separately in `UC-CONTROL-SPEC.md` and `UCX-CONTROL-SPEC.md`.
+are specified separately in `FIREFFACE-UC-PROTOCOL-SPEC.md` and `FIREFFACE-UCX-PROTOCOL-SPEC.md`.
+
+## Contents
+
+- [1. Identification and backends](#1-identification-and-backends)
+- [2. Channel model](#2-channel-model)
+- [3. ALSA backend — proprietary grammar](#3-alsa-backend-proprietary-grammar)
+- [4. Direct USB backend — vendor protocol](#4-direct-usb-backend-vendor-protocol)
+- [5. DSP EQ block format](#5-dsp-eq-block-format)
+- [6. Metering](#6-metering)
+- [7. Capabilities](#7-capabilities)
+- [8. State and persistence](#8-state-and-persistence)
 
 ## 1. Identification and backends
 
 | Mode | USB ID | Backend |
 |---|---|---|
-| Proprietary (RME vendor mode) | `2a39:3fc0` | ALSA via the `snd-usb-babyface-pro` driver, or direct USB via the `tuxmix-usb` crate |
+| Proprietary (RME vendor mode) | `2a39:3fc0` | ALSA via the `snd-usb-babyface-pro` driver, or direct USB via the `totalcontrol-usb` crate |
 | Class compliant | `2a39:3fb0` | ALSA only |
 
 - The ALSA card is found by the card-name substring `Babyface Pro`.
@@ -118,7 +129,7 @@ low-cut frequency control implies enabled.
 | Varispeed | `Varispeed Pitch` volume | raw = percent×10, ±5 % in 0.1 % steps |
 | Loopback | `Loopback` switch, one per output pair | bool |
 | Phase | `<ANn> Phase` switch, AN1–4 | bool |
-| Trim | mixer-side, all sends | 0 to −65 dB (see `TUXMIX-SPEC.md`) |
+| Trim | mixer-side, all sends | 0 to −65 dB (see `TOTALCONTROL-GUI-SPEC.md`) |
 | Stereo split | `PBn Stereo Split` switch, PB1–6 | bool, mirrored to the pair |
 | Front panel | `Front Panel In/Out` enums, `Front Panel Mix` switch | read only |
 
@@ -143,7 +154,7 @@ resync.
 
 ## 4. Direct USB backend — vendor protocol
 
-Implemented in the `tuxmix-usb` crate against the raw USB device
+Implemented in the `totalcontrol-usb` crate against the raw USB device
 (`2a39:3fc0`, vendor-specific class).
 
 ### 4.1 Endpoint map

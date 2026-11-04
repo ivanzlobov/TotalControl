@@ -7,6 +7,21 @@ The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this
 specification.
 
+## Contents
+
+- [1. Transport](#1-transport)
+- [2. Message form](#2-message-form)
+- [3. Address model](#3-address-model)
+- [4. Navigation](#4-navigation)
+- [5. Value scales](#5-value-scales)
+- [6. Page 1 — mixer](#6-page-1-mixer)
+- [7. Page 2 — selected channel](#7-page-2-selected-channel)
+- [8. Page 3 — FX, snapshots and groups](#8-page-3-fx-snapshots-and-groups)
+- [9. Page 4 — Room EQ](#9-page-4-room-eq)
+- [10. Feedback](#10-feedback)
+- [11. Channel rows and link rules](#11-channel-rows-and-link-rules)
+- [12. UCX register mapping](#12-ucx-register-mapping)
+
 ## 1. Transport
 
 | Property | Value |

@@ -127,17 +127,18 @@ scripts/ffuc-48k-gate.sh all
 
 ## Documentation
 
-- [Specification index](docs/spec/README.md)
-- [UC control specification](docs/spec/UC-CONTROL-SPEC.md) — requests, matrix
-  words, phase, output levels and state ownership.
-- [UCX control specification](docs/spec/UCX-CONTROL-SPEC.md) — IF1 registers,
-  matrix, output order, metering, implemented features and guards.
-- [TotalControl control surface](docs/spec/TOTALCONTROL-SPEC.md) — layout, controls,
-  motion, latency and persistence.
-- [Documentation index](docs/README.md) — reference and archived material.
-
-The measured latency chain is documented in
-[TOTALCONTROL-SPEC.md §8](docs/spec/TOTALCONTROL-SPEC.md#8-latency-chain).
+- [Architecture](docs/TOTALCONTROL-ARCHITECTURE.md) — runtime layers, device
+  service, control surfaces, driver and latency model.
+- [GUI specification](docs/spec/TOTALCONTROL-GUI-SPEC.md) — layout, controls,
+  panels, gestures and motion.
+- [UC protocol specification](docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md).
+- [UCX protocol specification](docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md).
+- [Babyface Pro protocol specification](docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md).
+- [OSC specification](docs/spec/TOTALCONTROL-OSC-SPEC.md).
+- [User manual](docs/TOTALCONTROL-Manual.md).
+- [Development tools](docs/DEVELOPMENT-TOOLS.md) — non-user-facing backends,
+  capture and probe helpers.
+- [Documentation index](docs/README.md).
 
 ## Current scope
 
