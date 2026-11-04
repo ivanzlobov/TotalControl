@@ -362,13 +362,18 @@ fn apply_eq_to_settings(eq: &InputEq, s: &mut ChannelSettings) {
         s.eq.bands[i].q10 = (band.q * 10.0).round().clamp(7.0, 50.0) as u8;
         s.eq.bands[i].gain_tenths =
             (band.gain_db * 10.0).round().clamp(-200.0, 200.0) as i16;
-        s.eq.bands[i].kind = match band.band_type {
-            EqBandType::Off | EqBandType::Bell => 0,
-            EqBandType::LowShelf | EqBandType::HighShelf => {
-                if i == 1 { 0 } else { 1 }
-            }
-            // Band 3 only: Hi Cut (low pass) = 2.
-            EqBandType::LowPass => 2,
+        // Band 2 is fixed to Bell.  Band 1 has Bell and Low Shelf; band 3
+        // has Bell, High Shelf and Hi Cut.  Anything else is normalised to
+        // Bell so a legacy scene or caller cannot write a type the unit
+        // does not have.
+        s.eq.bands[i].kind = match (i, band.band_type) {
+            (1, _) => 0,
+            (0, EqBandType::LowShelf) => 1,
+            (0, _) => 0,
+            (2, EqBandType::HighShelf) => 1,
+            (2, EqBandType::LowPass) => 2,
+            (2, _) => 0,
+            _ => 0,
         };
     }
 }
@@ -1855,6 +1860,14 @@ impl Fireface {
         let channel = ucx::input_channel(idx);
         self.write_word(
             ucx::channel_reg(channel, ucx::offset::GAIN_REFLEVEL_OR_PHASE),
+            tenths_db.min(0xffff) as u16,
+        )
+    }
+
+    fn ucx_write_input_gain_right(&self, idx: usize, tenths_db: u32) -> Result<(), Error> {
+        let channel = ucx::input_channel(idx);
+        self.write_word(
+            ucx::channel_reg(channel, ucx::offset::GAIN_REFLEVEL_OR_PHASE) + 0x100,
             tenths_db.min(0xffff) as u16,
         )
     }
@@ -4389,6 +4402,42 @@ impl RmeDevice for Fireface {
         Ok(())
     }
 
+    fn set_input_phase_right(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
+        if self.is_uc() {
+            return Err(Error::InvalidChannel(
+                "Right input phase is not mapped on the UC".into(),
+            ));
+        }
+        if idx >= self.inputs.len() {
+            return Err(Error::InvalidChannel(format!("input {idx}")));
+        }
+        self.write_word(
+            ucx::channel_reg(ucx::input_channel(idx), ucx::offset::INPUT_PHASE) + 0x100,
+            invert as u16,
+        )?;
+        self.inputs[idx].phase_r = invert;
+        Ok(())
+    }
+
+    fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
+        if self.is_uc() {
+            return Err(Error::InvalidChannel(
+                "Right input gain is not mapped on the UC".into(),
+            ));
+        }
+        if idx >= 4 {
+            return Err(Error::InvalidChannel(format!("input {idx} has no preamp")));
+        }
+        let max = if idx < 2 { 65 } else { 24 };
+        let gain = gain.min(max);
+        let tenths = if idx < 2 { gain * 10 } else { gain * 5 };
+        self.ucx_write_input_gain_right(idx, tenths)?;
+        if let Some(input) = self.inputs.get_mut(idx) {
+            input.gain_right = Some(gain);
+        }
+        Ok(())
+    }
+
     fn set_output_phase(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
         // `base + 0x07` / `base + 0x107`: one word per side, no send
         // recompute (measured Q103).
@@ -4711,6 +4760,24 @@ impl RmeDevice for Fireface {
     ) -> Result<(), Error> {
         if self.is_uc() || idx >= self.inputs.len() || band >= 3 {
             return Err(Error::InvalidChannel(format!("EQ input {idx} band {band}")));
+        }
+        let supported = match band {
+            0 => matches!(
+                band_type,
+                EqBandType::Off | EqBandType::Bell | EqBandType::LowShelf
+            ),
+            1 => matches!(band_type, EqBandType::Off | EqBandType::Bell),
+            2 => matches!(
+                band_type,
+                EqBandType::Off | EqBandType::Bell | EqBandType::HighShelf | EqBandType::LowPass
+            ),
+            _ => false,
+        };
+        if !supported {
+            return Err(Error::InvalidChannel(format!(
+                "EQ input {idx} band {} has no {band_type} type",
+                band + 1
+            )));
         }
         let Some(eq) = self.inputs[idx].eq.as_mut() else {
             return Err(Error::InvalidChannel(format!("input {idx} has no EQ")));
@@ -5186,6 +5253,16 @@ impl RmeDevice for Fireface {
         }
         for idx in 0..self.inputs.len() {
             if !self.is_uc() {
+                // Right-side phase and preamp gain are separate registers
+                // from the left side; a split pair carries both.
+                if self.inputs[idx].phase_r {
+                    self.set_input_phase_right(idx, true)?;
+                }
+                if idx < 4 {
+                    if let Some(gain) = self.inputs[idx].gain_right {
+                        self.set_input_gain_right(idx, gain)?;
+                    }
+                }
                 // `ucx_write_input` rewrites both sides of a stereo pair
                 // from either channel, so the odd channel would repeat the
                 // same 9-pair row.  Its scene values are already in the
@@ -7268,6 +7345,30 @@ mod tests {
         );
         // Full bursts at the 16 ms drain gap, plus the loopback vendors.
         assert!(elapsed < Duration::from_secs(2), "scene took {elapsed:?}");
+    }
+
+    #[test]
+    fn ucx_eq_band_types_are_band_specific() {
+        let mut eq = InputEq::default();
+        eq.bands[0].band_type = EqBandType::HighShelf;
+        eq.bands[1].band_type = EqBandType::Bell;
+        eq.bands[2].band_type = EqBandType::LowShelf;
+        let mut s = ChannelSettings::default();
+        apply_eq_to_settings(&eq, &mut s);
+        assert_eq!(s.eq.bands[0].kind, 0, "band 1 has no high shelf");
+        assert_eq!(s.eq.bands[1].kind, 0, "band 2 is fixed to Bell");
+        assert_eq!(s.eq.bands[2].kind, 0, "band 3 has no low shelf");
+
+        eq.bands[0].band_type = EqBandType::LowShelf;
+        eq.bands[2].band_type = EqBandType::HighShelf;
+        apply_eq_to_settings(&eq, &mut s);
+        assert_eq!(s.eq.bands[0].kind, 1);
+        assert_eq!(s.eq.bands[1].kind, 0);
+        assert_eq!(s.eq.bands[2].kind, 1);
+
+        eq.bands[2].band_type = EqBandType::LowPass;
+        apply_eq_to_settings(&eq, &mut s);
+        assert_eq!(s.eq.bands[2].kind, 2);
     }
 
     #[test]

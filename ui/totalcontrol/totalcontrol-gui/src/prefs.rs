@@ -68,6 +68,14 @@ impl Default for ControlRoomSettings {
     }
 }
 
+fn default_osc_recv_port() -> u16 {
+    9000
+}
+
+fn default_osc_send_port() -> u16 {
+    9001
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -132,6 +140,13 @@ pub struct Prefs {
     /// the startup mismatch prompt and write the saved TotalControl scene.
     #[serde(default)]
     pub always_init_device: bool,
+    /// Classic RME OSC control surface, enabled from the app settings.
+    #[serde(default)]
+    pub osc_enabled: bool,
+    #[serde(default = "default_osc_recv_port")]
+    pub osc_recv_port: u16,
+    #[serde(default = "default_osc_send_port")]
+    pub osc_send_port: u16,
     /// Stereo-link groupings (pure GUI model state, no device writes).
     pub input_pair_link: Vec<bool>,
     pub output_link: Vec<bool>,
@@ -198,6 +213,9 @@ mod tests {
             engine_force_quantum: Some(128),
             surround_51: true,
             surround_71: true,
+            osc_enabled: true,
+            osc_recv_port: 9010,
+            osc_send_port: 9011,
             ..Default::default()
         };
         save(&file, &prefs).unwrap();

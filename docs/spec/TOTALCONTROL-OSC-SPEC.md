@@ -1,7 +1,11 @@
 # TotalMix FX OSC control specification
 
 This document defines the OSC control surface used to drive TotalMix FX and
-the mapping from that surface to the Fireface UCX register protocol.
+the mapping from that surface to the Fireface UCX register protocol.  The
+address space and behaviour described here target the classic TotalMix FX OSC
+surface used by 2.10 and 2.11.  The latest RME table for that surface is
+`OscTableTotalMix_240722`, labelled TotalMix FX 1.96.  TotalMix FX 2.1 and
+later also expose a separate Global OSC dialect; that is not this surface.
 
 The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this
@@ -208,8 +212,7 @@ Page-1 bus and monitoring controls:
 | `/1/mainExtIn` | External input path | `Toggle` |
 | `/1/mainTalkback` | Talkback | `Toggle`; a non-zero value flips the state, `0.0` is ignored |
 
-Snapshot, group and recorder controls are also accepted on page 1 and page 3;
-see section 8.
+Snapshot, group and recorder controls are page 3 only; see section 8.
 
 Channels above the first bank use the range forms
 `/1/Level9Left-level24Left`, `/1/Level9Right-level24Right`,
@@ -294,7 +297,15 @@ change the state. `0.0` is not an off command.
 
 `phantom` also accepts `0.0` as a direct off command on the UCX.
 
-### 7.2 Stereo button
+### 7.2 EQ band types
+
+Band type choices are spaced evenly over `Lin01` and depend on the device.
+Band 1 can select Bell, Low Shelf, High Pass and optionally Low Pass.  Band 3
+can select Bell, High Shelf, Low Pass and optionally High Pass.  The UCX
+exposes Bell and Low Shelf on band 1, and Bell, High Shelf and Low Pass on
+band 3.
+
+### 7.3 Stereo button
 
 `/2/stereo` toggles the pair. A linked pair writes the stereo-mode register on
 both sides. Splitting writes the mono value on both sides.
@@ -500,7 +511,7 @@ literal dB value. The authoritative RME OSC table is
 | `/2/gain` | input 1–4 | `NN07` | 0.1 dB |
 | `/2/gainRight` | input 1–4 | `NN07 + 0x100` | 0.1 dB |
 | `/1/phantom/1/N`, `/2/phantom` | input 1/2 | `NN08` | 0/1 |
-| `/2/refLevel` | input 3/4 | `NN08` | 0 −10 dBV, 1 +4 dBu, 2 LoGain |
+| `/2/refLevel` | input 3/4 | `NN08` | 0 −10 dBV, 1 +4 dBu, 2 LoGain; devices may add 3 Boost |
 | `/2/refLevel` | output | `0x1208..0x1708` line group | reference index; line outputs write together |
 | `/2/instrument` | input 3/4 | `NN09` | 0/1 |
 | `/2/pad` | input | none | not exposed on the UCX |
@@ -515,14 +526,14 @@ literal dB value. The authoritative RME OSC table is
 | `/2/lowcutFreq` | input/output | `NN21` | Hz |
 | `/2/lowcutGrade` | input/output | `NN22` | 0/1/2/3 = 6/12/18/24 dB/oct |
 | `/2/eqEnable` | input/output | `NN40` | 0/1 |
-| `/2/eqType1` | input/output | `NN41` | 0 Bell, 1 Shelf |
+| `/2/eqType1` | input/output | `NN41` | 0 Bell, 1 Low Shelf |
 | `/2/eqGain1` | input/output | `NN42` | 0.1 dB, signed |
 | `/2/eqFreq1` | input/output | `NN43` | Hz |
 | `/2/eqQ1` | input/output | `NN44` | Q × 10 |
 | `/2/eqGain2` | input/output | `NN45` | 0.1 dB, signed |
 | `/2/eqFreq2` | input/output | `NN46` | Hz |
 | `/2/eqQ2` | input/output | `NN47` | Q × 10 |
-| `/2/eqType3` | input/output | `NN48` | 0 Bell, 1 Shelf, 2 Low pass |
+| `/2/eqType3` | input/output | `NN48` | 0 Bell, 1 High Shelf, 2 Low Pass |
 | `/2/eqGain3` | input/output | `NN49` | 0.1 dB, signed |
 | `/2/eqFreq3` | input/output | `NN4A` | Hz |
 | `/2/eqQ3` | input/output | `NN4B` | Q × 10 |

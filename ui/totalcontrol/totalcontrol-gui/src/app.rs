@@ -2,7 +2,7 @@ use iced::futures::channel::mpsc;
 use iced::keyboard::{self, Key};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, opaque, pick_list, progress_bar, responsive,
-    row, scrollable, slider, stack, text,
+    row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
 use rosc::OscType;
@@ -20,7 +20,7 @@ use totalcontrol_core::{
 
 use crate::about;
 use crate::matrix;
-use crate::osc::{self, OscCommand, OscConfig, OscOutbound};
+use crate::osc::{self, OscConfig, OscOutbound};
 use crate::prefs::{ControlRoomSettings, SyncDirection};
 use totalcontrol_core::pw_clock::{self, CardStream, PwClock};
 use totalcontrol_core::pw_meter;
@@ -1806,6 +1806,8 @@ pub enum Message {
     /// Settings toggle for RME's "Always init DSP devices with TotalMix FX
     /// settings".
     SetAlwaysInitDevice(bool),
+    /// Speaker B follows Main Out level changes (`/1/speakerBLinked`).
+    SpeakerBLinked(bool),
 
     Mute(ChannelId, bool),
     Solo(ChannelId, bool),
@@ -1911,6 +1913,8 @@ pub enum Message {
     CueChanged(ChannelId, bool),
     /// Phase Ø invert — Hardware Input strips, the 4 analog inputs only.
     PhaseChanged(ChannelId, bool),
+    /// Phase invert on the right side of a split input pair.
+    InputPhaseRight(usize, bool),
     /// Phase invert on one hardware output side (`Ø L` / `R Ø`).
     OutputPhaseChanged(usize, bool),
     /// Exclude one hardware output from Trim Gain changes.
@@ -1970,11 +1974,25 @@ pub enum Message {
     /// used to push outgoing feedback packets back out over UDP. Only
     /// fires if `--osc` was passed; `state.osc_tx` stays `None` otherwise.
     OscReady(mpsc::Sender<OscOutbound>),
-    /// A command decoded from an incoming OSC UDP packet — applied the
-    /// same way a GUI-originated change would be, then echoed back out so
-    /// a connected controller and the GUI stay in sync regardless of
-    /// which one actually moved a fader.
-    OscCommand(OscCommand),
+    /// One raw classic RME OSC message.  Parsed on the UI thread so the
+    /// parser can resolve `Toggle` against the confirmed mixer model.
+    OscRmeIn(String, Vec<OscType>),
+    /// A `Toggle` control whose direction depends on the current model.
+    RmeToggle(crate::osc_rme::RmeToggle),
+    /// `/1/mastervolume`: the Main Out pair fader.
+    RmeMasterVolume(f32),
+    /// `/2/gainRight`: the right side of a split input pair.
+    RmeGainRight(usize, u32),
+    /// `/1/select/1/N`: ad-hoc fader-group selection.
+    RmeSelect(ChannelId, bool),
+    /// `/1/tracknameN` or `/2/trackname`.
+    RmeRename(ChannelId, String),
+    /// One page-2 dynamics field, resolved against the live `Dynamics`.
+    RmeDynamicsField {
+        channel: ChannelId,
+        field: &'static str,
+        value: f32,
+    },
     /// One formatted line for the OSC debug log panel — sent for every
     /// message crossing the bridge in either direction, regardless of
     /// whether the panel is currently open (see `osc::worker`).
@@ -1983,8 +2001,12 @@ pub enum Message {
     /// `--osc` is active).
     ToggleOscLog,
     ClearOscLog,
-    /// `/meters` query: reply with the current input/playback/output values.
-    OscMeters,
+    /// Settings sheet: start/stop the classic OSC surface.
+    SetOscEnabled(bool),
+    OscRecvPortChanged(String),
+    OscSendPortChanged(String),
+    /// Parse both port fields and restart the worker if they changed.
+    ApplyOscPorts,
     /// Toggles the Settings panel (clock source, SPDIF,
     /// sample rate).
     ToggleDevicePanel,
@@ -2083,8 +2105,6 @@ pub enum Message {
     /// will save into.
     SnapshotClicked(u8),
     SnapshotStore,
-    /// Store the current mix into slot `u8` (1-8) without recalling first.
-    SnapshotStoreTo(u8),
     /// Enters/exits group-assignment mode — while active, clicking a
     /// group's mute/solo/fader cell assigns the current multi-selection
     /// (`state.selected`) as that group's membership.
@@ -2375,6 +2395,19 @@ pub struct TotalControl {
     /// Port config for the OSC control surface — `None` unless `--osc` was
     /// passed, in which case `subscription()` starts the worker.
     pub osc_config: Option<OscConfig>,
+    /// Whether the OSC surface is enabled, independent of `osc_config` so
+    /// the settings sheet can start and stop it at runtime.
+    pub osc_enabled: bool,
+    pub osc_recv_port: u16,
+    pub osc_send_port: u16,
+    pub osc_recv_text: String,
+    pub osc_send_text: String,
+    /// `--osc` was passed: the command line overrides the saved switch.
+    pub osc_cli: bool,
+    /// Classic RME OSC navigation state: bus, bank, selected channel and
+    /// page.  Kept on the UI thread so feedback and `Toggle` resolution see
+    /// the same state as the parser.
+    pub rme: crate::osc_rme::RmeState,
     /// Sender for outgoing OSC feedback packets, handed back by the worker
     /// via `Message::OscReady` once it's actually bound and listening.
     /// `None` until then (or always, if OSC isn't enabled) — `notify_osc`
@@ -2882,6 +2915,13 @@ pub fn new_with_device(
     } else {
         pw_meter::PlaybackTap::start()
     };
+    // `--osc` is a development override: it starts the surface regardless
+    // of the saved preference.  Without it the settings sheet owns the
+    // switch and the two ports.
+    let osc_cli = osc_config.is_some();
+    let osc_recv_port = osc_config.map(|c| c.recv_port).unwrap_or(9000);
+    let osc_send_port = osc_config.map(|c| c.send_port).unwrap_or(9001);
+    let osc_enabled = osc_cli;
 
     let state = TotalControl {
         device,
@@ -2937,6 +2977,13 @@ pub fn new_with_device(
         select_anchor: None,
         hovered_strip: None,
         osc_config,
+        osc_enabled,
+        osc_recv_port,
+        osc_send_port,
+        osc_recv_text: osc_recv_port.to_string(),
+        osc_send_text: osc_send_port.to_string(),
+        osc_cli,
+        rme: crate::osc_rme::RmeState::default(),
         osc_tx: None,
         osc_log: VecDeque::new(),
         show_osc_log: false,
@@ -3060,6 +3107,24 @@ pub(crate) fn attach_device_service(state: &mut TotalControl) {
     state.device_service = Some(service);
 }
 
+/// Rebuild the effective OSC config from the settings switch and ports.
+/// The subscription identifies a running worker by this value, so changing
+/// it stops the old worker and starts a new one on the next frame.
+fn rebuild_osc_config(state: &mut TotalControl) {
+    if state.osc_enabled {
+        state.osc_config = Some(OscConfig {
+            recv_port: state.osc_recv_port,
+            send_port: state.osc_send_port,
+            send_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        });
+    } else {
+        state.osc_config = None;
+        state.osc_tx = None;
+    }
+    state.osc_recv_text = state.osc_recv_port.to_string();
+    state.osc_send_text = state.osc_send_port.to_string();
+}
+
 /// The persisted subset of `state` (see `prefs.rs`).
 pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
     let p = &state.sidebar_panels_open;
@@ -3104,6 +3169,9 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         sel_out: Some(state.sel_out),
         sync_direction: Some(state.sync_direction),
         always_init_device: state.always_init_device,
+        osc_enabled: state.osc_enabled,
+        osc_recv_port: state.osc_recv_port,
+        osc_send_port: state.osc_send_port,
         input_pair_link: state.device.settings().input_pair_link.clone(),
         output_link: state.device.settings().output_link.clone(),
     }
@@ -3178,6 +3246,20 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     state.engine_force_rate = prefs.engine_force_rate.unwrap_or(0);
     state.engine_force_quantum = prefs.engine_force_quantum.unwrap_or(0);
     state.always_init_device = prefs.always_init_device;
+    if !state.osc_cli {
+        state.osc_recv_port = if prefs.osc_recv_port == 0 {
+            9000
+        } else {
+            prefs.osc_recv_port
+        };
+        state.osc_send_port = if prefs.osc_send_port == 0 {
+            9001
+        } else {
+            prefs.osc_send_port
+        };
+        state.osc_enabled = prefs.osc_enabled;
+        rebuild_osc_config(state);
+    }
 
     // Apply the link groupings before the per-channel UI state, so a saved
     // flyout/collapse on a now-linked right channel is moved to the one
@@ -4310,9 +4392,160 @@ fn dynamics_for(state: &TotalControl, cid: ChannelId) -> Dynamics {
         ChannelId::Playback(_) => Dynamics::default(),
     }
 }
-fn notify_osc(state: &mut TotalControl, msg: OscOutbound) {
+fn pair_linked(state: &TotalControl, cid: ChannelId) -> bool {
+    match cid {
+        ChannelId::Input(i) => state.device.input_pair_linked(i / 2),
+        ChannelId::Playback(i) => state.device.playback_linked(i / 2),
+        ChannelId::Output(i) => state.device.output_linked(i / 2),
+    }
+}
+
+fn channel_eq_on(state: &TotalControl, cid: ChannelId) -> bool {
+    match cid {
+        ChannelId::Input(i) => state
+            .device
+            .inputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .is_some_and(|eq| eq.enabled),
+        ChannelId::Output(i) => state
+            .device
+            .outputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .is_some_and(|eq| eq.enabled),
+        ChannelId::Playback(_) => false,
+    }
+}
+
+fn channel_phase(state: &TotalControl, cid: ChannelId, right: bool) -> bool {
+    match cid {
+        ChannelId::Input(i) => state
+            .device
+            .inputs()
+            .get(i)
+            .is_some_and(|c| if right { c.phase_r } else { c.phase }),
+        ChannelId::Output(i) => state
+            .device
+            .outputs()
+            .get(i)
+            .is_some_and(|c| if right { c.phase_r } else { c.phase_l }),
+        ChannelId::Playback(_) => false,
+    }
+}
+
+fn channel_low_cut_on(state: &TotalControl, cid: ChannelId) -> bool {
+    match cid {
+        ChannelId::Input(i) => state
+            .device
+            .inputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .is_some_and(|eq| eq.low_cut_enabled),
+        ChannelId::Output(i) => state
+            .device
+            .outputs()
+            .get(i)
+            .and_then(|c| c.eq)
+            .is_some_and(|eq| eq.low_cut_enabled),
+        ChannelId::Playback(_) => false,
+    }
+}
+
+/// Resolve one edge-triggered RME `Toggle` against the confirmed model and
+/// return the ordinary GUI message that performs the opposite state.
+fn rme_toggle_message(
+    state: &TotalControl,
+    target: crate::osc_rme::RmeToggle,
+) -> Option<Message> {
+    use crate::osc_rme::RmeToggle as T;
+    Some(match target {
+        T::Mute(cid) => Message::Mute(cid, !channel_is_muted(state, cid)),
+        T::Solo(cid) => Message::Solo(cid, !channel_is_soloed(state, cid)),
+        T::Phase(cid) => match cid {
+            ChannelId::Input(_) => Message::PhaseChanged(cid, !channel_phase(state, cid, false)),
+            ChannelId::Output(i) => Message::OutputPhaseChanged(i, !channel_phase(state, cid, false)),
+            ChannelId::Playback(_) => return None,
+        },
+        T::PhaseRight(cid) => match cid {
+            ChannelId::Input(i) => Message::InputPhaseRight(i, !channel_phase(state, cid, true)),
+            ChannelId::Output(i) => Message::OutputPhaseChanged(i, !channel_phase(state, cid, true)),
+            ChannelId::Playback(_) => return None,
+        },
+        T::Phantom(i) => Message::Phantom(i, !state.device.inputs().get(i)?.phantom),
+        T::Instrument(i) => Message::Instrument(i, !state.device.inputs().get(i)?.instrument),
+        T::Pad(i) => Message::Pad(i, !state.device.inputs().get(i)?.pad),
+        T::Autoset(i) => Message::Autoset(i, !state.device.inputs().get(i)?.autoset),
+        T::MsProc(cid) => match cid {
+            ChannelId::Input(i) => Message::InputMsProcChanged(i, !state.device.inputs().get(i)?.ms_proc),
+            ChannelId::Playback(i) => {
+                Message::PlaybackMsProcChanged(i, !state.device.playbacks().get(i)?.ms_proc)
+            }
+            ChannelId::Output(_) => return None,
+        },
+        T::Stereo(cid) => Message::StereoLinkChanged(cid, !pair_linked(state, cid)),
+        T::Cue(i) => Message::CueChanged(
+            ChannelId::Output(i),
+            !state.device.outputs().get(i)?.cue,
+        ),
+        T::TalkbackSel(i) => Message::TalkbackReceiveChanged(
+            i,
+            !state.device.outputs().get(i)?.talkback,
+        ),
+        T::NoTrim(i) => Message::NoTrimChanged(i, !state.device.outputs().get(i)?.no_trim),
+        T::Loopback(i) => Message::LoopbackChanged(i, !state.device.outputs().get(i)?.loopback),
+        T::LowCutEnable(cid) => Message::EqLowCutEnabled(cid, !channel_low_cut_on(state, cid)),
+        T::EqEnable(cid) => Message::EqEnabled(cid, !channel_eq_on(state, cid)),
+        T::CompexpEnable(cid) => Message::DynamicsEnabled(cid, !dynamics_for(state, cid).on),
+        T::AlevEnable(cid) => {
+            let mut d = dynamics_for(state, cid);
+            d.auto_level = !d.auto_level;
+            Message::DynamicsChanged(cid, d)
+        }
+        T::GlobalMute => Message::GlobalMuteToggle,
+        T::GlobalSolo => Message::GlobalSoloToggle,
+        T::MainDim => Message::Dim(!state.device.settings().dim),
+        T::MainSpeakerB => Message::SpeakerB(!state.device.settings().speaker_b),
+        T::MainMuteFx => Message::ControlRoomMuteFx(!state.device.settings().mute_fx),
+        T::MainMono => Message::ControlRoomMono(!state.device.settings().mono),
+        T::MainTalkback => Message::TalkbackChanged(!state.talkback_on),
+        T::SpeakerBLinked => Message::SpeakerBLinked(!state.control_room.speaker_b_linked),
+        T::ReverbEnable => Message::OscRmeFx {
+            echo: false,
+            field: "on",
+            value: if state.device.settings().reverb.unwrap_or_default().on {
+                0.0
+            } else {
+                1.0
+            },
+        },
+        T::EchoEnable => Message::OscRmeFx {
+            echo: true,
+            field: "on",
+            value: if state.device.settings().echo.unwrap_or_default().on {
+                0.0
+            } else {
+                1.0
+            },
+        },
+    })
+}
+
+/// Low-level feedback send.  Everything that reaches a controller goes
+/// through here with an already-classic RME address.
+fn send_osc(state: &mut TotalControl, addr: String, args: Vec<OscType>) {
     if let Some(tx) = state.osc_tx.as_mut() {
-        let _ = tx.try_send(msg);
+        let _ = tx.try_send(OscOutbound::Raw { addr, args });
+    }
+}
+
+fn notify_osc(state: &mut TotalControl, msg: OscOutbound) {
+    match msg {
+        OscOutbound::Volume(cid, _, _)
+        | OscOutbound::Pan(cid, _, _)
+        | OscOutbound::Mute(cid, _)
+        | OscOutbound::Solo(cid, _) => notify_rme_channel(state, cid),
+        OscOutbound::Raw { addr, args } => notify_rme_native(state, &addr, &args),
     }
 }
 
@@ -4342,267 +4575,602 @@ fn channel_slug(cid: ChannelId) -> (&'static str, usize) {
     }
 }
 
-/// Push the whole control surface to a newly connected OSC client.  Sending
-/// every value once is simpler than making each controller discover the
-/// state through individual queries, and the queue is large enough for it.
-fn notify_osc_full_state(state: &mut TotalControl) {
-    let n_out = state.device.output_pair_count();
-    let inputs = state.device.inputs().to_vec();
-    let playbacks = state.device.playbacks().to_vec();
-    let outputs = state.device.outputs().to_vec();
-    let settings = state.device.settings().clone();
-    for ch in inputs {
-        let cid = ChannelId::Input(ch.id);
-        for out in 0..n_out {
-            if let Some(v) = ch.volumes.get(out) {
-                notify_osc(
-                    state,
-                    OscOutbound::Volume(cid, out, *v * trim_factor(ch.trim)),
-                );
-            }
-            if let Some(p) = ch.pans.get(out) {
-                notify_osc(state, OscOutbound::Pan(cid, out, *p));
-            }
-        }
-        notify_osc(state, OscOutbound::Mute(cid, ch.mute));
-        notify_osc(state, OscOutbound::Solo(cid, ch.solo));
-        if let Some(g) = ch.gain {
-            notify_osc_raw(
-                state,
-                format!("/input/{}/gain", ch.id),
-                vec![OscType::Float(g as f32)],
-            );
-        }
-        notify_osc_bool(state, format!("/input/{}/phantom", ch.id), ch.phantom);
-        notify_osc_bool(state, format!("/input/{}/pad", ch.id), ch.pad);
-        notify_osc_bool(
-            state,
-            format!("/input/{}/instrument", ch.id),
-            ch.instrument,
-        );
-        notify_osc_bool(
-            state,
-            format!("/input/{}/sensitivity", ch.id),
-            ch.sensitivity == Some(Sensitivity::Plus4dBu),
-        );
-        notify_osc_bool(state, format!("/input/{}/phase", ch.id), ch.phase);
-        notify_osc_raw(
-            state,
-            format!("/input/{}/trim", ch.id),
-            vec![OscType::Float(ch.trim)],
-        );
-        if let Some(eq) = ch.eq {
-            notify_osc_bool(state, format!("/input/{}/eq", ch.id), eq.enabled);
-            notify_osc_bool(
-                state,
-                format!("/input/{}/lowcut", ch.id),
-                eq.low_cut_enabled,
-            );
-            notify_osc_raw(
-                state,
-                format!("/input/{}/lowcut/freq", ch.id),
-                vec![OscType::Float(eq.low_cut_freq_hz as f32)],
-            );
-            notify_osc_raw(
-                state,
-                format!("/input/{}/lowcut/slope", ch.id),
-                vec![OscType::Int(eq.low_cut_slope_db_oct as i32)],
-            );
-            for (b, band) in eq.bands.iter().enumerate() {
-                let code = match band.band_type {
-                    EqBandType::Off => 0,
-                    EqBandType::Bell => 1,
-                    EqBandType::LowShelf => 2,
-                    EqBandType::HighShelf => 3,
-                                EqBandType::LowPass => 4,
-};
-                notify_osc_raw(
-                    state,
-                    format!("/input/{}/eq/{b}/type", ch.id),
-                    vec![OscType::Int(code)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/input/{}/eq/{b}/freq", ch.id),
-                    vec![OscType::Float(band.freq_hz as f32)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/input/{}/eq/{b}/q", ch.id),
-                    vec![OscType::Float(band.q)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/input/{}/eq/{b}/gain", ch.id),
-                    vec![OscType::Float(band.gain_db)],
-                );
-            }
-        }
-        notify_osc_bool(
-            state,
-            format!("/input/{}/stereo", ch.id),
-            state.device.input_pair_linked(ch.id / 2),
-        );
-    }
-    for ch in playbacks {
-        let cid = ChannelId::Playback(ch.id);
-        for out in 0..n_out {
-            if let Some(v) = ch.volumes.get(out) {
-                notify_osc(
-                    state,
-                    OscOutbound::Volume(cid, out, *v * trim_factor(ch.trim)),
-                );
-            }
-            if let Some(p) = ch.pans.get(out) {
-                notify_osc(state, OscOutbound::Pan(cid, out, *p));
-            }
-        }
-        notify_osc(state, OscOutbound::Mute(cid, ch.mute));
-        notify_osc(state, OscOutbound::Solo(cid, ch.solo));
-        notify_osc_raw(
-            state,
-            format!("/playback/{}/trim", ch.id),
-            vec![OscType::Float(ch.trim)],
-        );
-        notify_osc_bool(
-            state,
-            format!("/playback/{}/stereo", ch.id),
-            state.device.playback_linked(ch.id / 2),
-        );
-    }
-    for ch in outputs {
-        let cid = ChannelId::Output(ch.id);
-        notify_osc(state, OscOutbound::OutputVolume(ch.id, ch.volume));
-        notify_osc(state, OscOutbound::Mute(cid, ch.mute));
-        notify_osc(state, OscOutbound::Solo(cid, ch.solo));
-        notify_osc_bool(state, format!("/output/{}/loopback", ch.id), ch.loopback);
-        notify_osc_bool(state, format!("/output/{}/cue", ch.id), ch.cue);
-        if let Some(eq) = ch.eq {
-            notify_osc_bool(state, format!("/output/{}/eq", ch.id), eq.enabled);
-            notify_osc_bool(
-                state,
-                format!("/output/{}/lowcut", ch.id),
-                eq.low_cut_enabled,
-            );
-            notify_osc_raw(
-                state,
-                format!("/output/{}/lowcut/freq", ch.id),
-                vec![OscType::Float(eq.low_cut_freq_hz as f32)],
-            );
-            notify_osc_raw(
-                state,
-                format!("/output/{}/lowcut/slope", ch.id),
-                vec![OscType::Int(eq.low_cut_slope_db_oct as i32)],
-            );
-            for (b, band) in eq.bands.iter().enumerate() {
-                let code = match band.band_type {
-                    EqBandType::Off => 0,
-                    EqBandType::Bell => 1,
-                    EqBandType::LowShelf => 2,
-                    EqBandType::HighShelf => 3,
-                                EqBandType::LowPass => 4,
-};
-                notify_osc_raw(
-                    state,
-                    format!("/output/{}/eq/{b}/type", ch.id),
-                    vec![OscType::Int(code)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/output/{}/eq/{b}/freq", ch.id),
-                    vec![OscType::Float(band.freq_hz as f32)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/output/{}/eq/{b}/q", ch.id),
-                    vec![OscType::Float(band.q)],
-                );
-                notify_osc_raw(
-                    state,
-                    format!("/output/{}/eq/{b}/gain", ch.id),
-                    vec![OscType::Float(band.gain_db)],
-                );
-            }
-        }
-        notify_osc_bool(
-            state,
-            format!("/output/{}/stereo", ch.id),
-            state.device.output_linked(ch.id / 2),
-        );
-    }
-    notify_osc_bool(state, "/dim", settings.dim);
-    notify_osc_bool(state, "/input_link", settings.input_link);
-    notify_osc_bool(state, "/eq_for_record", settings.eq_for_record);
-    notify_osc_bool(state, "/optical_out_spdif", settings.optical_out_spdif);
-    notify_osc_bool(state, "/spdif_professional", settings.spdif_professional);
-    notify_osc_bool(
-        state,
-        "/word_clock_single_speed",
-        settings.word_clock_single_speed,
-    );
-    notify_osc_bool(state, "/ms_proc", settings.ms_proc);
-    notify_osc_bool(state, "/an12", settings.an12);
-    notify_osc_raw(state, "/pitch", vec![OscType::Float(settings.pitch_percent)]);
-    notify_osc_raw(state, "/width", vec![OscType::Float(settings.width)]);
-    notify_osc_raw(
-        state,
-        "/clock_source",
-        vec![OscType::String(settings.clock_source.clone())],
-    );
-    notify_osc_raw(
-        state,
-        "/sample_rate",
-        vec![OscType::Int(settings.sample_rate as i32)],
-    );
-    notify_osc_raw(
-        state,
-        "/line_in_ref",
-        vec![OscType::Int(settings.line_in_ref as i32)],
-    );
-    notify_osc_raw(
-        state,
-        "/line_out_ref",
-        vec![OscType::Int(settings.line_out_ref as i32)],
-    );
-    notify_osc_raw(
-        state,
-        "/phones_ref",
-        vec![OscType::Int(settings.phones_ref as i32)],
-    );
-    notify_osc_raw(
-        state,
-        "/submix",
-        vec![OscType::Int(state.sel_out as i32)],
-    );
-    if let Some(n) = state.active_snapshot {
-        notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
+fn rme_cid_row(cid: ChannelId) -> (crate::osc_rme::Bus, usize) {
+    match cid {
+        ChannelId::Input(i) => (crate::osc_rme::Bus::Input, i),
+        ChannelId::Playback(i) => (crate::osc_rme::Bus::Playback, i),
+        ChannelId::Output(i) => (crate::osc_rme::Bus::Output, i),
     }
 }
 
-fn notify_osc_meters(state: &mut TotalControl) {
-    for i in 0..state.input_meters.len() {
-        let value = state.input_meters[i].frame().value;
-        notify_osc_raw(
+fn rme_page1_index(state: &TotalControl, cid: ChannelId) -> Option<usize> {
+    let (bus, idx) = rme_cid_row(cid);
+    if bus != state.rme.bus {
+        return None;
+    }
+    let end = (state.rme.bank + state.rme.bank_size.max(1)).min(crate::osc_rme::CHANNELS);
+    (idx >= state.rme.bank && idx < end).then_some(idx - state.rme.bank + 1)
+}
+
+fn rme_is_selected(state: &TotalControl, cid: ChannelId) -> bool {
+    let (bus, idx) = rme_cid_row(cid);
+    bus == state.rme.bus && idx == state.rme.channel
+}
+
+fn rme_name(state: &TotalControl, cid: ChannelId) -> String {
+    if let Some(label) = user_label(state, cid) {
+        return label.to_string();
+    }
+    match cid {
+        ChannelId::Input(i) => state.device.inputs().get(i).map(|c| c.name.clone()),
+        ChannelId::Playback(i) => state.device.playbacks().get(i).map(|c| c.name.clone()),
+        ChannelId::Output(i) => state.device.outputs().get(i).map(|c| c.name.clone()),
+    }
+    .unwrap_or_default()
+}
+
+fn rme_db_string(gain: f32) -> String {
+    if gain <= 0.0 {
+        "-oo".into()
+    } else {
+        format!("{:.1} dB", 20.0 * gain.log10())
+    }
+}
+
+fn rme_pan_string(pan: i8) -> String {
+    match pan {
+        0 => "C".into(),
+        p if p < 0 => format!("L{}", -p),
+        p => format!("R{p}"),
+    }
+}
+
+fn rme_gain_db(_state: &TotalControl, idx: usize, raw: u32) -> f32 {
+    if idx < 2 {
+        raw as f32
+    } else {
+        raw as f32 * 0.5
+    }
+}
+
+fn rme_gain_norm(state: &TotalControl, idx: usize, raw: u32) -> f32 {
+    let max = state
+        .device
+        .inputs()
+        .get(idx)
+        .and_then(|c| c.gain_max)
+        .unwrap_or(if idx < 2 { 65 } else { state.rme.gain_max_34 });
+    (raw as f32 / max.max(1) as f32).clamp(0.0, 1.0)
+}
+
+fn rme_channel_volume(state: &TotalControl, cid: ChannelId) -> (f32, usize) {
+    match cid {
+        ChannelId::Output(i) => (
+            state.device.outputs().get(i).map(|o| o.volume).unwrap_or(0.0),
+            i,
+        ),
+        ChannelId::Input(i) => (
+            state
+                .device
+                .inputs()
+                .get(i)
+                .and_then(|c| c.volumes.get(state.rme.submix))
+                .copied()
+                .unwrap_or(0.0)
+                * trim_factor(state.device.inputs().get(i).map(|c| c.trim).unwrap_or(0.0)),
+            state.rme.submix,
+        ),
+        ChannelId::Playback(i) => (
+            state
+                .device
+                .playbacks()
+                .get(i)
+                .and_then(|c| c.volumes.get(state.rme.submix))
+                .copied()
+                .unwrap_or(0.0)
+                * trim_factor(state.device.playbacks().get(i).map(|c| c.trim).unwrap_or(0.0)),
+            state.rme.submix,
+        ),
+    }
+}
+
+fn rme_channel_pan(state: &TotalControl, cid: ChannelId) -> i8 {
+    let (_, out) = rme_channel_volume(state, cid);
+    channel_pan(state, cid, out)
+}
+
+fn rme_value(state: &mut TotalControl, addr: String, value: f32) {
+    send_osc(state, addr, vec![OscType::Float(value)]);
+}
+
+fn rme_string(state: &mut TotalControl, addr: String, value: String) {
+    send_osc(state, addr, vec![OscType::String(value)]);
+}
+
+fn rme_bool(state: &mut TotalControl, addr: String, on: bool) {
+    send_osc(state, addr, vec![osc_bool(on)]);
+}
+
+fn rme_page1_channel(state: &mut TotalControl, cid: ChannelId, n: usize) {
+    let (gain, _) = rme_channel_volume(state, cid);
+    let pan = rme_channel_pan(state, cid);
+    let muted = channel_is_muted(state, cid);
+    let soloed = channel_is_soloed(state, cid);
+    let fader = crate::osc_rme::gain_to_fader(gain);
+    rme_value(state, format!("/1/volume{n}"), fader);
+    rme_string(state, format!("/1/volume{n}Val"), rme_db_string(gain));
+    rme_value(
+        state,
+        format!("/1/pan{n}"),
+        crate::osc_rme::pan_norm(pan),
+    );
+    rme_bool(state, format!("/1/mute/1/{n}"), muted);
+    rme_bool(state, format!("/1/solo/1/{n}"), soloed);
+    rme_bool(
+        state,
+        format!("/1/select/1/{n}"),
+        state.selected.contains(&cid),
+    );
+    match cid {
+        ChannelId::Input(i) => {
+            if let Some(ch) = state.device.inputs().get(i).cloned() {
+                if let Some(raw) = ch.gain {
+                    let norm = rme_gain_norm(state, i, raw);
+                    let db = rme_gain_db(state, i, raw);
+                    rme_value(state, format!("/1/micgain{n}"), norm);
+                    rme_string(
+                        state,
+                        format!("/1/micgain{n}Val"),
+                        format!("{db:.1} dB"),
+                    );
+                }
+                rme_bool(state, format!("/1/phantom/1/{n}"), ch.phantom);
+            }
+        }
+        ChannelId::Output(i) => {
+            if let Some(ch) = state.device.outputs().get(i).cloned() {
+                rme_bool(state, format!("/1/cue/1/{n}"), ch.cue);
+            }
+        }
+        ChannelId::Playback(_) => {}
+    }
+    let name = rme_name(state, cid);
+    rme_string(state, format!("/1/trackname{n}"), name);
+}
+
+fn rme_channel_phase(state: &TotalControl, cid: ChannelId, right: bool) -> Option<bool> {
+    match cid {
+        ChannelId::Input(i) => state
+            .device
+            .inputs()
+            .get(i)
+            .map(|c| if right { c.phase_r } else { c.phase }),
+        ChannelId::Output(i) => state
+            .device
+            .outputs()
+            .get(i)
+            .map(|c| if right { c.phase_r } else { c.phase_l }),
+        ChannelId::Playback(_) => None,
+    }
+}
+
+fn rme_channel_low_cut(state: &TotalControl, cid: ChannelId) -> Option<bool> {
+    match cid {
+        ChannelId::Input(i) => state.device.inputs().get(i).and_then(|c| c.eq).map(|e| e.low_cut_enabled),
+        ChannelId::Output(i) => state.device.outputs().get(i).and_then(|c| c.eq).map(|e| e.low_cut_enabled),
+        ChannelId::Playback(_) => None,
+    }
+}
+
+fn rme_channel_eq(state: &TotalControl, cid: ChannelId) -> Option<totalcontrol_core::channel::InputEq> {
+    match cid {
+        ChannelId::Input(i) => state.device.inputs().get(i).and_then(|c| c.eq),
+        ChannelId::Output(i) => state.device.outputs().get(i).and_then(|c| c.eq),
+        ChannelId::Playback(_) => None,
+    }
+}
+
+fn rme_eq_type_value(band: usize, ty: EqBandType) -> f32 {
+    match (band, ty) {
+        (0, EqBandType::LowShelf) => 1.0,
+        (0, _) => 0.0,
+        (2, EqBandType::HighShelf) => 0.5,
+        (2, EqBandType::LowPass) => 1.0,
+        (2, _) => 0.0,
+        _ => 0.0,
+    }
+}
+
+fn rme_eq_type_name(band: usize, ty: EqBandType) -> String {
+    match (band, ty) {
+        (0, EqBandType::LowShelf) => "Low Shelf".into(),
+        (2, EqBandType::HighShelf) => "High Shelf".into(),
+        (2, EqBandType::LowPass) => "Low Pass".into(),
+        _ => "Bell".into(),
+    }
+}
+
+fn rme_page2_channel(state: &mut TotalControl, cid: ChannelId) {
+    let (gain, _) = rme_channel_volume(state, cid);
+    let pan = rme_channel_pan(state, cid);
+    let muted = channel_is_muted(state, cid);
+    let soloed = channel_is_soloed(state, cid);
+    let phase = rme_channel_phase(state, cid, false);
+    let phase_right = rme_channel_phase(state, cid, true);
+    let linked = pair_linked(state, cid);
+
+    rme_value(state, "/2/volume".into(), crate::osc_rme::gain_to_fader(gain));
+    rme_string(state, "/2/volumeVal".into(), rme_db_string(gain));
+    rme_value(state, "/2/pan".into(), crate::osc_rme::pan_norm(pan));
+    rme_string(state, "/2/panVal".into(), rme_pan_string(pan));
+    rme_bool(state, "/2/mute".into(), muted);
+    rme_bool(state, "/2/solo".into(), soloed);
+    if let Some(phase) = phase {
+        rme_bool(state, "/2/phase".into(), phase);
+    }
+    if let Some(phase) = phase_right {
+        rme_bool(state, "/2/phaseRight".into(), phase);
+    }
+    rme_bool(state, "/2/stereo".into(), linked);
+
+    let input = match cid {
+        ChannelId::Input(i) => state.device.inputs().get(i).cloned(),
+        _ => None,
+    };
+    if let Some(ch) = input {
+        if let Some(raw) = ch.gain {
+            let norm = rme_gain_norm(state, ch.id, raw);
+            let db = rme_gain_db(state, ch.id, raw);
+            rme_value(state, "/2/gain".into(), norm);
+            rme_string(state, "/2/gainVal".into(), format!("{db:.1} dB"));
+        }
+        if let Some(raw) = ch.gain_right {
+            let norm = rme_gain_norm(state, ch.id, raw);
+            let db = rme_gain_db(state, ch.id, raw);
+            rme_value(state, "/2/gainRight".into(), norm);
+            rme_string(state, "/2/gainRightVal".into(), format!("{db:.1} dB"));
+        }
+        rme_bool(state, "/2/phantom".into(), ch.phantom);
+        rme_bool(state, "/2/instrument".into(), ch.instrument);
+        rme_bool(state, "/2/pad".into(), ch.pad);
+        rme_bool(state, "/2/autoset".into(), ch.autoset);
+        let level = ch
+            .level
+            .or_else(|| totalcontrol_core::channel::InputLevel::from_code(ch.ref_level));
+        if let Some(level) = level {
+            send_osc(state, "/2/refLevel".into(), vec![OscType::Int(level.code() as i32)]);
+        }
+        rme_bool(state, "/2/msProc".into(), ch.ms_proc);
+        rme_value(state, "/2/width".into(), ch.width.clamp(0.0, 1.0));
+        let send = (1.0 + ch.fx_send_db / 65.0).clamp(0.0, 1.0);
+        rme_value(state, "/2/reverbSend".into(), send);
+    }
+
+    if let Some(ch) = match cid {
+        ChannelId::Playback(i) => state.device.playbacks().get(i).cloned(),
+        _ => None,
+    } {
+        rme_bool(state, "/2/msProc".into(), ch.ms_proc);
+        rme_value(state, "/2/width".into(), ch.width.clamp(0.0, 1.0));
+        let send = (1.0 + ch.fx_send_db / 65.0).clamp(0.0, 1.0);
+        rme_value(state, "/2/reverbSend".into(), send);
+    }
+
+    if let Some(ch) = match cid {
+        ChannelId::Output(i) => state.device.outputs().get(i).cloned(),
+        _ => None,
+    } {
+        let ret = (1.0 + ch.fx_return_db / 65.0).clamp(0.0, 1.0);
+        rme_value(state, "/2/reverbReturn".into(), ret);
+        rme_bool(state, "/2/cue".into(), ch.cue);
+        rme_bool(state, "/2/talkbackSel".into(), ch.talkback);
+        rme_bool(state, "/2/noTrim".into(), ch.no_trim);
+        rme_bool(state, "/2/loopback".into(), ch.loopback);
+    }
+
+    let low_cut = rme_channel_low_cut(state, cid);
+    if let Some(on) = low_cut {
+        rme_bool(state, "/2/lowcutEnable".into(), on);
+    }
+    let eq = rme_channel_eq(state, cid);
+    if let Some(eq) = eq {
+        rme_bool(state, "/2/lowcutEnable".into(), eq.low_cut_enabled);
+        rme_value(
             state,
-            format!("/meter/input/{i}"),
-            vec![OscType::Float(value)],
+            "/2/lowcutFreq".into(),
+            crate::osc_rme::hz_freq(eq.low_cut_freq_hz as f32, 20.0, 500.0),
+        );
+        rme_string(
+            state,
+            "/2/lowcutFreqVal".into(),
+            format!("{} Hz", eq.low_cut_freq_hz),
+        );
+        let grade = ((eq.low_cut_slope_db_oct.saturating_sub(6)) as f32 / 18.0).clamp(0.0, 1.0);
+        rme_value(state, "/2/lowcutGrade".into(), grade);
+        rme_string(
+            state,
+            "/2/lowcutGradeVal".into(),
+            format!("{} dB/oct", eq.low_cut_slope_db_oct),
+        );
+        rme_bool(state, "/2/eqEnable".into(), eq.enabled);
+        for (band, b) in eq.bands.iter().enumerate() {
+            rme_value(
+                state,
+                format!("/2/eqType{}", band + 1),
+                rme_eq_type_value(band, b.band_type),
+            );
+            rme_string(
+                state,
+                format!("/2/eqType{}Val", band + 1),
+                rme_eq_type_name(band, b.band_type),
+            );
+            rme_value(
+                state,
+                format!("/2/eqGain{}", band + 1),
+                (b.gain_db + 24.0) / 48.0,
+            );
+            rme_string(
+                state,
+                format!("/2/eqGain{}Val", band + 1),
+                format!("{:.1} dB", b.gain_db),
+            );
+            rme_value(
+                state,
+                format!("/2/eqFreq{}", band + 1),
+                crate::osc_rme::hz_freq(b.freq_hz as f32, 20.0, 20_000.0),
+            );
+            rme_string(
+                state,
+                format!("/2/eqFreq{}Val", band + 1),
+                format!("{} Hz", b.freq_hz),
+            );
+            let q = ((b.q.max(0.05).log10() + 1.0) / 2.0).clamp(0.0, 1.0);
+            rme_value(state, format!("/2/eqQ{}", band + 1), q);
+            rme_string(
+                state,
+                format!("/2/eqQ{}Val", band + 1),
+                format!("{:.2}", b.q),
+            );
+        }
+    }
+
+    let dynamics = match cid {
+        ChannelId::Input(i) => state.device.inputs().get(i).and_then(|c| c.dynamics),
+        ChannelId::Output(i) => state.device.outputs().get(i).and_then(|c| c.dynamics),
+        ChannelId::Playback(_) => None,
+    };
+    if let Some(d) = dynamics {
+        rme_bool(state, "/2/compexpEnable".into(), d.on);
+        rme_value(state, "/2/compexpGain".into(), (d.gain_db + 30.0) / 60.0);
+        rme_value(state, "/2/compexpAttack".into(), d.attack_ms as f32 / 200.0);
+        rme_value(
+            state,
+            "/2/compexpRelease".into(),
+            ((d.release_ms as f32 - 100.0) / 899.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/compTrsh".into(),
+            ((d.comp_threshold_db + 60.0) / 60.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/compRatio".into(),
+            ((d.comp_ratio - 1.0) / 9.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/expTrsh".into(),
+            ((d.exp_threshold_db + 99.0) / 69.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/expRatio".into(),
+            ((d.exp_ratio - 1.0) / 9.0).clamp(0.0, 1.0),
+        );
+        rme_bool(state, "/2/alevEnable".into(), d.auto_level);
+        rme_value(
+            state,
+            "/2/alevMaxgain".into(),
+            (d.auto_max_gain_db / 18.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/alevHeadroom".into(),
+            ((d.auto_headroom_db - 3.0) / 9.0).clamp(0.0, 1.0),
+        );
+        rme_value(
+            state,
+            "/2/alevRisetime".into(),
+            ((d.auto_rise_s - 0.1) / 9.8).clamp(0.0, 1.0),
         );
     }
-    for i in 0..state.playback_meters.len() {
-        let value = state.playback_meters[i].frame().value;
-        notify_osc_raw(
-            state,
-            format!("/meter/playback/{i}"),
-            vec![OscType::Float(value)],
-        );
+    let name = rme_name(state, cid);
+    rme_string(state, "/2/trackname".into(), name);
+}
+
+fn rme_selected_meter(state: &TotalControl) -> f32 {
+    let idx = state.rme.channel;
+    let meter = match state.rme.bus {
+        crate::osc_rme::Bus::Input => state.input_meters.get(idx),
+        crate::osc_rme::Bus::Playback => state.playback_meters.get(idx),
+        crate::osc_rme::Bus::Output => state.output_meters.get(idx),
+    };
+    meter.map(|m| m.frame().value).unwrap_or(0.0)
+}
+
+fn rme_page1_meter(state: &TotalControl, n: usize, idx: usize) -> f32 {
+    let meter = match state.rme.bus {
+        crate::osc_rme::Bus::Input => state.input_meters.get(idx),
+        crate::osc_rme::Bus::Playback => state.playback_meters.get(idx),
+        crate::osc_rme::Bus::Output => state.output_meters.get(idx),
+    };
+    let _ = n;
+    meter.map(|m| m.frame().value).unwrap_or(0.0)
+}
+
+fn notify_rme_meters(state: &mut TotalControl) {
+    let end = (state.rme.bank + state.rme.bank_size.max(1)).min(crate::osc_rme::CHANNELS);
+    for idx in state.rme.bank..end {
+        let n = idx - state.rme.bank + 1;
+        let value = rme_page1_meter(state, n, idx);
+        rme_value(state, format!("/1/level{n}Left"), value);
+        rme_value(state, format!("/1/level{n}Right"), value);
     }
-    for i in 0..state.output_meters.len() {
-        let value = state.output_meters[i].frame().value;
-        notify_osc_raw(
-            state,
-            format!("/meter/output/{i}"),
-            vec![OscType::Float(value)],
-        );
+    let selected = rme_selected_meter(state);
+    rme_value(state, "/2/levelLeft".into(), selected);
+    rme_value(state, "/2/levelRight".into(), selected);
+}
+
+fn notify_rme_page1(state: &mut TotalControl) {
+    let end = (state.rme.bank + state.rme.bank_size.max(1)).min(crate::osc_rme::CHANNELS);
+    let ids: Vec<ChannelId> = (state.rme.bank..end)
+        .filter_map(|idx| match state.rme.bus {
+            crate::osc_rme::Bus::Input => Some(ChannelId::Input(idx)),
+            crate::osc_rme::Bus::Playback => Some(ChannelId::Playback(idx)),
+            crate::osc_rme::Bus::Output => Some(ChannelId::Output(idx)),
+        })
+        .collect();
+    for (n, cid) in ids.into_iter().enumerate() {
+        rme_page1_channel(state, cid, n + 1);
+    }
+    if let Some(pair) = state.device.settings().main_out {
+        let idx = pair * 2;
+        if let Some(volume) = state.device.outputs().get(idx).map(|ch| ch.volume) {
+            rme_value(state, "/1/mastervolume".into(), crate::osc_rme::gain_to_fader(volume));
+            rme_string(state, "/1/mastervolumeVal".into(), rme_db_string(volume));
+        }
+    }
+    if let Some(name) = state
+        .device
+        .outputs()
+        .get(state.rme.submix * 2)
+        .map(|out| out.name.clone())
+    {
+        rme_string(state, "/1/labelSubmix".into(), name);
+    }
+    let s = state.device.settings().clone();
+    let speaker_b_linked = state.control_room.speaker_b_linked;
+    let talkback = state.talkback_on;
+    let global_mute = any_channel_muted(state);
+    let global_solo = any_channel_soloed(state);
+    rme_bool(state, "/1/mainDim".into(), s.dim);
+    rme_bool(state, "/1/mainSpeakerB".into(), s.speaker_b);
+    rme_bool(state, "/1/speakerBLinked".into(), speaker_b_linked);
+    rme_bool(state, "/1/mainMuteFx".into(), s.mute_fx);
+    rme_bool(state, "/1/mainMono".into(), s.mono);
+    rme_bool(state, "/1/mainTalkback".into(), talkback);
+    rme_bool(state, "/1/globalMute".into(), global_mute);
+    rme_bool(state, "/1/globalSolo".into(), global_solo);
+}
+
+fn notify_rme_page2(state: &mut TotalControl) {
+    let idx = state.rme.channel;
+    let cid = match state.rme.bus {
+        crate::osc_rme::Bus::Input => ChannelId::Input(idx),
+        crate::osc_rme::Bus::Playback => ChannelId::Playback(idx),
+        crate::osc_rme::Bus::Output => ChannelId::Output(idx),
+    };
+    rme_page2_channel(state, cid);
+    let value = rme_selected_meter(state);
+    rme_value(state, "/2/levelLeft".into(), value);
+    rme_value(state, "/2/levelRight".into(), value);
+    if let Some(out) = state.device.outputs().get(state.rme.submix * 2) {
+        rme_string(state, "/2/labelSubmix".into(), out.name.clone());
+    }
+}
+
+fn notify_rme_page3(state: &mut TotalControl) {
+    let r = state.device.settings().reverb.unwrap_or_default();
+    rme_bool(state, "/3/reverbEnable".into(), r.on);
+    rme_value(state, "/3/reverbType".into(), r.kind as f32);
+    rme_value(state, "/3/reverbPredelay".into(), r.pre_delay_ms as f32 / 999.0);
+    rme_value(
+        state,
+        "/3/reverbLowcut".into(),
+        crate::osc_rme::hz_freq(r.low_cut_hz as f32, 20.0, 500.0),
+    );
+    rme_value(
+        state,
+        "/3/reverbHighcut".into(),
+        crate::osc_rme::hz_freq(r.high_cut_hz as f32, 5000.0, 20_000.0),
+    );
+    rme_value(state, "/3/reverbRoomscale".into(), ((r.room_scale - 0.5) / 2.5).clamp(0.0, 1.0));
+    rme_value(state, "/3/reverbAttack".into(), ((r.attack_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0));
+    rme_value(state, "/3/reverbHold".into(), ((r.hold_ms as f32 - 5.0) / 395.0).clamp(0.0, 1.0));
+    rme_value(state, "/3/reverbRelease".into(), ((r.release_ms as f32 - 5.0) / 495.0).clamp(0.0, 1.0));
+    rme_value(state, "/3/reverbTime".into(), ((r.reverb_time_ds as f32 - 1.0) / 49.0).clamp(0.0, 1.0));
+    rme_value(
+        state,
+        "/3/reverbHighdamp".into(),
+        crate::osc_rme::hz_freq(r.high_damp_hz as f32, 1000.0, 20_000.0),
+    );
+    rme_value(state, "/3/reverbSmooth".into(), r.smoothness as f32 / 100.0);
+    rme_value(state, "/3/reverbWidth".into(), r.width as f32 / 100.0);
+    rme_value(state, "/3/reverbVolume".into(), ((r.volume_db + 65.0) / 65.0).clamp(0.0, 1.0));
+
+    let e = state.device.settings().echo.unwrap_or_default();
+    rme_bool(state, "/3/echoEnable".into(), e.on);
+    rme_value(state, "/3/echoType".into(), e.kind as f32 / 2.0);
+    rme_value(state, "/3/echoDelaytime".into(), e.delay_ms as f32 / 2000.0);
+    rme_value(state, "/3/echoFeedback".into(), e.feedback as f32 / 100.0);
+    rme_value(state, "/3/echoWidth".into(), e.width as f32 / 100.0);
+    rme_value(state, "/3/echoVolume".into(), ((e.volume_db + 65.0) / 65.0).clamp(0.0, 1.0));
+
+    rme_bool(state, "/3/globalMute".into(), any_channel_muted(state));
+    rme_bool(state, "/3/globalSolo".into(), any_channel_soloed(state));
+    for n in 1..=8 {
+        let active = state.active_snapshot == Some(n);
+        rme_bool(state, format!("/3/snapshots/{}/1", 9 - n), active);
+    }
+    for idx in 0..4 {
+        let g = state.groups[idx].clone();
+        rme_bool(state, format!("/3/muteGroups/{}/1", 4 - idx), g.mute_linked);
+        rme_bool(state, format!("/3/soloGroups/{}/1", 4 - idx), g.solo_linked);
+        rme_bool(state, format!("/3/faderGroups/{}/1", 4 - idx), g.fader_linked);
+    }
+}
+
+fn notify_rme_page(state: &mut TotalControl, page: u8) {
+    match page {
+        1 => notify_rme_page1(state),
+        2 => notify_rme_page2(state),
+        3 => notify_rme_page3(state),
+        _ => {}
+    }
+}
+
+/// Feedback for a change that arrived as a native TotalControl path.  Only
+/// the RME surface is sent; the native address space is not echoed.
+fn notify_rme_native(state: &mut TotalControl, addr: &str, _args: &[OscType]) {
+    let parts: Vec<&str> = addr.split('/').filter(|s| !s.is_empty()).collect();
+    match parts.as_slice() {
+        [kind, id, ..] if matches!(*kind, "input" | "playback" | "output") => {
+            let Ok(id) = id.parse::<usize>() else {
+                return;
+            };
+            let cid = match *kind {
+                "input" => ChannelId::Input(id),
+                "playback" => ChannelId::Playback(id),
+                _ => ChannelId::Output(id),
+            };
+            notify_rme_channel(state, cid);
+        }
+        ["fx", "reverb", ..] | ["fx", "echo", ..] => notify_rme_page3(state),
+        ["dim"] => notify_rme_page1(state),
+        ["speaker_b"] | ["mono"] | ["mute_fx"] | ["talkback"] => notify_rme_page1(state),
+        ["snapshot", "active"] | ["snapshot", _ , "stored"] => notify_rme_page3(state),
+        ["submix"] => notify_rme_page1(state),
+        _ => {}
+    }
+}
+
+fn notify_rme_channel(state: &mut TotalControl, cid: ChannelId) {
+    if let Some(n) = rme_page1_index(state, cid) {
+        rme_page1_channel(state, cid, n);
+    }
+    if rme_is_selected(state, cid) {
+        rme_page2_channel(state, cid);
     }
 }
 
@@ -4869,11 +5437,10 @@ fn is_undoable(message: &Message) -> bool {
             | Message::ClearSelection
             | Message::StripHovered(_)
             | Message::OscReady(_)
-            | Message::OscCommand(_)
+
             | Message::OscLog(_)
             | Message::ToggleOscLog
             | Message::ClearOscLog
-            | Message::OscMeters
             | Message::ToggleDevicePanel
             | Message::ToggleAbout
             | Message::ToggleSettings
@@ -4928,7 +5495,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::RenameCommit
             | Message::SetShowOriginalNames(_)
             | Message::SnapshotStore
-            | Message::SnapshotStoreTo(_)
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
             | Message::GroupClear
@@ -5169,7 +5735,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::EnginePoll
                 | Message::EngineRead(..)
                 | Message::OscLog(_)
-                | Message::OscMeters
+                | Message::OscRmeIn(_, _)
                 | Message::WindowResized(_)
                 | Message::WindowSize(..)
         )
@@ -5178,15 +5744,38 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         state.assign_pinned = false;
     }
 
-    // OSC is an input path, not a separate control implementation: decode
-    // it to the same Message the GUI produces, then run the normal update
-    // loop.  That gives OSC the same clamps, undo, host-scene merge and
-    // autosave behaviour as a click.
-    if let Message::OscCommand(cmd) = &message {
-        return match cmd.clone().into_message() {
-            Some(inner) => update(state, inner),
-            None => Task::none(),
-        };
+    // Classic RME OSC: parse on this thread so `Toggle` can read the
+    // confirmed model, dispatch the resulting ordinary messages, then
+    // re-send the page when the bank/bus/channel selection changed.
+    if let Message::OscRmeIn(addr, args) = &message {
+        let before = state.rme.nav();
+        state.rme.gain_max_34 = state
+            .device
+            .inputs()
+            .get(2)
+            .and_then(|c| c.gain_max)
+            .unwrap_or(24);
+        state.rme.submix_count = state.device.output_pair_count().max(1);
+        state.rme.counts = [
+            state.device.inputs().len().min(crate::osc_rme::CHANNELS),
+            state.device.playbacks().len().min(crate::osc_rme::CHANNELS),
+            state.device.outputs().len().min(crate::osc_rme::CHANNELS),
+        ];
+        let parsed = crate::osc_rme::parse(addr, args, &mut state.rme);
+        let page = state.rme.page;
+        let changed = state.rme.nav() != before;
+        match parsed {
+            Some(messages) => {
+                for message in messages {
+                    let _ = update(state, message);
+                }
+            }
+            None => log::debug!("OSC: unsupported classic path {addr} {args:?}"),
+        }
+        if changed {
+            notify_rme_page(state, page);
+        }
+        return Task::none();
     }
     // UC startup: the first scene write happens before the meter taps open
     // the card, and the unit can reload its stored mixer on stream start.
@@ -5563,6 +6152,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            if state.osc_tx.is_some() {
+                notify_rme_meters(state);
+            }
         }
         Message::WindowClosed(id) => {
             // Our own hide already forgot the id; this is a close we did not
@@ -5869,6 +6461,79 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 vec![OscType::Float(actual as f32)],
             );
         }
+        Message::RmeToggle(target) => {
+            if let Some(message) = rme_toggle_message(state, target) {
+                return update(state, message);
+            }
+        }
+        Message::RmeGainRight(idx, gain) => {
+            if let Err(e) = state.device.set_input_gain_right(idx, gain) {
+                fail(state, "set_input_gain_right", &e);
+            }
+        }
+        Message::RmeMasterVolume(value) => {
+            if let Some(pair) = state.device.settings().main_out {
+                let left = pair * 2;
+                if left < state.device.outputs().len() {
+                    set_channel_volume(state, ChannelId::Output(left), left, value);
+                    notify_rme_channel(state, ChannelId::Output(left));
+                }
+            }
+        }
+        Message::RmeSelect(cid, on) => {
+            if on {
+                state.selected.insert(cid);
+                state.focus_channel = Some(cid);
+                state.select_anchor = Some(cid);
+            } else {
+                state.selected.remove(&cid);
+                if state.focus_channel == Some(cid) {
+                    state.focus_channel = state.selected.iter().next().copied();
+                }
+            }
+        }
+        Message::RmeRename(cid, name) => {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                state.labels.remove(&cid);
+            } else {
+                state.labels.insert(cid, name);
+            }
+            state.prefs_dirty = true;
+        }
+        Message::RmeDynamicsField {
+            channel,
+            field,
+            value,
+        } => {
+            let mut d = dynamics_for(state, channel);
+            match field {
+                "gain" => d.gain_db = value * 60.0 - 30.0,
+                "attack" => d.attack_ms = (value * 200.0).round() as u16,
+                "release" => d.release_ms = (100.0 + value * 899.0).round() as u16,
+                "comp_threshold" => d.comp_threshold_db = -60.0 + value * 60.0,
+                "comp_ratio" => d.comp_ratio = 1.0 + value * 9.0,
+                "exp_threshold" => d.exp_threshold_db = -99.0 + value * 69.0,
+                "exp_ratio" => d.exp_ratio = 1.0 + value * 9.0,
+                "auto_max_gain" => d.auto_max_gain_db = value * 18.0,
+                "auto_headroom" => d.auto_headroom_db = 3.0 + value * 9.0,
+                "auto_rise" => d.auto_rise_s = 0.1 + value * 9.8,
+                _ => return Task::none(),
+            }
+            return update(state, Message::DynamicsChanged(channel, d.clamped()));
+        }
+        Message::InputPhaseRight(idx, invert) => {
+            if let Err(e) = state.device.set_input_phase_right(idx, invert) {
+                fail(state, "set_input_phase_right", &e);
+            }
+        }
+        Message::SpeakerBLinked(on) => {
+            state.control_room.speaker_b_linked = on;
+            if let Err(e) = state.device.set_speaker_b_linked(on) {
+                fail(state, "set_speaker_b_linked", &e);
+            }
+            state.prefs_dirty = true;
+        }
         Message::Sensitivity(idx, plus4) => {
             let s = if plus4 {
                 totalcontrol_core::Sensitivity::Plus4dBu
@@ -6085,7 +6750,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 let mut e = state.device.settings().echo.unwrap_or_default();
                 match field {
                     "on" => e.on = value >= 0.5,
-                    "type" => e.kind = value.round().clamp(0.0, 2.0) as u8,
+                    "type" => e.kind = (value * 2.0).round().clamp(0.0, 2.0) as u8,
                     "delay" => e.delay_ms = (value * 2000.0).round() as u16,
                     "feedback" => e.feedback = (value * 100.0).round().clamp(0.0, 100.0) as u8,
                     "highcut" => e.high_cut = (value * 5.0).round().clamp(0.0, 5.0) as u8,
@@ -6119,6 +6784,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     fail(state, "set_reverb", &err);
                 }
             }
+            notify_rme_page3(state);
         }
         Message::ReverbChanged(r) => {
             if let Err(e) = state.device.set_reverb(&r) {
@@ -6579,17 +7245,37 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.osc_tx = Some(tx);
             // A controller connecting after startup shouldn't stay blind
             // until the next manual change — snapshot everything once.
-            notify_osc_full_state(state);
+            notify_rme_page(state, state.rme.page);
         }
         Message::OscLog(line) => {
             state.osc_log.push_front(line);
             state.osc_log.truncate(OSC_LOG_MAX);
         }
         // Handled at the top of `update`, before this match.
-        Message::OscCommand(_) => {}
+        Message::OscRmeIn(_, _) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
-        Message::OscMeters => notify_osc_meters(state),
+        Message::SetOscEnabled(on) => {
+            state.osc_enabled = on;
+            state.prefs_dirty = true;
+            rebuild_osc_config(state);
+        }
+        Message::OscRecvPortChanged(text) => state.osc_recv_text = text,
+        Message::OscSendPortChanged(text) => state.osc_send_text = text,
+        Message::ApplyOscPorts => {
+            if let Ok(port) = state.osc_recv_text.trim().parse::<u16>() {
+                if port >= 1024 {
+                    state.osc_recv_port = port;
+                }
+            }
+            if let Ok(port) = state.osc_send_text.trim().parse::<u16>() {
+                if port >= 1024 {
+                    state.osc_send_port = port;
+                }
+            }
+            state.prefs_dirty = true;
+            rebuild_osc_config(state);
+        }
         Message::ToggleDevicePanel => {
             if !state.connected || state.device.is_mock() {
                 state.show_device_panel = false;
@@ -7215,10 +7901,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             notify_osc_raw(state, "/snapshot/active", vec![OscType::Int(n as i32)]);
         }
-        Message::SnapshotStoreTo(n) => {
-            state.active_snapshot = Some(n as usize);
-            return update(state, Message::SnapshotStore);
-        }
         Message::SnapshotStore => {
             if let Some(n) = state.active_snapshot {
                 let scene = state
@@ -7267,10 +7949,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     }
                 }
             }
+            notify_rme_page3(state);
         }
         Message::GroupClear => {
             state.groups = Default::default();
             state.group_editing = false;
+            notify_rme_page3(state);
         }
         Message::LayoutClicked(n) => {
             state.active_layout = Some(n as usize);
@@ -8333,7 +9017,50 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         column![sync_section, sync_help, sync_buttons, always_init]
             .spacing(theme::SPACE_SM * scale)
     };
-    let body = column![header, background, sync, surround]
+    let osc_section = row![
+        text("OSC")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_MICRO * ts),
+        iced::widget::rule::horizontal(1),
+    ]
+    .spacing(theme::SPACE_MD * scale)
+    .align_y(iced::Alignment::Center);
+    let osc_ports = row![
+        text("Receive")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * ts),
+        text_input("9000", &state.osc_recv_text)
+            .on_input(Message::OscRecvPortChanged)
+            .width(Length::Fixed(90.0 * scale))
+            .size(theme::TEXT_XS * ts),
+        text("Send")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * ts),
+        text_input("9001", &state.osc_send_text)
+            .on_input(Message::OscSendPortChanged)
+            .width(Length::Fixed(90.0 * scale))
+            .size(theme::TEXT_XS * ts),
+        iced::widget::button(text("Apply").size(theme::TEXT_XS * ts))
+            .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
+            .style(theme::ghost_button)
+            .on_press(Message::ApplyOscPorts),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .align_y(iced::Alignment::Center);
+    let osc = column![
+        osc_section,
+        toggle(
+            "Classic TotalMix OSC control surface",
+            state.osc_enabled,
+            Message::SetOscEnabled(!state.osc_enabled),
+        ),
+        osc_ports,
+        text("Loopback only. A TotalMix-compatible controller drives and reads the mixer on these ports.")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * ts),
+    ]
+    .spacing(theme::SPACE_SM * scale);
+    let body = column![header, background, sync, surround, osc]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
     popover(state, body.into(), Message::ToggleSettings)
@@ -11301,19 +12028,25 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
         .align_y(iced::Alignment::Center);
     for band in 0..3 {
         let b = eq.bands[band];
-        // Band 2 is fixed to peak (manual §25.3.2); bands 1 and 3 can be
-        // shelves, and band 3 also runs as Hi Cut (`NN48` = 2).
+        // UCX band 2 is fixed to Bell (manual §25.3.2).  Band 1 is
+        // Bell/Low Shelf and band 3 is Bell/High Shelf/Hi Cut.  The cycle
+        // never offers a type the unit does not have.
         let (short, full, next_type) = match (band, b.band_type) {
             (_, EqBandType::Off) => ("Off", "Off (click for Bell)", EqBandType::Bell),
             (1, EqBandType::Bell) => ("Bell", "Bell (click for Off)", EqBandType::Off),
-            (_, EqBandType::Bell) => (
+            (1, _) => ("Bell", "Bell (fixed for band 2)", EqBandType::Bell),
+            (0, EqBandType::Bell) => (
                 "Bell",
                 "Bell (click for Low Shelf)",
                 EqBandType::LowShelf,
             ),
-            (_, EqBandType::LowShelf) => (
-                "Low",
-                "Low Shelf (click for High Shelf)",
+            (0, EqBandType::LowShelf) => {
+                ("Low", "Low Shelf (click for Off)", EqBandType::Off)
+            }
+            (0, _) => ("Bell", "Bell (band 1 has no shelf on this side)", EqBandType::Bell),
+            (2, EqBandType::Bell) => (
+                "Bell",
+                "Bell (click for High Shelf)",
                 EqBandType::HighShelf,
             ),
             (2, EqBandType::HighShelf) => (
@@ -11321,14 +12054,11 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                 "High Shelf (click for Hi Cut)",
                 EqBandType::LowPass,
             ),
-            (_, EqBandType::HighShelf) => (
-                "High",
-                "High Shelf (click for Off)",
-                EqBandType::Off,
-            ),
-            (_, EqBandType::LowPass) => {
+            (2, EqBandType::LowPass) => {
                 ("Hi Cut", "Hi Cut, low pass (click for Off)", EqBandType::Off)
             }
+            (2, _) => ("Bell", "Bell (band 3 has no low shelf)", EqBandType::Bell),
+            _ => ("Off", "Off", EqBandType::Bell),
         };
         let number_color = if b.band_type == EqBandType::Off {
             theme::EQ_BAND[band]
@@ -14295,6 +15025,48 @@ mod tests {
     use totalcontrol_core::RmeDevice;
 
     #[test]
+    fn page_feedback_uses_classic_addresses_and_val_companions() {
+        use iced::futures::TryStreamExt;
+
+        let mut state = new(true, None, None);
+        state.device.settings_mut().main_out = Some(0);
+        let (tx, mut rx) = iced::futures::channel::mpsc::channel(4096);
+        state.osc_tx = Some(tx);
+        super::notify_rme_page(&mut state, 1);
+
+        let mut addrs = Vec::new();
+        while let Ok(Some(message)) = rx.try_next() {
+            if let crate::osc::OscOutbound::Raw { addr, .. } = message {
+                addrs.push(addr);
+            }
+        }
+        assert!(addrs.iter().any(|a| a == "/1/volume1"), "{addrs:?}");
+        assert!(addrs.iter().any(|a| a == "/1/volume1Val"), "{addrs:?}");
+        assert!(addrs.iter().any(|a| a == "/1/mute/1/1"), "{addrs:?}");
+        assert!(addrs.iter().any(|a| a == "/1/trackname1"), "{addrs:?}");
+        assert!(addrs.iter().any(|a| a == "/1/labelSubmix"), "{addrs:?}");
+        assert!(addrs.iter().any(|a| a == "/1/mastervolume"), "{addrs:?}");
+        assert!(
+            !addrs.iter().any(|a| a.starts_with("/input/")),
+            "native addresses leaked: {addrs:?}"
+        );
+    }
+
+    #[test]
+    fn osc_page2_toggles_follow_the_confirmed_model() {
+        let mut state = new(true, None, None);
+        state.rme.bus = crate::osc_rme::Bus::Input;
+        state.rme.channel = 0;
+        let mute = |on| Message::OscRmeIn("/2/mute".into(), vec![rosc::OscType::Float(on)]);
+        let _ = update(&mut state, mute(1.0));
+        assert!(state.device.inputs()[0].mute);
+        let _ = update(&mut state, mute(1.0));
+        assert!(!state.device.inputs()[0].mute);
+        let _ = update(&mut state, mute(0.0));
+        assert!(!state.device.inputs()[0].mute);
+    }
+
+    #[test]
     fn the_service_switch_keeps_the_model_and_meters_alive() {
         let mut state = new(true, None, None);
         attach_device_service(&mut state);
@@ -14415,15 +15187,15 @@ mod tests {
         state.host_scene = Some(state.device.capture_scene());
         let _ = update(
             &mut state,
-            Message::OscCommand(crate::osc::OscCommand::Volume(ChannelId::Input(0), 0, 0.5)),
+            Message::OscRmeIn("/1/volume1".into(), vec![rosc::OscType::Float(0.5)]),
         );
-        assert_eq!(
-            state.host_scene.as_ref().unwrap().inputs[0].volumes[0], 0.5,
+        assert!(
+            state.host_scene.as_ref().unwrap().inputs[0].volumes[0] > 0.0,
             "an OSC fader move must reach the saved host scene"
         );
         let _ = update(
             &mut state,
-            Message::OscCommand(crate::osc::OscCommand::LowCutEnabled(ChannelId::Input(0), true)),
+            Message::OscRmeIn("/2/lowcutEnable".into(), vec![rosc::OscType::Float(1.0)]),
         );
         assert!(
             state.host_scene.as_ref().unwrap().inputs[0]

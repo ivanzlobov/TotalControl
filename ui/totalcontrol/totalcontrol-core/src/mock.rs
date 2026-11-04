@@ -747,6 +747,24 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
+    fn set_input_phase_right(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
+        let inp = self
+            .inputs
+            .get_mut(idx)
+            .ok_or_else(|| Error::InvalidChannel(format!("Input {idx}")))?;
+        inp.phase_r = invert;
+        Ok(())
+    }
+
+    fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
+        let inp = self
+            .inputs
+            .get_mut(idx)
+            .ok_or_else(|| Error::InvalidChannel(format!("Input {idx}")))?;
+        inp.gain_right = Some(gain.min(inp.gain_max.unwrap_or(gain)));
+        Ok(())
+    }
+
     fn set_instrument(&mut self, idx: usize, on: bool) -> Result<(), Error> {
         let inp = self
             .inputs
@@ -914,11 +932,33 @@ impl RmeDevice for MockBabyfacePro {
         if band >= 3 {
             return Err(Error::InvalidChannel(format!("EQ band {band}")));
         }
+        let supported = match band {
+            0 => matches!(
+                band_type,
+                EqBandType::Off | EqBandType::Bell | EqBandType::LowShelf
+            ),
+            1 => matches!(band_type, EqBandType::Off | EqBandType::Bell),
+            2 => matches!(
+                band_type,
+                EqBandType::Off | EqBandType::Bell | EqBandType::HighShelf | EqBandType::LowPass
+            ),
+            _ => false,
+        };
+        if !supported {
+            return Err(Error::InvalidChannel(format!(
+                "EQ band {} has no {band_type} type",
+                band + 1
+            )));
+        }
         let inp = self
             .inputs
             .get_mut(idx)
             .ok_or_else(|| Error::InvalidChannel(format!("Input {idx}")))?;
-        inp.eq.get_or_insert_with(InputEq::default).bands[band].band_type = band_type;
+        let eq = inp.eq.get_or_insert_with(InputEq::default);
+        eq.bands[band].band_type = band_type;
+        if band_type == EqBandType::Off {
+            eq.bands[band].gain_db = 0.0;
+        }
         Ok(())
     }
 
@@ -1352,6 +1392,34 @@ mod tests {
         dev.set_input_pair_linked(0, true).unwrap();
         assert!(dev.inputs()[0].phase);
         assert!(!dev.inputs()[1].phase);
+    }
+
+    #[test]
+    fn test_eq_band_types_reject_device_specific_shelves() {
+        let mut dev = MockBabyfacePro::open().unwrap();
+        assert!(dev
+            .set_eq_band_type(0, 0, EqBandType::HighShelf)
+            .is_err());
+        assert!(dev
+            .set_eq_band_type(0, 2, EqBandType::LowShelf)
+            .is_err());
+        assert!(dev
+            .set_eq_band_type(0, 1, EqBandType::LowPass)
+            .is_err());
+        dev.set_eq_band_type(0, 0, EqBandType::LowShelf).unwrap();
+        dev.set_eq_band_type(0, 2, EqBandType::LowPass).unwrap();
+    }
+
+    #[test]
+    fn test_right_input_phase_and_gain_are_independent() {
+        let mut dev = MockBabyfacePro::open().unwrap();
+        let max = dev.inputs()[0].gain_max.unwrap_or(65);
+        dev.set_input_phase_right(0, true).unwrap();
+        dev.set_input_gain_right(0, max / 2).unwrap();
+        assert!(dev.inputs()[0].phase_r);
+        assert_eq!(dev.inputs()[0].gain_right, Some(max / 2));
+        dev.set_input_phase_right(0, false).unwrap();
+        assert!(!dev.inputs()[0].phase_r);
     }
 
     #[test]

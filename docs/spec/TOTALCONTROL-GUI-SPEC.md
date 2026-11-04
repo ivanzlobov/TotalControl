@@ -91,14 +91,19 @@ the menu, rewrites the whole mixer and pushes it in a single scene apply:
 ### 1.2 App settings
 
 `Options > Settings`, the tray Settings entry and the `,` shortcut open the
-app-level settings sheet. It holds BACKGROUND, STARTUP SYNC and SURROUND
-sections.
+app-level settings sheet. It holds BACKGROUND, STARTUP SYNC, SURROUND and
+OSC sections.
 
 SURROUND has `Virtual 5.1 output` and `Virtual 7.1 output` checkboxes. A
 checked output creates a PipeWire sink while TotalControl runs and removes it
 when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback pairs.
+
+OSC has `Classic TotalMix OSC control surface`, a receive-port field, a
+send-port field and `Apply`. Enabling it starts the loopback UDP surface;
+disabling it stops it. The switch and both ports are persisted. The command
+line `--osc`, `--osc-port` and `--osc-send-port` remain a development override.
 
 ### 2.0 FX fader
 

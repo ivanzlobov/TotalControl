@@ -1154,6 +1154,25 @@ pub trait RmeDevice {
         ))
     }
 
+    /// Phase invert on the right side of an input pair (`NN06 + 0x100`).
+    /// The left side is [`Self::set_phase`].
+    fn set_input_phase_right(&mut self, idx: usize, invert: bool) -> Result<(), Error> {
+        let _ = (idx, invert);
+        Err(Error::InvalidChannel(
+            "Right input phase is not supported on this backend".into(),
+        ))
+    }
+
+    /// Right-side preamp gain of a split input pair (`NN07 + 0x100`).
+    /// The right side is independent of [`Self::set_input_gain`] while the
+    /// pair is split.
+    fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
+        let _ = (idx, gain);
+        Err(Error::InvalidChannel(
+            "Right input gain is not supported on this backend".into(),
+        ))
+    }
+
     /// Phase invert for one hardware output channel (`base + 0x07` for the
     /// left side, `base + 0x107` for the right).
     fn set_output_phase(&mut self, idx: usize, invert: bool) -> Result<(), Error> {

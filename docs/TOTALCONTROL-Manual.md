@@ -656,7 +656,12 @@ channels and can route it like any other playback source.
 
 ## Appendix C — OSC setup
 
-OSC is opt-in and binds to loopback by default:
+OSC is opt-in and binds to loopback. Open `Options > Settings` and enable
+`Classic TotalMix OSC control surface`; the receive and send ports are in the
+same section and are saved with the other settings. Disabling the switch stops
+the surface immediately.
+
+The command line remains a development override:
 
 ```sh
 totalcontrol --osc
@@ -668,9 +673,9 @@ totalcontrol --osc
 | `--osc-send-port` | 9001 | UDP port for feedback |
 | `--osc-host` | 127.0.0.1 | Feedback destination |
 
-Configure the controller to send to the `--osc-port` and receive feedback on
-`--osc-send-port`. A TotalMix FX-compatible controller can use its normal
-address space. The address space is defined in
+Configure the controller to send to the receive port and receive feedback on
+the send port. A TotalMix FX-compatible controller can use its normal address
+space. The address space is defined in
 [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md).
 
 For a controller on another host, set `--osc-host` to the controller's address

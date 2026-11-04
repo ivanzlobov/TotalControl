@@ -68,6 +68,14 @@ pub struct InputChannel {
     /// `#[serde(default)]` so old scene JSON still loads.
     #[serde(default)]
     pub phase: bool,
+    /// Phase invert on the right side of a split input pair (`NN06 +
+    /// 0x100`).  Independent of [`Self::phase`].
+    #[serde(default)]
+    pub phase_r: bool,
+    /// Right-side preamp gain in raw units (`NN07 + 0x100`), used only
+    /// when the pair is split.  `None` means it follows [`Self::gain`].
+    #[serde(default)]
+    pub gain_right: Option<u32>,
     /// Ref-level code (Instr 3/4: +4dBu / -10dBV / Boost) as the raw
     /// Ref-level code (Instr 3/4): 0 = unset, 1 = +4dBu, 2 = -10dBV,
     /// 3 = Boost (see `usb::REF_*`; labeled cap_reflevel2.pcap).
@@ -524,6 +532,8 @@ impl InputChannel {
             gain: None,
             gain_max: None,
             phase: false,
+            phase_r: false,
+            gain_right: None,
             ref_level: 0,
             eq: None,
             mute: false,
