@@ -16,4 +16,4 @@ The end-user manual is
 [`../TOTALCONTROL-Manual.md`](../TOTALCONTROL-Manual.md). Development-only
 backends and tools are in
 [`../DEVELOPMENT-TOOLS.md`](../DEVELOPMENT-TOOLS.md). Open questions and
-capture requests live in [`../work/`](../work/).
+capture requests are kept in `docs/work/`.

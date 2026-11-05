@@ -6,7 +6,6 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
-  # Run for every PR so the required check exists for docs-only changes too.
   pull_request:
 
 concurrency:
@@ -14,18 +13,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  totalcontrol:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      kernel: ${{ steps.changes.outputs.kernel }}
+      core: ${{ steps.changes.outputs.core }}
+      gui: ${{ steps.changes.outputs.gui }}
+      tui: ${{ steps.changes.outputs.tui }}
+      usb: ${{ steps.changes.outputs.usb }}
+      alsa_plugin: ${{ steps.changes.outputs.alsa_plugin }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          changed=""
+          if [ -n "$BASE_REF" ]; then
+            git fetch --no-tags origin "$BASE_REF" >/dev/null 2>&1
+            changed=$(git diff --name-only "origin/$BASE_REF...HEAD")
+          fi
+
+          has() { echo "$changed" | grep -qE "$1"; }
+          flag() { if [ "$1" = "true" ] || has "$2"; then echo true; else echo false; fi; }
+
+          all=false
+          if [ -z "$BASE_REF" ] || has '^(\.github/workflows/|scripts/)'; then
+            all=true
+          fi
+
+          rust_all=$all
+          if has '^ui/totalcontrol/(Cargo\.toml|Cargo\.lock)$'; then
+            rust_all=true
+          fi
+
+          echo "kernel=$(flag "$all" '^kernel/')" >> "$GITHUB_OUTPUT"
+          echo "core=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-core/')" >> "$GITHUB_OUTPUT"
+          echo "gui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-gui/')" >> "$GITHUB_OUTPUT"
+          echo "tui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-tui/')" >> "$GITHUB_OUTPUT"
+          echo "usb=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-(usb|sys)/')" >> "$GITHUB_OUTPUT"
+          echo "alsa_plugin=$(flag "$rust_all" '^ui/totalcontrol/tools/alsa/')" >> "$GITHUB_OUTPUT"
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check documentation
+        run: python3 scripts/check-docs.py
+
+  kernel:
+    needs: changes
+    if: needs.changes.outputs.kernel == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential "linux-headers-$(uname -r)"
+      - name: Build kernel module
+        run: make -C kernel KBUILD_MODPOST_WARN=1
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.gui == 'true' || needs.changes.outputs.tui == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ui/totalcontrol
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+      - name: Test core
+        run: cargo test -p totalcontrol-core --lib --features alsa
 
+  gui:
+    needs: changes
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.gui == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/totalcontrol
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -37,8 +118,82 @@ jobs:
             libx11-dev \
             libxkbcommon-dev \
             pkg-config
+      - name: Test GUI
+        run: cargo test -p totalcontrol-gui
 
-      - name: Test
+  tui:
+    needs: changes
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.tui == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/totalcontrol
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
         run: |
-          cargo test -p totalcontrol-core --lib --features alsa
-          cargo test -p totalcontrol-gui
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - name: Build TUI
+        run: cargo test -p totalcontrol-tui
+
+  usb:
+    needs: changes
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.usb == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/totalcontrol
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libudev-dev pkg-config
+      - name: Test USB and FFI crates
+        run: |
+          cargo test -p totalcontrol-usb --features driver
+          cargo build -p totalcontrol-sys --release
+
+  alsa_plugin:
+    needs: changes
+    if: needs.changes.outputs.alsa_plugin == 'true' || needs.changes.outputs.usb == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/totalcontrol
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libasound2-dev libudev-dev pkg-config
+      - name: Build FFI and ALSA plugin
+        run: |
+          cargo build -p totalcontrol-sys --release
+          make -C tools/alsa
+
+  totalcontrol:
+    needs:
+      - changes
+      - docs
+      - kernel
+      - core
+      - gui
+      - tui
+      - usb
+      - alsa_plugin
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when a required job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - name: Report success
+        run: echo "all selected checks passed"

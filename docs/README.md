@@ -21,8 +21,8 @@ specification per device, an OSC specification and a user manual.
 | [`spec/FIREFFACE-UC-PROTOCOL-SPEC.md`](spec/FIREFFACE-UC-PROTOCOL-SPEC.md) | Fireface UC |
 | [`spec/BABYFACE-PRO-PROTOCOL-SPEC.md`](spec/BABYFACE-PRO-PROTOCOL-SPEC.md) | Babyface Pro FS |
 
-Open questions, capture requests and working notes live in [`work/`](work/).
-Raw captures live in [`captures/`](captures/).
+Open questions, capture requests and working notes are kept in
+`docs/work/`; raw captures are kept in `docs/captures/`.
 
 The specifications are present-tense and describe the current implementation.
 
