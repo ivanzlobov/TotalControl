@@ -1,8 +1,9 @@
 //! The product artwork, decoded from the same PNGs the packaging installs
-//! into the icon theme: the tile (for the window to wear, see
-//! `main::window_icon`) and the bare mark (for the in-app lockup in the
-//! top bar and the About dialog). One place decodes the assets, so the
-//! UI and the packaging can never drift apart on which file is the icon.
+//! into the icon theme: the transparent knob/T icon (for the window to
+//! wear, see `main::window_icon`) and the bare mark (for the in-app lockup
+//! in the top bar and the About dialog). One place decodes the assets, so
+//! the UI and the packaging can never drift apart on which file is the
+//! icon.
 //!
 //! Decoding uses the `png` crate directly and feeds iced's codec-free
 //! image widget (`image-without-codecs`, seven extra crates). The full
@@ -14,8 +15,8 @@ use std::sync::OnceLock;
 use iced::widget::image::Handle;
 
 const PNG: &[u8] = include_bytes!("../assets/totalcontrol-256.png");
-/// The mark alone: the orange gain arc and white T without the tile,
-/// rendered from `assets/totalcontrol-logo.svg` at 256 px.
+/// The mark alone: the orange gain arc and white T without the outer
+/// badge, rendered from `assets/totalcontrol-logo.svg` at 256 px.
 const MARK_PNG: &[u8] = include_bytes!("../assets/totalcontrol-mark-256.png");
 
 /// The tray icon at the sizes panels ask for: the input-gain badge on a
@@ -69,7 +70,7 @@ fn decode(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 mod tests {
     use super::{decode, mark, rgba, MARK_PNG};
 
-    /// The packaged tile PNG is the one asset the window cannot live
+    /// The packaged app-icon PNG is the one asset the window cannot live
     /// without: a replacement in another format, or at another size,
     /// would make `window_icon()` return `None` and the window silently
     /// lose its icon.

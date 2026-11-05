@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">TotalControl icon</title>
-  <desc id="desc">A white T inside a dark input-gain knob. The orange gain arc is at maximum and is mirror-symmetrical about the vertical axis, with a gap at the bottom. Black rounded-square tile.</desc>
+  <desc id="desc">A white T inside a dark input-gain knob. The orange gain arc is at maximum and is mirror-symmetrical about the vertical axis, with a gap at the bottom. The area outside the knob is transparent.</desc>
   <defs>
     <radialGradient id="knobFace" cx="37%" cy="28%" r="82%">
       <stop offset="0" stop-color="#1b1c20"/>
@@ -9,14 +9,14 @@
       <stop offset="1" stop-color="#08090b"/>
     </radialGradient>
   </defs>
-  <rect x="32" y="32" width="960" height="960" rx="224" fill="#000000"/>
-  <rect x="34" y="34" width="956" height="956" rx="222" fill="none" stroke="#ffffff" stroke-opacity=".055" stroke-width="2"/>
-  <circle cx="512" cy="512" r="304" fill="url(#knobFace)"/>
-  <circle cx="512" cy="512" r="300" fill="none" stroke="#2b2c31" stroke-width="42"/>
-  <path d="M 299.868 724.132 A 300 300 0 1 1 724.132 724.132" fill="none" stroke="#ff9f43" stroke-width="42" stroke-linecap="round"/>
-  <circle cx="512" cy="512" r="279" fill="none" stroke="#ffffff" stroke-opacity=".035" stroke-width="1.5"/>
-  <g fill="#ffffff">
-    <rect x="350" y="326" width="324" height="92" rx="12"/>
-    <rect x="454" y="380" width="116" height="322" rx="12"/>
+  <g transform="translate(512 512) scale(1.44) translate(-512 -512)">
+    <circle cx="512" cy="512" r="304" fill="url(#knobFace)"/>
+    <circle cx="512" cy="512" r="300" fill="none" stroke="#2b2c31" stroke-width="42"/>
+    <path d="M 299.868 724.132 A 300 300 0 1 1 724.132 724.132" fill="none" stroke="#ff9f43" stroke-width="42" stroke-linecap="round"/>
+    <circle cx="512" cy="512" r="279" fill="none" stroke="#ffffff" stroke-opacity=".035" stroke-width="1.5"/>
+    <g fill="#ffffff">
+      <rect x="350" y="326" width="324" height="92" rx="12"/>
+      <rect x="454" y="380" width="116" height="322" rx="12"/>
+    </g>
   </g>
 </svg>
