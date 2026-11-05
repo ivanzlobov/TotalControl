@@ -313,7 +313,8 @@ impl UcxDump {
                     }
                 }
                 if let Some(word) = self.output(pair, side, 0x02) {
-                    let mute = word != 0;
+                    // Bit 0 is mute; bit 1 marks this pair as Main Out.
+                    let mute = word & 1 != 0;
                     if output.mute != mute {
                         out.push(format!(
                             "output {idx} mute: device {mute}, TotalControl {}",
@@ -438,6 +439,17 @@ mod tests {
         words.insert(0x13a0, 0);
         words.insert(0x13a1, 0);
 
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(diff.is_empty(), "{diff:?}");
+    }
+
+    #[test]
+    fn output_mode_bit_one_is_not_mute() {
+        let mut scene = scene();
+        scene.outputs[2].mute = false;
+        let mut words = HashMap::new();
+        // AN1's 0xNN02 is 2: Main Out, not mute.
+        words.insert(0x1202, 2);
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(diff.is_empty(), "{diff:?}");
     }
