@@ -38,6 +38,7 @@ reduced control set.
 - [15. Where TotalControl keeps its data](#15-where-totalcontrol-keeps-its-data)
 - [16. Running in the background](#16-running-in-the-background)
 - [17. Device settings at startup](#17-device-settings-at-startup)
+- [18. The UCX front knob](#18-the-ucx-front-knob)
 - [Appendix A — Device modes](#appendix-a--device-modes)
 - [Appendix B — PipeWire](#appendix-b--pipewire)
 - [Appendix C — OSC setup](#appendix-c--osc-setup)
@@ -244,9 +245,9 @@ every channel of one type shows the same panel shape:
 
 Notes:
 
-- **Gain** is the preamp gain of the four front inputs. It follows the
-  stereo link and follows the unit's physical encoder when one is turned
-  on the hardware.
+- **Gain** is the preamp gain of the four front inputs. At connect it is
+  written from the saved scene. It follows the stereo link and follows the
+  unit's physical encoder when one is turned on the hardware.
 - **Width** narrows or widens the pair: `1.00` full stereo, `0.00` mono,
   `-1.00` swapped channels.
 - **MS proc** encodes or decodes the pair as mid/side.
@@ -600,13 +601,102 @@ At connect TotalControl compares the readable device state with the saved scene
 and lets you choose, with a dialog:
 
 - **Use TotalControl settings** — write the saved scene to the device.
-- **Use device settings** — keep what the device currently reports where
-  TotalControl can read it (clock, gains, volumes, and similar).
+- **Use device settings** — keep the values TotalControl can read back. On
+  the UCX this is the output volume; input gain, the switches, references and
+  options stay with the saved scene.
 - **Always use TotalControl settings** — as above and stop asking.
 
-Note that on the UCX the hardware-held switches on the front panel (options,
-reference levels, `48V` and similar) are not read back by TotalControl, so the
-panel shows the last value set from TotalControl; the dialog never changes them.
+On the UCX the hardware-held switches (options, reference levels, `48V`,
+Inst and Level) have no readback. TotalControl writes the saved scene values
+at connect, so the panel and the unit agree; the mismatch dialog never changes
+them.
+
+## 18. The UCX front knob
+
+The UCX has one rotary encoder with push and a two-digit LED display. A green
+LED shows CHANNEL or LEVEL mode. Pushing toggles between the modes; pushing
+repeatedly jumps to `PH` for the phones volume.
+
+### Channel selection
+
+In CHANNEL mode, turning the encoder cycles through:
+
+| Display | Channel |
+|---|---|
+| `i1`–`i4` | inputs 1–4 |
+| `L1`, `L3`, `L5` | line output pairs 1/2, 3/4 and 5/6 |
+| `PH` | phones / line output 7/8 |
+| `SP` | SPDIF output |
+| `A1`, `A3`, `A5`, `A7` | ADAT output pairs 1/2 … 7/8 |
+| `SU` | setup |
+
+Press the encoder to show the selected channel's value. Turning then changes
+that value.
+
+### Input gain
+
+Inputs 1 and 2 use the microphone range, 0–65 dB, in 1 dB steps. Inputs 3
+and 4 use the instrument/line range, 0–12 dB, in 0.5 dB steps.
+
+A long press on an input enters pair-adjust mode. The left digit gets a dot
+and the encoder moves **both** channels of the pair, whether or not the pair
+is linked. For example, a gain of 26 dB shows `2.6` while both channels move,
+then returns to `26`.
+
+The device has a fixed link view: inputs `i1`–`i4` are individual, and the
+outputs appear only as pairs `L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`. The front
+knob cannot link or unlink a pair; the link state is a TotalControl setting.
+
+A linked input pair always shows both gains in the TotalControl Gain knob:
+the left gain above, the right gain below, even when they are equal. This
+mirrors the device, which always treats inputs 1–4 as unlinked. An unlinked
+input shows one value.
+
+### Output level
+
+Output levels use 1 dB steps. The range is +6 dB down to −64 dB, then mute.
+A dot after the second digit marks a negative value; `0` to `+6 dB` has no
+dot.
+
+A long press on an output enters panorama mode:
+
+| Display | Meaning |
+|---|---|
+| `CE` | centre |
+| `L.1` / `r.1` | full left / full right |
+| intermediate | balance position |
+
+The balance range is −100 to +100 in steps of 5. The display returns to the
+output fader after about one second without a change. TotalControl follows the
+balance change and shows the same position on the output's balance knob.
+
+### Dots
+
+| Dot | Meaning |
+|---|---|
+| left digit | the encoder is adjusting both channels of the pair |
+| right digit on `i3`/`i4` | half-dB step (`11.` = 11.5 dB); always present for a half-dB value, absent for a whole-dB value |
+| right digit on an output level | negative value, shown only below 0 dB |
+
+The left dot is not a decimal point. `2.6` on an input means 26 dB with both
+channels moving, not 2.6 dB. The right dot is never shown for `i1`/`i2`
+because their step is 1 dB. It is not a link marker.
+
+### Setups
+
+`SU` selects a stored setup:
+
+| Display | Meaning |
+|---|---|
+| `1`–`6` | stored mixer setups |
+| `FA` | factory preset / Total Reset |
+| `Ad` | 8-channel AD/DA converter mode, only when disconnected from USB |
+| `CC` | Class Compliant mode, only when disconnected from USB |
+
+Press and hold for about one second to load the selected entry. `i.o.` means
+loaded and `n.o.` means an empty slot. Loading a setup while connected changes
+only the front-panel parameters — input gains and output volumes — not the
+routing. `CC` activates after a power cycle.
 
 ## Appendix A — Device modes
 

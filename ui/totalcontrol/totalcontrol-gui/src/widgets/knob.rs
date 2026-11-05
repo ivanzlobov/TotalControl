@@ -442,8 +442,24 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // readout instead of a separate text element below it.  Short
             // values (gain, pan, trim) fill most of the face; longer EQ
             // frequencies step down so they still fit inside the rim.
-            let label_chars = self.label.chars().count();
-            let label_size = if label_chars <= 4 {
+            let lines: Vec<&str> = self.label.split('\n').collect();
+            let label_chars = lines
+                .iter()
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0);
+            let label_size = if lines.len() > 1 {
+                // Two gain values stacked in one knob face: keep the single
+                // value size for short numbers, but leave room for both
+                // lines and the rim.
+                if label_chars <= 4 {
+                    16.0
+                } else if label_chars <= 6 {
+                    13.0
+                } else {
+                    11.0
+                }
+            } else if label_chars <= 4 {
                 15.0
             } else if label_chars <= 6 {
                 11.0

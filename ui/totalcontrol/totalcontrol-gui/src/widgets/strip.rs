@@ -244,6 +244,9 @@ pub struct StripParams<'a> {
     pub has_gain: bool,
     /// Raw hardware gain units, not dB — see `Message::Gain`.
     pub gain: u32,
+    /// Right-side gain of a linked input pair, when it differs from the left.
+    /// The Gain knob shows both values, left above right.
+    pub gain_right: Option<u32>,
     pub gain_max: u32,
     /// Inputs 3/4 use 0.5 dB units; display `gain / 2.0` dB.
     pub gain_half: bool,

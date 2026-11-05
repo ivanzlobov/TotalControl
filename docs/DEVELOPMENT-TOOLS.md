@@ -136,6 +136,9 @@ All development switches use the `TOTALCONTROL_` prefix:
 | `scripts/uc-latency-stress.py` | UC latency stress run |
 | `scripts/ffuc-48k-gate.sh` | 48 kHz transport gate |
 | `scripts/mixer-demo.sh` | Legacy mixer demonstration |
+| `ucx-state-watch` example | Print changed UCX state words |
+| `ucx-dump-diff` example | Request the full dump, change one control, print the changed words |
+| `ucx-dump-compare` example | Request the full dump and compare it with a saved scene |
 
 Protocol captures and measurements are evidence, not specifications. Record
 the device model, transport, firmware and rate with every capture.

@@ -1981,7 +1981,7 @@ pub enum Message {
     RmeToggle(crate::osc_rme::RmeToggle),
     /// `/1/mastervolume`: the Main Out pair fader.
     RmeMasterVolume(f32),
-    /// `/2/gainRight`: the right side of a split input pair.
+    /// `/2/gainRight`: the right side of an input pair.
     RmeGainRight(usize, u32),
     /// `/1/select/1/N`: ad-hoc fader-group selection.
     RmeSelect(ChannelId, bool),
@@ -5927,6 +5927,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.connected = state.device.is_connected();
                 if !state.connected {
                     state.show_device_panel = false;
+                    clear_meters(state);
                 }
                 // A fallback mock (no device found at launch) must keep
                 // probing for the real card.  Its `is_connected()` is true,
@@ -5955,6 +5956,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         log::info!("Device connected: {}", fresh.target().label());
                         state.prefs_dirty = true;
                         replace_device_handle(state, fresh);
+                        clear_meters(state);
                         state.device_target = Some(state.device.target());
                         state.connected = state.device.is_connected();
                         state.show_device_panel = false;
@@ -6041,10 +6043,14 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             let input_trims: Vec<f32> =
                 state.device.inputs().iter().map(|c| c.trim).collect();
-            let raw_input = state
-                .device
-                .input_peaks()
-                .unwrap_or_else(|| state.device.input_meters());
+            let raw_input = if state.connected {
+                state
+                    .device
+                    .input_peaks()
+                    .unwrap_or_else(|| state.device.input_meters())
+            } else {
+                vec![0.0; state.device.inputs().len()]
+            };
             let in_levels = trim_meter_levels(&raw_input, &input_trims);
             for (i, m) in state.input_meters.iter_mut().enumerate() {
                 m.step_elapsed(in_levels.get(i).copied().unwrap_or(0.0));
@@ -6053,7 +6059,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // playback.  Hardware-output post-fader meters come from the
             // device too when it supplies them; otherwise fall back to the
             // host-side matrix sum used by the ALSA/mock backends.
-            let (pb_levels, device_output) =
+            let (pb_levels, device_output) = if state.connected {
                 if let Some(pb) = state.device.device_playback_peaks() {
                     state.playback_tap_channels = state.device.playbacks().len();
                     (pb, state.device.device_output_peaks())
@@ -6069,7 +6075,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         tap_levels.to_vec()
                     };
                     (pb, state.device.device_output_meters())
-                };
+                }
+            } else {
+                (
+                    vec![0.0; state.device.playbacks().len()],
+                    Some(vec![0.0; state.device.outputs().len()]),
+                )
+            };
             let playback_trims: Vec<f32> =
                 state.device.playbacks().iter().map(|c| c.trim).collect();
             let pb_levels = trim_meter_levels(&pb_levels, &playback_trims);
@@ -6090,11 +6102,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             for (i, m) in state.output_meters.iter_mut().enumerate() {
                 m.step_elapsed(out_levels.get(i).copied().unwrap_or(0.0));
             }
-            let fx_levels = state
-                .device
-                .fx_peaks()
-                .or_else(|| state.device.fx_meters())
-                .unwrap_or([0.0, 0.0]);
+            let fx_levels = if state.connected {
+                state
+                    .device
+                    .fx_peaks()
+                    .or_else(|| state.device.fx_meters())
+                    .unwrap_or([0.0, 0.0])
+            } else {
+                [0.0, 0.0]
+            };
             for (i, m) in state.fx_meters.iter_mut().enumerate() {
                 m.step_elapsed(fx_levels[i]);
             }
@@ -6467,6 +6483,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::RmeGainRight(idx, gain) => {
+            // The right side is independent even while the pair is linked;
+            // `/2/gain` only moves the left side.
             if let Err(e) = state.device.set_input_gain_right(idx, gain) {
                 fail(state, "set_input_gain_right", &e);
             }
@@ -8008,6 +8026,22 @@ fn merge_host_changes(state: &mut TotalControl, before: Scene) {
 /// Swap in a newly opened device.  When the device service owns the
 /// handle, stop the old thread, clear its bus and start a service for the
 /// new unit before any caller touches the model.
+fn clear_meters(state: &mut TotalControl) {
+    for m in &mut state.input_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.playback_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.output_meters {
+        *m = MeterAnim::new();
+    }
+    for m in &mut state.fx_meters {
+        *m = MeterAnim::new();
+    }
+    state.fx_overload = [false, false];
+}
+
 fn replace_device_handle(state: &mut TotalControl, new: DeviceHandle) {
     let use_service = state.device_service.is_some() || crate::device_service::requested();
     state.device_service = None;
@@ -10222,6 +10256,7 @@ fn strip_params<'a>(
         instrument: false,
         has_gain: false,
         gain: 0,
+        gain_right: None,
         gain_max: 0,
         gain_half: false,
         has_sensitivity: false,
@@ -10280,6 +10315,13 @@ fn strip_params<'a>(
             let ch = &state.device.inputs()[i];
             let has_48v = caps.input_phantom && ch.channel_type == ChannelType::Mic;
             let linked = state.device.input_pair_linked(i / 2);
+            let gain_right = ch.gain_right.or_else(|| {
+                if linked && i % 2 == 0 {
+                    state.device.inputs().get(i + 1).and_then(|right| right.gain)
+                } else {
+                    None
+                }
+            });
             let (volume, pan) = if linked {
                 let left = i & !1;
                 let right = left + 1;
@@ -10331,6 +10373,7 @@ fn strip_params<'a>(
                 instrument: ch.instrument,
                 has_gain: ch.gain_max.is_some(),
                 gain: ch.gain.unwrap_or(0),
+                gain_right,
                 gain_max: ch.gain_max.unwrap_or(0),
                 // The driver's new UCX control is 0..24 in 0.5 dB units;
                 // the older whole-dB control was 0..18 (or 0..12).
@@ -10928,6 +10971,32 @@ fn settings_slot<'a>(
         .into()
 }
 
+/// Format one input gain for the Gain knob.  `half` means raw half-dB units.
+fn input_gain_label(raw: u32, half: bool) -> String {
+    if half {
+        format!("{:.1}", raw as f32 / 2.0)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// The Gain knob label for a linked left input.  The device always treats
+/// inputs 1-4 as unlinked, so a paired input always shows both values, even
+/// when they are currently equal.
+fn input_gain_knob_label(
+    gain: u32,
+    gain_right: Option<u32>,
+    half: bool,
+    linked_left: bool,
+) -> String {
+    let left = input_gain_label(gain, half);
+    if linked_left {
+        let right = gain_right.unwrap_or(gain);
+        return format!("{left}\n{}", input_gain_label(right, half));
+    }
+    left
+}
+
 /// One label plus one knob.  The knob is a fixed box pinned to the right
 /// edge, so gain, width, send FX and return FX sit at the same x on every
 /// channel type.
@@ -11162,6 +11231,12 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
         // Row 5 — gain.
         let gain = p.has_gain.then(|| {
             let gain_max = p.gain_max;
+            let label = input_gain_knob_label(
+                p.gain,
+                p.gain_right,
+                p.gain_half,
+                p.stereo_linked && idx % 2 == 0,
+            );
             settings_knob_row(
                 column![
                     text("gain")
@@ -11176,13 +11251,11 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 knob(Knob {
                     value: p.gain as f32,
                     range: (0.0, gain_max as f32),
-                    // Gain is tracked in dB (0-65 Mic / 0-18 Instr),
-                    // 1 dB steps, like TotalMix.
-                    label: if p.gain_half {
-                        format!("{:.1}", p.gain as f32 / 2.0)
-                    } else {
-                        p.gain.to_string()
-                    },
+                    // Gain is tracked in raw device units (whole dB on
+                    // inputs 1/2, half-dB units on 3/4).  A linked pair with
+                    // different left/right gains shows both values, left
+                    // above right; equal values collapse to one number.
+                    label,
                     arc_from_center: false,
                     level_arc_color: Some(theme::PHANTOM),
                     interactive: true,
@@ -15004,6 +15077,7 @@ mod tests {
         any_channel_muted, any_channel_soloed, apply_pending_resize,
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
+        input_gain_knob_label,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
@@ -17436,6 +17510,14 @@ mod tests {
         assert!(state.selected.contains(&a) && state.selected.contains(&b));
     }
 
+    #[test]
+    fn linked_gain_knob_always_shows_both_values() {
+        assert_eq!(input_gain_knob_label(40, None, false, true), "40\n40");
+        assert_eq!(input_gain_knob_label(40, Some(40), false, true), "40\n40");
+        assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
+        assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
+        assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");
+    }
 
 }
 

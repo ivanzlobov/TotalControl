@@ -240,7 +240,9 @@ Runtime monitoring state, such as the active Talkback press or a cue selection,
 is not part of the mixer scene.
 
 Startup sync compares the saved scene with the device where the backend can
-read state back. Backends without readback apply the saved scene instead.
+read state back.  Groups without readback are written from the saved scene.
+The UCX reports input gain only after an encoder move, so the saved scene is
+the connect value for gain and the live state word updates it afterwards.
 
 ## 10. Driver and latency architecture
 

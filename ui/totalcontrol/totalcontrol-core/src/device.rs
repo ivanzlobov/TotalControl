@@ -531,14 +531,12 @@ pub trait RmeDevice {
         Ok(())
     }
 
-    /// Same idea as [`Self::set_input_phantom`], for preamp gain.
+    /// Set the left/main preamp gain.  A linked pair keeps the right side
+    /// independent: the left value is the linked control and the right
+    /// value is retained.  Use [`Self::set_input_gain_right`] to change
+    /// the right side.
     fn set_input_gain(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
-        self.set_gain(idx, gain)?;
-        let pair = idx / 2;
-        if self.input_pair_linked(pair) {
-            self.set_gain(idx ^ 1, gain)?;
-        }
-        Ok(())
+        self.set_gain(idx, gain)
     }
 
     /// Set the three-value input Level (`-10 dBV`, `+4 dBu`, `LoGain`).
@@ -1163,9 +1161,9 @@ pub trait RmeDevice {
         ))
     }
 
-    /// Right-side preamp gain of a split input pair (`NN07 + 0x100`).
-    /// The right side is independent of [`Self::set_input_gain`] while the
-    /// pair is split.
+    /// Right-side preamp gain of an input pair (`NN07 + 0x100`).  The
+    /// right side stays independent of [`Self::set_input_gain`] even while
+    /// the pair is linked.
     fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
         let _ = (idx, gain);
         Err(Error::InvalidChannel(

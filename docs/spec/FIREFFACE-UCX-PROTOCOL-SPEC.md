@@ -24,6 +24,7 @@ Units and ranges are the values used by the backend. A register value is
 - [14. State and scenes](#14-state-and-scenes)
 - [15. Capabilities](#15-capabilities)
 - [16. Code map](#16-code-map)
+- [Appendix A — Requested state dump](#appendix-a--requested-state-dump)
 
 ## 1. Device model
 
@@ -38,10 +39,79 @@ Units and ranges are the values used by the backend. A register value is
 | ALSA PCM channels | 18 at every rate |
 | Default transport | isochronous interface 0 |
 | Alternate transport | interrupt interface 5 |
-| Front panel | one rotary encoder: selects an output channel and sets its volume |
+| Front panel | one rotary encoder with push: selects an input or output and sets its gain or volume |
 
 The serial string is the stable unit identity. The ALSA card index changes
 across reconnects and personality changes.
+
+### 1.1 Front panel
+
+The front-panel control is one rotary encoder with push.  A green LED shows
+CHANNEL or LEVEL mode.  Pushing toggles between them; pushing repeatedly jumps
+to `PH`.
+
+CHANNEL mode cycles through:
+
+| Display | Channel |
+|---|---|
+| `i1`–`i4` | inputs 1–4 |
+| `L1`, `L3`, `L5` | line output pairs 1/2, 3/4, 5/6 |
+| `PH` | phones / line output 7/8 |
+| `SP` | SPDIF output |
+| `A1`, `A3`, `A5`, `A7` | ADAT output pairs 1/2 … 7/8 |
+| `SU` | load setup |
+
+LEVEL mode sets:
+
+| Channel | Range | Step |
+|---|---|---|
+| `i1`, `i2` | 0–65 dB | 1 dB |
+| `i3`, `i4` | 0–12 dB | 0.5 dB |
+| `L1`, `L3`, `L5`, `PH`, `SP`, `A1`, `A3`, `A5`, `A7` | +6 to −64 dB; below 0 dB a dot after the second digit; the next step is mute | 1 dB |
+
+Input 1/2 gain is analog; input 3/4 gain is digital; output level is digital
+in the mixer.
+
+The display has two digits, each with a dot to its right.  The left dot marks
+pair-adjust mode: the encoder is moving both channels of the pair.  The right
+dot is a value marker, not a link marker:
+
+| Context | Right dot |
+|---|---|
+| `i1`, `i2` gain | never shown; the step is whole dB |
+| `i3`, `i4` gain | marks a half-dB step, e.g. `11.` is 11.5 dB in the GUI; always present for a half-dB value, absent for a whole-dB value |
+| output level | shown below 0 dB and never at 0…+6 dB; marks a negative value |
+
+The device cannot link or unlink channels.  Its fixed view is visible in the
+channel cycle: inputs `i1`–`i4` are individual, and outputs appear as pairs
+`L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`.  The link state is a host setting.
+
+A long press on an input enters pair-adjust mode: the left dot appears and
+the knob moves both channels of the selected pair, even when the device or
+the GUI treats the pair as unlinked.  The display returns to the normal value
+after about one second.
+
+A long press on an output enters panorama mode:
+
+| Display | Meaning |
+|---|---|
+| `CE` | centre |
+| `L.1` / `r.1` | full left / full right (the guide names them `LL` / `rr`) |
+| `L9.` … `L1`, `CE`, `R1` … `R9.` | intermediate balance positions |
+
+The balance range is −100 … +100 in steps of 5; the displayed value is the
+balance value divided by 10.  The display returns to the output fader after
+about one second without a change.
+
+`SU` loads one of six user setups, `FA` the factory preset, `Ad` the 8-channel
+AD/DA converter mode, and `CC` Class Compliant mode when the unit is not
+connected to a computer.  `i.o.` means loaded; `n.o.` means an empty slot.
+Loading a setup while online changes only the front-panel parameters (input
+gains and output volumes), not routing.
+
+Front-panel gain, output-volume and output-balance changes are reported to the
+host as `NN07`, `NN00` and `NN01`.  GUI link/stereo changes use the
+stereo-mode state words.
 
 ## 2. USB transport
 
@@ -163,35 +233,47 @@ stream live state changes.
 | `0x1204`, `0x1304` | output stereo mode |
 | `0x0007`, `0x0107`, `0x0207`, `0x0307` | input gain 1–4, 0.1 dB |
 | `0x1200..0x2300`, offset 0 | hardware-output volume, signed 0.1 dB |
+| `0x1200..0x2300`, offset 1 | hardware-output balance, signed |
 | `0x12a0`, `0x22a0` | selected-submix fader record |
 
-Input gains are reported when the physical encoder moves. Output-volume state
-is mapped to the Phones-first output order. The encoder reports the `NN00` of
-the output selected on the unit's display; `PH` emits `0x1800` and `0x1900`.
+Input gains are reported when the physical encoder moves. The word is not
+emitted at connect, so it is not a startup readback: TotalControl writes the
+saved scene gain at connect and follows `NN07` afterwards. Output-volume and
+balance state is mapped to the Phones-first output order. The encoder reports
+the `NN00` or `NN01` of the output selected on the unit's display; `PH` emits
+`0x1800`/`0x1801` and `0x1900`/`0x1901`. A balance word updates both sides of
+a linked output pair.
 
-Front-panel 48 V, Inst and Level changes write `NN08`/`NN09` on both sides of
-a linked pair and emit no state word.
+Front-panel gain and output-volume changes are reported as `NN07` and
+`NN00`. 48 V, Inst and Level are host-written; the unit stores them but emits
+no state word.
 
-The state stream is sparse. It is not a full scene dump and it does not echo
-every writable register. It carries no observed word for 48 V, Inst, Level,
-reference level, the options word, EQ, dynamics or FX. The full mixer scene is
-written by the host at connect; gain, output volume, DIM, Talkback and MS
-state are the live controls read back from this stream.
+While a session is running the state stream is sparse and carries only changed
+values.  The full state dump is requested on demand: after the state endpoint
+is active, write `0x3f99 = 0x0812`.  The unit then emits a one-shot dump
+covering the 18 input blocks, the 18 output blocks, the output matrix-send
+block and the global FX/monitor words.  The input blocks include 48 V, Inst,
+Level and AutoSet; the output blocks include references and balance.  The
+detailed field map is maintained in `docs/work/DEVICE-SETUPS.md`.
+
+The saved scene is still the host default at connect; the requested dump makes
+a real comparison possible.
 
 ### 3.3 State readback
 
 | State | Source |
 |---|---|
-| Input gain 1–4 | `0xNN07` state word |
-| Output volume | `0xNN00` state word |
+| Input gain 1–4 | saved scene at connect; `0xNN07` after an encoder move |
+| Output volume | `0xNN00` state word; saved scene at connect |
+| Output balance | `0xNN01` state word |
 | DIM | `0x3d03` state word |
 | Talkback | `0x3f9e` bit 0 |
 | Mono Main Out | `0x3f9e` bit 1 |
 | Stereo mode | `0xNN02` / `0xNN04` state word |
 | Fader records | `0x12a0` family |
-| 48 V, Inst, Level, reference level | host scene only |
-| Options word | unit-owned |
-| EQ, dynamics, FX | host scene only |
+| 48 V, Inst, Level, reference level | saved scene, written at connect |
+| Options word | saved scene, written at connect |
+| EQ, dynamics, FX | saved scene, written at connect |
 
 ## 4. Register model
 
@@ -744,8 +826,8 @@ Request `0x10`, index 1487, carries the unit's options as one full word:
 
 Every option change writes the whole word, including the current clock source
 in bits 1–2. Bit 10 is not an index of its own. No options-word readback is
-exposed: request `0x10` in returns a status word. The device-owned values are
-kept in the scene and written when they change.
+exposed: request `0x10` in returns a status word. The saved scene value is
+written at connect and after a change.
 
 ## 12. Streaming
 
@@ -856,14 +938,32 @@ A scene stores:
 - channel names and trim values.
 
 The backend writes the mixer scene at connect and after relevant rate or
-stream changes.  The options word (clock source, optical format, SPDIF
-professional, word-clock rate and termination, EQ+D for Record), the reference
-levels and the 48 V/Inst/Level switches are held by the unit: TotalControl does not
-write them at connect and has no readback for them.  The saved scene keeps the
-last value written from TotalControl for display.
+stream changes.  The preamp group (input gain and right gain, 48 V, Inst,
+Level and AutoSet), the reference levels and the options word (clock source,
+optical format, SPDIF professional, word-clock rate and termination, EQ+D for
+Record) are also written from the saved scene at connect.
 
-Input gain, front-panel output volume, DIM and MS state are read from the IF1
-state stream.  A read-back gain is not overwritten by the saved scene.
+The unit retains input gain and the main output fader across a power cycle.
+The user guide also states that the unit permanently stores its configuration
+and complete mixer state and reloads them at power-on.  That stored state is a
+standalone feature: loading a setup while online changes only the front-panel
+parameters (gains and output volumes), not routing.
+
+The host can request the full mixer snapshot with `0x3f99 = 0x0812` while the
+state endpoint is active.  The dump contains the input gain, 48 V, Inst, Level,
+AutoSet, references, balance, channel DSP and matrix-send records that the
+sparse running stream does not report.  TotalControl requests and retains that
+dump at open.
+
+The options word, clock source and sample rate are not part of the dump; they
+remain host-written from the saved scene.  Channel names and trim are host-only.
+The saved scene is still the default at connect, and the startup policy decides
+which fields the host writes and which it adopts from the dump.
+
+Front-panel output volume, DIM, MS and gain changes remain live `0x8d` words.
+DIM, Talkback, Mono Main Out and stereo mode stay device-owned where they are
+reported.  EQ, dynamics, FX, matrix and fader records are in the requested dump
+and are also written by the host at connect.
 
 Scenes are keyed by unit serial. Each unit keeps its own scene file.
 
@@ -911,3 +1011,128 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Channel DSP registers | `ui/totalcontrol/totalcontrol-core/src/fireface/settings.rs` |
 | Channel topology | `ui/totalcontrol/totalcontrol-core/src/profiles/ucx.rs` |
 | Capability guards | `ui/totalcontrol/totalcontrol-core/src/fireface/models.rs` |
+
+## Appendix A — Requested state dump
+
+After the state endpoint is active, write `0x3f99 = 0x0812` to request a
+one-shot state dump.  The UCX returns about 1,636 unique words on `0x8d`,
+covering the hardware inputs, hardware outputs, their matrix-send records and
+the global FX/monitor words.  The dump is not a live stream; it is a connect
+snapshot.
+
+The table is the observed layout.  “Unknown” means the address is present but
+its meaning has not been confirmed.
+
+### Input channels
+
+Input `n` (`0..17`) uses base `n << 8`.
+
+| Offset | Meaning | Encoding |
+|---|---|---|
+| `0x0000` | mute | 0/1 |
+| `0x0001` | FX send | signed 0.1 dB; `0xfd76` = −65.0 dB, `0xff9c` = −10.0 dB |
+| `0x0002` | stereo | 0 mono / 1 stereo |
+| `0x0003` | record enable | 0/1 |
+| `0x0004` | unknown | 0 observed; not the remote state |
+| `0x0005` | MS processing | 0/1 |
+| `0x0006` | phase, left | 0/1 |
+| `0x0007` | preamp gain | 0.1 dB; `0x012c` = 30.0 dB |
+| `0x0008` | 48 V (inputs 1/2) / Level (inputs 3/4) | 0/1; Level 0 −10 dBV, 1 +4 dBu, 2 LoGain |
+| `0x0009` | Inst | 0/1 |
+| `0x000a` | AutoSet | 0/1 |
+| `0x0020` | low cut enable | 0/1 |
+| `0x0021` | low cut frequency | Hz |
+| `0x0022` | low cut slope | code |
+| `0x0040` | EQ enable | 0/1 |
+| `0x0041` | band 1 type | code |
+| `0x0042` | band 1 gain | signed 0.1 dB; `0x003c` = +6.0 dB |
+| `0x0043` | band 1 frequency | Hz |
+| `0x0044` | band 1 Q | code |
+| `0x0045` | band 2 gain | signed 0.1 dB |
+| `0x0046` | band 2 frequency | Hz |
+| `0x0047` | band 2 Q | code |
+| `0x0048` | band 3 type | code |
+| `0x0049` | band 3 gain | signed 0.1 dB |
+| `0x004a` | band 3 frequency | Hz |
+| `0x004b` | band 3 Q | code |
+| `0x0060` | dynamics enable | 0/1 |
+| `0x0061` | dynamics gain | signed 0.1 dB |
+| `0x0062` | dynamics attack | ms |
+| `0x0063` | dynamics release | ms |
+| `0x0064` | compressor threshold | signed 0.1 dB |
+| `0x0065` | compressor ratio | code |
+| `0x0066` | expander threshold | signed 0.1 dB |
+| `0x0067` | expander ratio | code |
+| `0x0080` | AutoLevel enable | 0/1 |
+| `0x0081` | AutoLevel max gain | 0.1 dB |
+| `0x0082` | AutoLevel headroom | 0.1 dB |
+| `0x0083` | AutoLevel rise time | 0.1 s |
+
+Input mute also clears the input's matrix sends in the dump.  Solo has no
+single flag in the dump; it is implemented by zeroing the other sends.
+
+### Output channels
+
+The hardware-output blocks are:
+
+| Block | Output pair |
+|---|---|
+| `0x12`/`0x13` | AN 1/2 |
+| `0x14`/`0x15` | AN 3/4 |
+| `0x16`/`0x17` | AN 5/6 |
+| `0x18`/`0x19` | Phones 7/8 |
+| `0x1a`/`0x1b` | SPDIF |
+| `0x1c`/`0x1d` | ADAT 1/2 |
+| `0x1e`/`0x1f` | ADAT 3/4 |
+| `0x20`/`0x21` | ADAT 5/6 |
+| `0x22`/`0x23` | ADAT 7/8 |
+
+Each channel uses the same offset block:
+
+| Offset | Meaning | Encoding |
+|---|---|---|
+| `0x0000` | volume | signed 0.1 dB; `0xff86` = −12.2 dB |
+| `0x0001` | balance | signed −100..+100 |
+| `0x0002` | mute | 0/1 |
+| `0x0003` | FX return | signed 0.1 dB |
+| `0x0004` | stereo | 0/1 |
+| `0x0005`, `0x0006` | unknown | 0 observed |
+| `0x0007` | phase, left | 0/1 |
+| `0x0008` | reference/Level code | code |
+| `0x0020` | low cut enable | 0/1 |
+| `0x0021` | low cut frequency | Hz |
+| `0x0022` | low cut slope | code |
+| `0x0040` | EQ enable | 0/1 |
+| `0x0041`..`0x004b` | EQ bands | as inputs |
+| `0x0060`..`0x0067` | dynamics | as inputs |
+| `0x0080`..`0x0083` | AutoLevel | as inputs |
+
+### Matrix sends
+
+Each output block carries 18 input-send records.  A record is two words:
+level and pan.
+
+| Input index | Record address |
+|---|---|
+| 0–7 | `0x?a0 + 2n` |
+| 8–9 | `0x?c0 + 2(n−8)` |
+| 10–17 | `0x?e0 + 2(n−10)` |
+
+Examples: input 0 to output 0 at `0x18a0`/`0x18a1`; input 2 to output 0 at
+`0x18a4`/`0x18a5`.  The level word is signed tenths dB shifted left by 4
+(`0xfc40` = −6.0 dB); the companion word is the signed pan value.
+
+Software-playback sends were not observed to change any dump word; their
+state is not in this snapshot.
+
+### Globals
+
+| Address | Meaning |
+|---|---|
+| `0x3c00` | Reverb enable |
+| `0x3c01`..`0x3c0d` | Reverb parameters |
+| `0x3c20` | Echo enable |
+| `0x3c21`..`0x3c26` | Echo parameters |
+| `0x3d00`..`0x3d46` | monitor, control-room and global state |
+
+`0x3f00`..`0x3f50` are heartbeat/status words, not state.

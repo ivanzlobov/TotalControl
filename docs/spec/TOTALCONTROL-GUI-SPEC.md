@@ -284,14 +284,14 @@ reference group; `talkback` is omitted on Control Room channels.
 | Channel | Contents, top to bottom |
 |---|---|
 | Input 1/2 | Stereo, space, 48V, AutoSet, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
-| Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, AutoSet, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
+| Input 3/4 | Stereo, `ref.`, Inst + reference dropdown, Gain, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 5–8 | Stereo, `ref.`, reference dropdown, two empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Inputs 9+ | Stereo, four empty rows, Width, Send FX, MS Proc, Ø L / R Ø |
 | Software playback | Stereo, Width, Send FX, MS Proc, phase slot |
 | Hardware output | Stereo, `ref.`, reference dropdown, Return FX, Ø L / R Ø, No Trim, space, Talkback, Loopback |
 
-- 48 V is available on inputs 1/2; AutoSet on inputs 1–4; Inst and a gain
-  knob on 3/4; a reference dropdown on 3–8; none from channel 9 on.
+- 48 V and AutoSet are available on inputs 1/2; Inst and a gain knob on 3/4;
+  a reference dropdown on 3–8; none from channel 9 on.
 - The reference levels for 5–8 move together: any change to one applies to
   all four. Inputs 3 and 4 keep separate levels unless linked.
 - Width is a pair control, -1.00 … 1.00: 1.00 full stereo, 0.00 mono and
@@ -351,15 +351,21 @@ buttons use green text and a green outline.
 Gain is a knob in the Settings panel for the four front inputs. Inputs 1/2
 use the microphone range; inputs 3/4 use the instrument/line range, in 0.5 dB
 steps on the UCX. The knob writes the per-channel preamp gain and follows the
-stereo link. On the UCX it also follows physical encoder moves, which the unit
-reports in the IF1 state stream.
+stereo link. At connect the saved scene gain is written; a state word that
+arrives before the scene is applied does not override it. On the UCX the knob
+then follows physical encoder moves, which the unit reports in the IF1 state
+stream.
+
+A linked input pair always shows both values, left above right, even when
+they are equal. This mirrors the device, which always treats inputs 1–4 as
+unlinked. An unlinked input shows one value.
 
 ### 3.3 Device sheet
 
 The device card at the top of the sidebar (or the gear on the folded rail)
-opens the device sheet. It starts with the group the unit itself owns, read at
-connect where the unit has readback and otherwise kept in the saved scene.
-A value is written only when it changes there.
+opens the device sheet. It starts with the group the unit itself owns. Where
+the unit has no readback, the saved scene value is written at connect and the
+sheet shows that value. A value is written when it changes there.
 
 | Row | UC | UCX |
 |---|---|---|
@@ -386,9 +392,9 @@ and Word. Host-side modes (`MS Proc`, `AN 1>2`, `Input Link`) appear in the
 GLOBAL grid, apart from the device-owned rows.
 
 On the UCX the options word, the reference levels and the 48 V/Inst/Level
-switches are held by the unit: they are not read back and not written at
-connect. The sheet shows the last value written from TotalControl. Input gain is
-read back from the unit and the Gain knob follows it.
+switches have no readback. The saved scene value is written at connect and the
+sheet shows that value. Input gain is also written from the saved scene at
+connect; the Gain knob follows later encoder moves.
 
 The UC reference rows are the unit's global options word. The UCX handles
 input and output sensitivity per channel instead, in per-channel registers

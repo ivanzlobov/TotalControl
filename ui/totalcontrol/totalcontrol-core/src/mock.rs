@@ -1293,11 +1293,11 @@ mod tests {
     }
 
     #[test]
-    fn test_linked_input_pair_phantom_pad_and_gain_move_both_channels() {
-        // Previously missing: set_phantom/set_pad/set_gain had no
-        // pair-aware wrapper at all (unlike volume/mute/solo above),
-        // so toggling 48V on a linked strip only ever touched its own
-        // channel — found 2026-09-07.
+    fn test_linked_input_pair_phantom_and_pad_move_both_channels() {
+        // Previously missing: set_phantom/set_pad had no pair-aware
+        // wrapper at all (unlike volume/mute/solo above), so toggling
+        // 48V on a linked strip only ever touched its own channel —
+        // found 2026-09-07.
         let mut dev = MockBabyfacePro::open().unwrap();
         assert!(dev.input_pair_linked(0));
         // Mock's own demo default starts both mics' phantom on (see
@@ -1314,10 +1314,21 @@ mod tests {
         dev.set_input_pad(0, true).unwrap();
         assert!(dev.inputs()[0].pad);
         assert!(dev.inputs()[1].pad, "pad must mirror across a linked pair");
+    }
 
+    #[test]
+    fn test_linked_input_gain_keeps_the_right_side_independent() {
+        let mut dev = MockBabyfacePro::open().unwrap();
+        assert!(dev.input_pair_linked(0));
         dev.set_input_gain(0, 20).unwrap();
+        dev.set_input_gain_right(0, 35).unwrap();
         assert_eq!(dev.inputs()[0].gain, Some(20));
-        assert_eq!(dev.inputs()[1].gain, Some(20), "gain must mirror across a linked pair");
+        assert_eq!(dev.inputs()[1].gain, Some(0), "linked gain writes the left side only");
+        assert_eq!(dev.inputs()[0].gain_right, Some(35));
+        dev.set_input_gain(0, 30).unwrap();
+        assert_eq!(dev.inputs()[0].gain, Some(30));
+        assert_eq!(dev.inputs()[1].gain, Some(0), "left gain does not touch the right side");
+        assert_eq!(dev.inputs()[0].gain_right, Some(35), "left gain keeps the right value");
     }
 
     #[test]
