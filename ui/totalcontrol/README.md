@@ -10,7 +10,7 @@
 
 <br>
 
-<img src="docs/screenshots/mixer.png" width="760" alt="TotalControl Mixer view: hardware inputs, software playback and hardware outputs">
+<img src="docs/screenshots/mixer-ucx-2026-11.png" width="760" alt="TotalControl Mixer view: hardware inputs, software playback and hardware outputs">
 
 </div>
 
