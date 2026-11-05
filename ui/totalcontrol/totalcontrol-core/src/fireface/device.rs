@@ -585,6 +585,13 @@ pub struct Fireface {
     device_output_volume: HashMap<usize, f32>,
     /// Raw words from the last requested UCX state dump.
     state_words: HashMap<u16, u16>,
+    /// Pre-connect snapshot once the startup dump completes.
+    pre_connect_words: HashMap<u16, u16>,
+    startup_dump_pending: bool,
+    startup_dump_started: Instant,
+    startup_dump_timeout: Duration,
+    /// Load a scene into the model without issuing device writes.
+    dry_run: bool,
     /// UCX IF1 heartbeat sequence and next refresh time.  Without this the
     /// unit does not stream live state deltas such as the Phones knob.
     ucx_heartbeat: u16,
@@ -1069,6 +1076,11 @@ impl Fireface {
             device_input_gain: HashMap::new(),
             device_output_volume: HashMap::new(),
             state_words: HashMap::new(),
+            pre_connect_words: HashMap::new(),
+            startup_dump_pending: false,
+            startup_dump_started: Instant::now(),
+            startup_dump_timeout: Duration::from_millis(2500),
+            dry_run: false,
             ucx_heartbeat: 0,
             ucx_heartbeat_due: Instant::now(),
             ignore_output_until: None,
@@ -1080,15 +1092,7 @@ impl Fireface {
         if async_writer {
             dev.async_writer = AsyncWriter::new(Arc::clone(&dev.transport)).map(Arc::new);
         }
-        if model == Model::Ucx && async_writer {
-            match dev.capture_state_dump(Duration::from_millis(2500)) {
-                Ok(()) => log::info!(
-                    "captured UCX state dump: {} unique words",
-                    dev.state_words.len()
-                ),
-                Err(e) => log::warn!("UCX state dump request failed: {e:?}"),
-            }
-        }
+
         if model == Model::Uc {
             dev.read_uc_levels();
             dev.read_uc_settings();
@@ -1135,6 +1139,9 @@ impl Fireface {
     }
 
     fn vendor_out(&self, req: u8, value: u16, index: u16) -> Result<(), Error> {
+        if self.dry_run {
+            return Ok(());
+        }
         // A vendor request cannot be reordered behind queued IF1 words.
         self.flush_write_batch()?;
         self.transport()
@@ -1155,6 +1162,9 @@ impl Fireface {
     }
 
     fn write_word(&self, addr: u16, value: u16) -> Result<(), Error> {
+        if self.dry_run {
+            return Ok(());
+        }
         if self.model == Model::Ucx {
             if self.queue_words(&[(addr, value)]) {
                 return Ok(());
@@ -1169,6 +1179,9 @@ impl Fireface {
     }
 
     fn write_words(&self, words: &[(u16, u16)]) -> Result<(), Error> {
+        if self.dry_run {
+            return Ok(());
+        }
         if self.model == Model::Ucx {
             if self.queue_words(words) {
                 return Ok(());
@@ -1256,7 +1269,7 @@ impl Fireface {
     /// Start coalescing UCX IF1 words.  A no-op for the UC, whose writes
     /// are vendor requests rather than register bursts.
     fn begin_write_batch(&self) -> Option<WriteBatchGuard> {
-        if self.model != Model::Ucx {
+        if self.dry_run || self.model != Model::Ucx {
             return None;
         }
         let mut slot = self.write_batch.lock().unwrap();
@@ -1276,6 +1289,9 @@ impl Fireface {
 
     /// Send everything queued so far but keep the batch open.
     fn flush_write_batch(&self) -> Result<(), Error> {
+        if self.dry_run {
+            return Ok(());
+        }
         let words = {
             let mut slot = self.write_batch.lock().unwrap();
             match slot.as_mut() {
@@ -2151,7 +2167,73 @@ impl Fireface {
     /// send this dump spontaneously on Linux: the host must write
     /// `0x3f99 = 0x0812` after the state endpoint is running.  The dump is
     /// then buffered by the kernel and arrives as ordinary `0x8d` words.
+    /// Request the pre-connect dump and return immediately.  Normal event
+    /// polling drains it; `startup_dump_complete` reports when the snapshot
+    /// is ready.
+    pub fn begin_startup_state_dump(&mut self, timeout: Duration) -> Result<(), Error> {
+        self.state_words.clear();
+        self.pre_connect_words.clear();
+        self.startup_dump_pending = true;
+        self.startup_dump_started = Instant::now();
+        self.startup_dump_timeout = timeout;
+        self.write_word(0x3f99, 0x0812)?;
+        self.flush_write_batch()
+    }
+
+    pub fn startup_dump_pending(&self) -> bool {
+        self.startup_dump_pending
+    }
+
+    pub fn startup_dump_complete(&self) -> bool {
+        !self.startup_dump_pending
+    }
+
+    pub fn pre_connect_words(&self) -> &HashMap<u16, u16> {
+        &self.pre_connect_words
+    }
+
+    fn finish_startup_dump(&mut self) {
+        if !self.startup_dump_pending {
+            return;
+        }
+        self.startup_dump_pending = false;
+        self.pre_connect_words = self.state_words.clone();
+        log::info!(
+            "captured UCX startup dump: {} words in {:?}",
+            self.pre_connect_words.len(),
+            self.startup_dump_started.elapsed()
+        );
+    }
+
+    fn record_ucx_readable_word(&mut self, addr: u16, value: u16) {
+        if let Some(idx) = ucx::input_gain_index(addr) {
+            let raw = value as u32;
+            let (gain, max) = if idx < 2 {
+                ((raw + 5) / 10, 65)
+            } else {
+                ((raw + 2) / 5, 24)
+            };
+            self.device_input_gain.insert(idx, gain.min(max));
+            return;
+        }
+        if let Some(idx) = ucx::output_index_from_state(addr) {
+            let volume = ucx::tenths_to_linear(value);
+            self.device_output_volume.insert(idx, volume);
+        }
+    }
+
+    /// Load a scene into the model without writing any device words.  Used
+    /// while the pre-connect dump is in flight, so the window can show the
+    /// saved scene without contaminating the dump.
+    pub fn load_scene_model(&mut self, scene: &Scene) -> Result<(), Error> {
+        self.dry_run = true;
+        let result = self.apply_scene(scene);
+        self.dry_run = false;
+        result
+    }
+
     pub fn capture_state_dump(&mut self, timeout: Duration) -> Result<(), Error> {
+        self.startup_dump_pending = false;
         self.state_words.clear();
         self.write_word(0x3f99, 0x0812)?;
         self.flush_write_batch()?;
@@ -2835,6 +2917,15 @@ impl Fireface {
 
     fn apply_ucx_state_word(&mut self, addr: u16, value: u16) {
         self.state_words.insert(addr, value);
+        if self.startup_dump_pending {
+            // Pre-connect snapshot only.  Do not let late dump words
+            // overwrite the scene loaded into the model.
+            self.record_ucx_readable_word(addr, value);
+            if addr == 0x3d46 && self.state_words.len() > 1500 {
+                self.finish_startup_dump();
+            }
+            return;
+        }
         if let Some(idx) = ucx::input_gain_index(addr) {
             // The unit reports physical gain moves here in 0.1 dB units.
             // Inputs 1/2 use whole dB; inputs 3/4 use 0.5 dB steps.
@@ -5480,16 +5571,30 @@ impl RmeDevice for Fireface {
             None => Ok(()),
         };
         if result.is_ok() {
-            log::info!(
-                "applied the {} mixer scene in {:?}",
-                self.model.name(),
-                started.elapsed()
-            );
+            if self.dry_run {
+                log::info!(
+                    "loaded the {} mixer scene model in {:?}",
+                    self.model.name(),
+                    started.elapsed()
+                );
+            } else {
+                log::info!(
+                    "applied the {} mixer scene in {:?}",
+                    self.model.name(),
+                    started.elapsed()
+                );
+            }
         }
         result
     }
 
     fn poll_events(&mut self) -> Result<(), Error> {
+        if self.startup_dump_pending
+            && self.startup_dump_started.elapsed() > self.startup_dump_timeout
+        {
+            log::warn!("UCX startup state dump timed out");
+            self.finish_startup_dump();
+        }
         if self.model == Model::Ucx && Instant::now() >= self.ucx_heartbeat_due {
             let sequence = self.ucx_heartbeat;
             if let Err(e) = self.write_word(ucx::global::HEARTBEAT, sequence) {
@@ -6285,6 +6390,38 @@ mod tests {
         assert!(words.contains(&(0x1303, 0)));
         assert!(dev.inputs()[1].eq.unwrap().enabled);
         assert_eq!(dev.outputs()[2].fx_return_db, 0.0);
+    }
+
+    #[test]
+    fn ucx_load_scene_model_is_write_free() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.outputs[0].volume = 0.25;
+        writes.lock().unwrap().clear();
+        dev.load_scene_model(&scene).unwrap();
+        assert!(
+            written_words(&writes).is_empty(),
+            "dry-run scene load wrote device words"
+        );
+        assert!((dev.outputs()[0].volume - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_startup_dump_capture_does_not_overwrite_the_model() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let before = dev.inputs()[0].gain;
+        for addr in 0x8000..0x8000 + 1500 {
+            dev.state_words.insert(addr, 0);
+        }
+        dev.startup_dump_pending = true;
+        dev.startup_dump_started = Instant::now();
+        dev.apply_ucx_state_word(0x0007, 300);
+        assert_eq!(dev.inputs()[0].gain, before);
+        assert_eq!(dev.device_input_gain.get(&0), Some(&30));
+        dev.apply_ucx_state_word(0x3d46, 0);
+        assert!(!dev.startup_dump_pending);
+        assert!(dev.pre_connect_words.contains_key(&0x3d46));
+        assert_eq!(dev.inputs()[0].gain, before);
     }
 
     #[test]

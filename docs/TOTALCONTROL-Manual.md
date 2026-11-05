@@ -597,23 +597,27 @@ audio stack, building from source and project status.
 
 ## 17. Device settings at startup
 
-At connect TotalControl compares the readable device state with the saved scene
-and lets you choose, with a dialog:
+At connect TotalControl compares the device state with the saved scene and
+lets you choose, with a dialog:
 
 - **Use TotalControl settings** — write the saved scene to the device.
-- **Use device settings** — keep the values TotalControl can read back. On
-  the UCX this is the output volume; input gain, the switches, references and
-  options stay with the saved scene.
+- **Use device settings** — adopt the decoded device values in TotalControl
+  and keep them on the unit.
 - **Always use TotalControl settings** — as above and stop asking.
 
-The dialog lists every difference. When more than six are shown, the list gets
-its own scrollbar and a fixed height so the dialog does not grow beyond the
-window.
+On the UCX the window appears first. TotalControl then requests the pre-connect
+state dump and compares input and output levels, mute, EQ, dynamics, FX
+returns and matrix sends. The dialog appears when the comparison is ready, so
+the startup is not held back by the dump.
 
-On the UCX the hardware-held switches (options, reference levels, `48V`,
-Inst and Level) have no readback. TotalControl writes the saved scene values
-at connect, so the panel and the unit agree; the mismatch dialog never changes
-them.
+The dialog lists every decoded difference. When more than six are shown, the
+list gets its own scrollbar and a fixed height so the dialog does not grow
+beyond the window.
+
+The dump does not include the options word (clock source, optical format,
+SPDIF professional, word-clock rate and termination, EQ+D for Record), channel
+names, trims or loopback. Those stay with the saved scene. On the UCX the
+`48 V`, Inst, Level and reference settings are in the dump and are compared.
 
 ## 18. The UCX front knob
 

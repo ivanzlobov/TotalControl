@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use totalcontrol_core::channel::EqBandType;
+use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
 use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel, UcxAlsa};
 use totalcontrol_core::{
@@ -1219,6 +1220,49 @@ impl DeviceHandle {
         None
     }
 
+    pub fn begin_startup_state_dump(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<(), totalcontrol_core::Error> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.begin_startup_state_dump(timeout);
+        }
+        Ok(())
+    }
+
+    pub fn startup_dump_pending(&self) -> bool {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.startup_dump_pending();
+        }
+        false
+    }
+
+    pub fn startup_dump_complete(&self) -> bool {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.startup_dump_complete();
+        }
+        true
+    }
+
+    pub fn pre_connect_words(&self) -> Option<std::collections::HashMap<u16, u16>> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return Some(d.pre_connect_words().clone());
+        }
+        None
+    }
+
+    pub fn load_scene_model(&mut self, scene: &Scene) -> Result<(), totalcontrol_core::Error> {
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.load_scene_model(scene);
+        }
+        self.apply_scene(scene)
+    }
+
     pub fn firmware(&self) -> Option<u32> {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().firmware;
@@ -2205,6 +2249,10 @@ pub struct StartupMismatch {
     pub totalcontrol_scene: Scene,
     /// The scene's input gains after the UCX half-dB migration.
     pub totalcontrol_gain: Vec<(usize, u32)>,
+    /// Full decoded UCX dump, when the mismatch came from the dump.
+    pub ucx_dump: Option<UcxDump>,
+    /// Saved scene with all decoded device values applied, for "Use device".
+    pub device_scene: Option<Scene>,
 }
 
 pub struct TotalControl {
@@ -2468,6 +2516,10 @@ pub struct TotalControl {
     pub surround_71_running: bool,
     /// RME-style startup mismatch dialog.  `None` = no prompt.
     pub startup_mismatch: Option<StartupMismatch>,
+    /// UCX startup dump still in flight; compare once it completes.
+    pub startup_compare_pending: bool,
+    /// Saved scene used for the deferred UCX comparison.
+    pub startup_compare_scene: Option<Scene>,
     /// Suppress future mismatch prompts and write the saved TotalControl scene.
     pub always_init_device: bool,
     /// Whether the device this handle was opened on is still there, as of
@@ -3021,6 +3073,8 @@ pub fn new_with_device(
         surround_51_running: false,
         surround_71_running: false,
         startup_mismatch: None,
+        startup_compare_pending: false,
+        startup_compare_scene: None,
         always_init_device: false,
         backend,
         explicit_mock: mock,
@@ -3623,6 +3677,31 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
             scene.outputs.get(4).map(|o| o.loopback),
         );
         state.host_scene = Some(scene.clone());
+        if state.device.is_ucx_model() && !state.always_init_device {
+            if let Err(e) =
+                state
+                    .device
+                    .begin_startup_state_dump(Duration::from_millis(3000))
+            {
+                log::warn!("UCX startup state dump request failed: {e:?}");
+            }
+        }
+        if state.device.is_ucx_model()
+            && state.device.startup_dump_pending()
+            && !state.always_init_device
+        {
+            // Show the saved scene immediately, but do not touch the
+            // device until the pre-connect dump has been decoded.  Writing
+            // now would interleave scene echoes with the dump stream.
+            if let Err(e) = state.device.load_scene_model(&scene) {
+                log::warn!("could not load the UCX scene model: {e:?}");
+            }
+            state.host_scene = Some(state.device.capture_scene());
+            state.startup_compare_scene = Some(scene);
+            state.startup_compare_pending = true;
+            log::info!("deferred UCX startup sync until the state dump completes");
+            return;
+        }
         // RME's UC behavior is unconditional: on connect TotalMix writes
         // its host state over the unit, with no mismatch dialog (verified
         // on TotalMix FX 2.10 / driver 1.277).  Live front-panel changes
@@ -3638,6 +3717,8 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                         device_state,
                         totalcontrol_scene: scene.clone(),
                         totalcontrol_gain,
+                        ucx_dump: None,
+                        device_scene: None,
                     });
                 }
             }
@@ -3661,6 +3742,8 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                             device_state: Default::default(),
                             totalcontrol_scene: scene.clone(),
                             totalcontrol_gain,
+                            ucx_dump: None,
+                            device_scene: None,
                         },
                     );
                 }
@@ -3716,6 +3799,62 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
 /// The startup path has its own saved scene; if that reapply is still
 /// pending, keep it instead of overwriting it with a possibly device-updated
 /// model.
+/// Finish the parts of startup that must follow the scene write.
+fn finish_startup_setup(state: &mut TotalControl) {
+    if let Err(e) = apply_control_room_assignments(state) {
+        log::debug!("Control Room assignments not restored: {e}");
+    }
+    sync_surround_bridge(state);
+    restore_engine(state);
+    state.device.begin_metering();
+    maybe_attach_device_service(state);
+}
+
+fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
+    match state.device.apply_scene(scene) {
+        Ok(()) => {
+            enforce_control_room_stereo(state);
+            state.host_scene = Some(state.device.capture_scene());
+        }
+        Err(e) => log::warn!("startup scene apply failed: {e:?}"),
+    }
+    finish_startup_setup(state);
+}
+
+/// Finish the deferred UCX startup comparison after the asynchronous
+/// pre-connect dump has been snapshotted.
+fn poll_startup_compare(state: &mut TotalControl) {
+    if !state.startup_compare_pending || !state.device.startup_dump_complete() {
+        return;
+    }
+    state.startup_compare_pending = false;
+    let Some(scene) = state.startup_compare_scene.take() else {
+        finish_startup_setup(state);
+        return;
+    };
+    let dump = UcxDump::new(state.device.pre_connect_words().unwrap_or_default());
+    let mut device_scene = scene.clone();
+    let items = dump.differences_into(&mut device_scene);
+    log::info!(
+        "UCX startup comparison: {} difference(s): {:?}",
+        items.len(),
+        items
+    );
+    if items.is_empty() {
+        apply_startup_scene(state, &scene);
+        return;
+    }
+    let totalcontrol_gain = scene_gain_pairs(&scene, true);
+    state.startup_mismatch = Some(StartupMismatch {
+        items,
+        device_state: Default::default(),
+        totalcontrol_scene: scene,
+        totalcontrol_gain,
+        ucx_dump: Some(dump),
+        device_scene: Some(device_scene),
+    });
+}
+
 fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &str) {
     if state.startup_scene.is_some() {
         log::debug!("{reason}: a startup scene reapply is already pending");
@@ -6899,6 +7038,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             let before = panel_fingerprint(state);
             let _ = state.device.poll_events();
+            poll_startup_compare(state);
             if panel_fingerprint(state) != before {
                 // The front panel moved a level, a mute or the dim: show
                 // it at the fast rate while it keeps moving.
@@ -7117,22 +7257,34 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         },
         Message::MismatchUseTotalcontrol => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                apply_totalcontrol_mismatch(state, &mismatch);
+                if mismatch.ucx_dump.is_some() {
+                    apply_startup_scene(state, &mismatch.totalcontrol_scene);
+                } else {
+                    apply_totalcontrol_mismatch(state, &mismatch);
+                }
             }
             state.sync_direction = SyncDirection::GuiToDevice;
         }
         Message::MismatchUseDevice => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                if let Err(e) = state.device.restore_readable(&mismatch.device_state) {
-                    fail(state, "restore device settings", &e);
+                if let Some(scene) = mismatch.device_scene.as_ref() {
+                    apply_startup_scene(state, scene);
+                } else {
+                    if let Err(e) = state.device.restore_readable(&mismatch.device_state) {
+                        fail(state, "restore device settings", &e);
+                    }
+                    state.host_scene = Some(state.device.capture_scene());
                 }
-                state.host_scene = Some(state.device.capture_scene());
             }
             state.sync_direction = SyncDirection::GuiToDevice;
         }
         Message::MismatchAlwaysTotalcontrol => {
             if let Some(mismatch) = state.startup_mismatch.take() {
-                apply_totalcontrol_mismatch(state, &mismatch);
+                if mismatch.ucx_dump.is_some() {
+                    apply_startup_scene(state, &mismatch.totalcontrol_scene);
+                } else {
+                    apply_totalcontrol_mismatch(state, &mismatch);
+                }
             }
             state.always_init_device = true;
             state.prefs_dirty = true;
@@ -9549,21 +9701,19 @@ const ECHO_HIGH_CUTS: [&str; 6] = ["Off", "16k", "12k", "8k", "4k", "2k"];
 
 fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    // Secondary text in the settings sheet is a little larger than the
-    // mixer's micro labels; it is read at popover distance, not strip
-    // distance.
-    let ts = scale * 1.15;
+    // Match Control Room Settings: 16 pt at the current UI scale.
+    let text_size = 16.0 * scale;
     let settings = state.device.settings();
     let modifiers = state.modifiers;
 
     // Caption column shared by every labelled row, so the controls line up.
     // Wide enough for the longest device label, "Single speed word clock".
-    const LABEL_W: f32 = 138.0;
+    const LABEL_W: f32 = 180.0;
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
             text(label)
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * ts),
+                .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -9574,9 +9724,9 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let header = row![
         text("Settings")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(theme::TEXT_XS * ts))
+        iced::widget::button(text("Close").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleDevicePanel),
@@ -9615,7 +9765,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 k,
                 text(label)
                     .color(theme::TEXT_SEC)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_SM * scale)
             .align_x(iced::Alignment::Center)
@@ -9693,7 +9843,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                 let mut line = row![].spacing(theme::SPACE_SM * scale);
                 for &(label, active, on_toggle) in pair {
                     line = line.push(
-                        iced::widget::button(text(label).size(theme::TEXT_XS * ts).center())
+                        iced::widget::button(text(label).size(text_size).center())
                             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
                             .width(Length::Fill)
                             .style(theme::toggle_button(active, theme::ACCENT))
@@ -9720,22 +9870,26 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                  same reason.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         );
     }
-    popover(state, body.into(), Message::ToggleDevicePanel)
+    popover(state, body.into(), Message::ToggleDevicePanel, 520.0)
 }
 
 /// The card of a popover docked beside the sidebar, closing on `close` when
 /// a click lands outside it.
-fn popover<'a>(state: &'a TotalControl, body: Element<'a, Message>, close: Message) -> Element<'a, Message> {
+fn popover<'a>(
+    state: &'a TotalControl,
+    body: Element<'a, Message>,
+    close: Message,
+    width: f32,
+) -> Element<'a, Message> {
     let scale = state.ui_scale;
-    const CARD_W: f32 = 320.0;
     let card = opaque(
         container(body)
             .style(theme::dialog)
             .padding(theme::SPACE_XL * scale)
-            .width(Length::Fixed(CARD_W * scale)),
+            .width(Length::Fixed(width * scale)),
     );
 
     // One layer, not a catcher stacked under the card: in a `stack`, the
@@ -9840,13 +9994,13 @@ fn options_menu_layer(state: &TotalControl) -> Element<'_, Message> {
 /// around its window, not what the card does.
 fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let header = row![
         text("TotalControl settings")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
-        iced::widget::button(text("Close").size(theme::TEXT_XS * ts))
+        iced::widget::button(text("Close").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleSettings),
@@ -9855,13 +10009,13 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let section = row![
         text("BACKGROUND")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
     let toggle = |label: &'static str, active: bool, message: Message| {
-        iced::widget::button(text(label).size(theme::TEXT_XS * ts).center())
+        iced::widget::button(text(label).size(text_size).center())
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .width(Length::Fill)
             .style(theme::toggle_button(active, theme::ACCENT))
@@ -9878,7 +10032,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         background = background.push(
             text("No system tray found: closing the window quits.")
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_XS * ts),
+                .size(text_size),
         );
     }
     background = background.push(toggle(
@@ -9889,7 +10043,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let sync_section = row![
         text("STARTUP SYNC")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -9897,7 +10051,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let surround_section = row![
         text("SURROUND")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -9916,7 +10070,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         ),
         text("Active while TotalControl runs. Select the device in KDE or the player.")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
     ]
     .spacing(theme::SPACE_SM * scale);
     let sync_help = text(if state.device.is_uc_model() {
@@ -9927,7 +10081,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
          saved TotalControl scene, and choose when they differ."
     })
     .color(theme::TEXT_SEC)
-    .size(theme::TEXT_XS * ts);
+    .size(text_size);
     let sync_buttons = row![
         toggle(
             "Device → GUI",
@@ -9955,7 +10109,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_section = row![
         text("OSC")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -9963,7 +10117,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_mode = row![
         text("Protocol")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         toggle(
             "Classic",
             state.osc_dialect == crate::osc::OscDialect::Classic,
@@ -9980,19 +10134,19 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc_ports = row![
         text("Receive")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text_input("9000", &state.osc_recv_text)
             .on_input(Message::OscRecvPortChanged)
             .width(Length::Fixed(90.0 * scale))
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text("Send")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         text_input("9001", &state.osc_send_text)
             .on_input(Message::OscSendPortChanged)
             .width(Length::Fixed(90.0 * scale))
-            .size(theme::TEXT_XS * ts),
-        iced::widget::button(text("Apply").size(theme::TEXT_XS * ts))
+            .size(text_size),
+        iced::widget::button(text("Apply").size(text_size))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ApplyOscPorts),
@@ -10010,13 +10164,13 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         osc_ports,
         text("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+).")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
     ]
     .spacing(theme::SPACE_SM * scale);
     let body = column![header, background, sync, surround, osc]
         .spacing(theme::SPACE_XL * scale)
         .width(Length::Fill);
-    popover(state, body.into(), Message::ToggleSettings)
+    popover(state, body.into(), Message::ToggleSettings, 520.0)
 }
 
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
@@ -10051,7 +10205,7 @@ pub(crate) fn sidebar_px(state: &TotalControl) -> f32 {
 /// termination, and EQ+D for Record (`docs/spec/UCX-CONTROL-SPEC.md` §11).
 fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let settings = state.device.settings();
     let uc = state.device.is_uc_model();
     let ucx = state.device.is_ucx_model();
@@ -10059,7 +10213,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         row![
             text(label)
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MICRO * ts),
+                .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -10069,14 +10223,14 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let caption = |label: &'static str| {
         text(label)
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts)
+            .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
     let field = |p: iced::widget::PickList<'static, String, Vec<String>, String, Message>| {
         p.style(theme::pick_list)
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale)
+            .text_size(text_size)
             .width(Length::Fill)
     };
     let ref_row = |label: &'static str,
@@ -10107,7 +10261,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let checkbox = |on: bool, message: Message| {
         iced::widget::button(
             text(if on { "\u{2713}" } else { "" })
-                .size(theme::TEXT_MD * ts)
+                .size(text_size)
                 .center(),
         )
         .padding(0)
@@ -10193,7 +10347,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .style(theme::pick_list)
         .menu_style(theme::menu)
         .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-        .text_size(theme::TEXT_MD * scale)
+        .text_size(text_size)
         .width(Length::Fill),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10207,7 +10361,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             "Read from the unit at connect; written only when changed here."
         })
         .color(theme::TEXT_SEC)
-        .size(theme::TEXT_MICRO * ts),
+        .size(text_size),
         row![
             caption("Clock source"),
             field(pick_list(
@@ -10232,7 +10386,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                  the remaining logical channels stay silent.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_MICRO * ts),
+            .size(text_size),
         );
     }
     if uc {
@@ -10285,7 +10439,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 caption("Firmware"),
                 text(firmware)
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -10297,7 +10451,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 caption("Serial"),
                 text(serial)
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XS * ts),
+                    .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -10310,11 +10464,11 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
 
 fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let scale = state.ui_scale;
-    let ts = scale * 1.15;
+    let text_size = 16.0 * scale;
     let caption = |label: &'static str| {
         text(label)
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts)
+            .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
     let heading = row![
@@ -10324,7 +10478,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             "AUDIO ENGINE \u{00b7} PIPEWIRE"
         })
         .color(theme::TEXT_SEC)
-        .size(theme::TEXT_MICRO * ts),
+        .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
     .spacing(theme::SPACE_MD * scale)
@@ -10338,7 +10492,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                  set by whatever opens the card.",
             )
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * ts),
+            .size(text_size),
         ]
         .spacing(theme::SPACE_MD * scale)
         .width(Length::Fill)
@@ -10380,7 +10534,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         p.style(theme::pick_list)
             .menu_style(theme::menu)
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
-            .text_size(theme::TEXT_MD * scale)
+            .text_size(text_size)
             .width(Length::Fill)
     };
     let rate_list = rate_opts.clone();
@@ -10459,9 +10613,9 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             };
             body = body.push(
                 row![
-                    text(label).size(theme::TEXT_XS * ts).color(theme::TEXT_SEC),
+                    text(label).size(text_size).color(theme::TEXT_SEC),
                     iced::widget::Space::new().width(Length::Fill),
-                    text(value).size(theme::TEXT_XS * ts).color(colour),
+                    text(value).size(text_size).color(colour),
                 ]
                 .spacing(theme::SPACE_MD * scale)
                 .align_y(iced::Alignment::Center),
@@ -10478,7 +10632,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Host volume"),
                 text(format!("{percent}% ({db:.1} dB)"))
-                    .size(theme::TEXT_XS * ts)
+                    .size(text_size)
                     .color(colour),
                 iced::widget::Space::new().width(Length::Fill),
                 button(text("0 dB").size(theme::TEXT_XS * scale))
@@ -16009,14 +16163,15 @@ mod tests {
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu,
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
-        FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
+        FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W, StartupMismatch,
     };
     use crate::osc::OscOutbound;
     use crate::sidebar;
     use crate::theme;
     use crate::widgets::strip;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::time::{Duration, Instant};
+    use totalcontrol_core::fireface::UcxDump;
     use totalcontrol_core::RmeDevice;
 
     #[test]
@@ -18661,6 +18816,46 @@ mod tests {
         assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
         assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
         assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");
+    }
+
+    #[test]
+    fn use_device_applies_the_full_decoded_scene() {
+        let mut state = new(true, None, None);
+        let mut saved = state.device.capture_scene();
+        saved.outputs[0].volume = 0.25;
+        let mut device = saved.clone();
+        device.outputs[0].volume = 0.5;
+        state.startup_mismatch = Some(StartupMismatch {
+            items: vec!["output 0 volume".into()],
+            device_state: Default::default(),
+            totalcontrol_scene: saved,
+            totalcontrol_gain: Vec::new(),
+            ucx_dump: Some(UcxDump::new(HashMap::new())),
+            device_scene: Some(device),
+        });
+        let _ = update(&mut state, Message::MismatchUseDevice);
+        assert!(state.startup_mismatch.is_none());
+        assert!((state.device.outputs()[0].volume - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn use_totalcontrol_applies_the_saved_scene() {
+        let mut state = new(true, None, None);
+        let mut saved = state.device.capture_scene();
+        saved.outputs[0].volume = 0.25;
+        let mut device = saved.clone();
+        device.outputs[0].volume = 0.5;
+        state.startup_mismatch = Some(StartupMismatch {
+            items: vec!["output 0 volume".into()],
+            device_state: Default::default(),
+            totalcontrol_scene: saved,
+            totalcontrol_gain: Vec::new(),
+            ucx_dump: Some(UcxDump::new(HashMap::new())),
+            device_scene: Some(device),
+        });
+        let _ = update(&mut state, Message::MismatchUseTotalcontrol);
+        assert!(state.startup_mismatch.is_none());
+        assert!((state.device.outputs()[0].volume - 0.25).abs() < 1e-6);
     }
 
 }

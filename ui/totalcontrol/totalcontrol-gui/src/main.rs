@@ -200,15 +200,17 @@ fn main() -> iced::Result {
                 state.prefs_path = Some(path);
             }
             app::apply_startup_sync(&mut state);
-            if let Err(e) = app::apply_control_room_assignments(&mut state) {
-                log::debug!("Control Room assignments not restored: {e}");
+            if !state.startup_compare_pending {
+                if let Err(e) = app::apply_control_room_assignments(&mut state) {
+                    log::debug!("Control Room assignments not restored: {e}");
+                }
+                app::sync_surround_bridge(&mut state);
+                app::restore_engine(&mut state);
+                // Startup sync needs the direct handle: it drains the UCX
+                // state stream and reads the unit before the mirror exists.
+                // Move the handle to the service only once that is done.
+                app::maybe_attach_device_service(&mut state);
             }
-            app::sync_surround_bridge(&mut state);
-            app::restore_engine(&mut state);
-            // Startup sync needs the direct handle: it drains the UCX state
-            // stream and reads the unit before the mirror exists.  Move the
-            // handle to the service only once that is done.
-            app::maybe_attach_device_service(&mut state);
             if let Some(view) = start_view {
                 state.view = view;
             }

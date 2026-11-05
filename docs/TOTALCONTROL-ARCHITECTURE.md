@@ -241,8 +241,14 @@ is not part of the mixer scene.
 
 Startup sync compares the saved scene with the device where the backend can
 read state back.  Groups without readback are written from the saved scene.
-The UCX reports input gain only after an encoder move, so the saved scene is
-the connect value for gain and the live state word updates it afterwards.
+
+For the UCX the window is built from the saved scene model without writing the
+device.  The pre-connect dump is requested asynchronously, collected while the
+window opens, and decoded before any scene write.  This keeps dump words and
+scene-write echoes from mixing on the same state stream.  If the decoded state
+matches, the scene is written and startup continues; otherwise the mismatch
+dialog is shown.  The direct device handle stays in the UI until that
+comparison is resolved, then moves to the device service.
 
 ## 10. Driver and latency architecture
 

@@ -925,9 +925,11 @@ mixer state and GUI preferences are defined in
 specification only names the visible surfaces: eight snapshot slots, six
 layout slots, the current auto-saved mix and the GUI preference file.
 
-The startup mismatch dialog lists the differences as a bullet list. More than
-six differences are shown in a fixed-height scrollable list box instead of
-letting the dialog grow beyond the window.
+The startup mismatch dialog lists the decoded differences as a bullet list.
+On the UCX it appears after the asynchronous pre-connect dump has been
+compared; the window itself is shown first. More than six differences are
+shown in a fixed-height scrollable list box instead of letting the dialog grow
+beyond the window.
 
 ## 15. Control invariants
 
