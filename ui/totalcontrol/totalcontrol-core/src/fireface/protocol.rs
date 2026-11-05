@@ -35,12 +35,18 @@ pub mod req {
     pub const LEVELS: u8 = 0x17;
     pub const PGA: u8 = 0x1a;
     pub const DDS: u8 = 0x1b;
+    /// IN: 32-bit firmware revision word; bits 31..16 are the revision.
     pub const REVISION: u8 = 0x1c;
     pub const ENABLE: u8 = 0x20;
     /// UCX Windows path: stream-start/stop support.
     pub const STREAM29: u8 = 0x1d;
     pub const SERIAL_LO: u8 = 0x1e;
     pub const SERIAL_HI: u8 = 0x1f;
+}
+
+/// Firmware revision carried in the upper 16 bits of the EP0 `0x1c` reply.
+pub fn firmware_revision(word: u32) -> u16 {
+    (word >> 16) as u16
 }
 
 /// A matrix source: a hardware input or a software playback channel.
@@ -623,5 +629,10 @@ mod tests {
         assert_eq!(p.peak[0], 1600);
         assert_eq!(p.fx_power, [512 * 1_600, 512 * 900]);
         assert_eq!(p.fx_peak, [640, 480]);
+    }
+
+    #[test]
+    fn ep0_revision_uses_the_upper_word() {
+        assert_eq!(firmware_revision(0x002e_0103), 46);
     }
 }

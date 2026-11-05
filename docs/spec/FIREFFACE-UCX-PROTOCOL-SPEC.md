@@ -159,7 +159,9 @@ READ  EP0 0xc0:  0x1f, wLength 8
 READ  EP0 0xc0:  0x11, wLength 8
 ```
 
-Each read returns 4 bytes. The payloads are available on Linux.
+Each read returns 4 bytes.  The `0x1c` payload is a 32-bit firmware
+revision word: bits 31..16 are the firmware revision.  The lower 16 bits are
+not interpreted.
 
 ### 2.3 Alternate settings
 
