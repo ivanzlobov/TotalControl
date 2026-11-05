@@ -11,9 +11,14 @@ documents for the current implementation, not as a work log.
   not, what it used to be, or what went wrong before.
 - No historical notes, retractions, changelogs, capture diaries, or "oracle
   said" narration in a specification.
-- No personal identifying information. Do not put serial numbers, USB
+- No personal identifying information anywhere in the repository, pull
+  requests, commit messages or issues. Do not put serial numbers, USB
   vendor/product IDs, hostnames, usernames, file paths with a home directory,
-  or device addresses in a specification.
+  or device addresses there. Use placeholders such as `<checkout>` instead of
+  a contributor's local path.
+- Do not commit captured device state: raw state dumps, mixer scenes, capture
+  files or the values of a user's current setup. Keep captures outside the
+  repository and use synthetic fixtures for tests.
 - Keep specifications minimal. Tables and short normative paragraphs are
   preferred over prose.
 - Put open questions, TODO lists, capture requests and working notes in
@@ -61,6 +66,9 @@ request; do not commit or push directly to `main`.
   and in the PR description, using `.github/pull_request_template.md`.
 - Push the branch, open a draft PR early, and wait for CI. Do not merge with a
   failing or missing required check.
+- Do not merge or close a pull request until the user has explicitly approved
+  the completed change. Keep it open or draft while work continues; merge or
+  close only when the user specifically asks for that action.
 - Use squash merge by default so `main` stays linear and each PR has one
   revert point. Use rebase-and-merge only for a deliberately clean commit
   series; do not add merge commits.
@@ -76,10 +84,9 @@ request; do not commit or push directly to `main`.
 
 ## Working rules
 
-- Use the NAS mailbox in `/media/nas_data/John/Electronica/rme/coordination/`
-  for Windows/oracle questions and acknowledgements. Linux owns
-  `LINUX-STATUS.md`, `LINUX-REQUESTS.md`, `DECISIONS.md`, `analysis/*` and
-  `coordination/inbox/windows/*`.
+- Use the NAS coordination mailbox for Windows/oracle questions and
+  acknowledgements. Linux owns `LINUX-STATUS.md`, `LINUX-REQUESTS.md`,
+  `DECISIONS.md`, `analysis/*` and `coordination/inbox/windows/*`.
 - Push only to our own repository, `jspx-projects/TotalControl`.
 - The UI is part of this repository. Do not add an external TotalControl development
   remote; the imported upstream history is on `archive/tuxmix-upstream`.
