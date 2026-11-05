@@ -195,6 +195,78 @@ impl Scene {
         serde_json::from_str(json)
     }
 
+    /// Make a UCX scene match the pair-wide rules of the unit.
+    ///
+    /// A linked input pair has one low cut/EQ/dynamics block, one FX send
+    /// and one preamp/reference group; a write to either side changes both.
+    /// Older scenes can therefore carry a stale right-side copy.  The same
+    /// applies to output EQ, dynamics and FX return.  Normalise the scene
+    /// to the left side so the model and the device agree before any write
+    /// or comparison.
+    pub fn normalize_ucx_pairs(&mut self) {
+        for pair in 0..self.inputs.len() / 2 {
+            if !self
+                .settings
+                .input_pair_link
+                .get(pair)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let (left, right) = (pair * 2, pair * 2 + 1);
+            let Some(saved) = self.inputs.get(left).cloned() else {
+                continue;
+            };
+            let Some(target) = self.inputs.get_mut(right) else {
+                continue;
+            };
+            target.phantom = saved.phantom;
+            target.pad = saved.pad;
+            target.instrument = saved.instrument;
+            target.level = saved.level;
+            target.sensitivity = saved.sensitivity;
+            target.ref_level = saved.ref_level;
+            target.autoset = saved.autoset;
+            target.eq = saved.eq;
+            target.dynamics = saved.dynamics;
+            target.fx_send_db = saved.fx_send_db;
+            target.mute = saved.mute;
+            target.solo = saved.solo;
+            target.width = saved.width;
+            target.ms_proc = saved.ms_proc;
+        }
+
+        // The unit's FX return fader tops out at 0 dB; positive values are
+        // ignored by the device.
+        for output in &mut self.outputs {
+            output.fx_return_db = output.fx_return_db.clamp(-65.0, 0.0);
+        }
+        for pair in 0..self.outputs.len() / 2 {
+            if !self
+                .settings
+                .output_link
+                .get(pair)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let (left, right) = (pair * 2, pair * 2 + 1);
+            let Some(saved) = self.outputs.get(left).cloned() else {
+                continue;
+            };
+            let Some(target) = self.outputs.get_mut(right) else {
+                continue;
+            };
+            target.eq = saved.eq;
+            target.dynamics = saved.dynamics;
+            target.fx_return_db = saved.fx_return_db;
+            target.mute = saved.mute;
+            target.solo = saved.solo;
+        }
+    }
+
     /// Merge the host-originated part of a `before` → `after` transition
     /// into this saved scene.
     ///

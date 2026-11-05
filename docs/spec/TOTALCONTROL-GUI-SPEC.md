@@ -584,7 +584,7 @@ register, `60000 / bpm`.
 ### 6.3 FX Return
 
 Each hardware output has an **FX Return** knob in its Settings panel,
-−65..+6 dB. A linked pair writes both channels.
+−65..0 dB. A linked pair writes both channels.
 
 ## 8. Output balance
 
@@ -921,6 +921,10 @@ mixer state and GUI preferences are defined in
 [`TOTALCONTROL-ARCHITECTURE.md`](../TOTALCONTROL-ARCHITECTURE.md) §9. This
 specification only names the visible surfaces: eight snapshot slots, six
 layout slots, the current auto-saved mix and the GUI preference file.
+
+The startup mismatch dialog lists the differences as a bullet list. More than
+six differences are shown in a fixed-height scrollable list box instead of
+letting the dialog grow beyond the window.
 
 ## 15. Control invariants
 

@@ -481,12 +481,12 @@ mod tests {
     #[test]
     fn selects_the_requested_unit_not_the_widest_other_card() {
         let json = br#"[
-            {"index":2629,"name":"alsa_input.usb-RME_Fireface_UC_Win__22946692__303004A897837A8-00.pro-input-0",
+            {"index":2629,"name":"alsa_input.usb-RME_Fireface_UC_Win__00000001__AAAAAAAAAAAAAAAA-00.pro-input-0",
              "sample_specification":"s32le 18ch 48000Hz"},
-            {"index":2630,"name":"alsa_input.usb-RME_Fireface_UCX__23455873__99A75B559E6A6C8-00.pro-input-0",
+            {"index":2630,"name":"alsa_input.usb-RME_Fireface_UCX__00000002__BBBBBBBBBBBBBBBB-00.pro-input-0",
              "sample_specification":"s32le 18ch 48000Hz"}
         ]"#;
-        let monitor = parse_source(json, "303004A897837A8").expect("the UC source");
+        let monitor = parse_source(json, "AAAAAAAAAAAAAAAA").expect("the UC source");
         assert_eq!(monitor.index, 2629);
         assert!(monitor.name.contains("Fireface_UC_Win"));
         assert!(parse_source(json, "missing").is_none());

@@ -606,6 +606,10 @@ and lets you choose, with a dialog:
   options stay with the saved scene.
 - **Always use TotalControl settings** — as above and stop asking.
 
+The dialog lists every difference. When more than six are shown, the list gets
+its own scrollbar and a fixed height so the dialog does not grow beyond the
+window.
+
 On the UCX the hardware-held switches (options, reference levels, `48V`,
 Inst and Level) have no readback. TotalControl writes the saved scene values
 at connect, so the panel and the unit agree; the mismatch dialog never changes
@@ -693,10 +697,23 @@ because their step is 1 dB. It is not a link marker.
 | `Ad` | 8-channel AD/DA converter mode, only when disconnected from USB |
 | `CC` | Class Compliant mode, only when disconnected from USB |
 
-Press and hold for about one second to load the selected entry. `i.o.` means
-loaded and `n.o.` means an empty slot. Loading a setup while connected changes
-only the front-panel parameters — input gains and output volumes — not the
-routing. `CC` activates after a power cycle.
+The press that enters the `SU` menu is short. The final press that loads the
+selected entry must be held for about one second; a short press does not load
+it. `i.o.` means loaded and `n.o.` means an empty slot. Loading a setup while
+connected changes only the front-panel parameters — input gains and output
+volumes — not the routing. `CC` activates after a power cycle.
+
+The six slots are written from TotalMix FX, **Options → Store current State
+into Device → Setup 1–6**. The host does not upload a scene; the unit snapshots
+its current internal state, including routing, EQ, FX, references and options.
+TotalControl leaves the six device slots untouched. Its own **Mix 1–8**
+snapshots are host files, not the unit's setups.
+
+If the unit reports an error at power-up and every user slot still shows
+`n.o.` after TotalMix has stored it, the unit's setup memory has not passed
+its self-test. `FA` may still load because it comes from the firmware. In that
+case the six device slots are unavailable; keep using host scenes and Mix 1–8
+and have the unit serviced.
 
 ## Appendix A — Device modes
 

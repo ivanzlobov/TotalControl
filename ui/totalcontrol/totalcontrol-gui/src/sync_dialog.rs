@@ -5,13 +5,21 @@
 //! the clock/optical/switch registers and queued front-panel gain/volume
 //! changes for comparison; see `docs/UC-PARAMETER-SYNC.md`.
 
-use iced::widget::{button, column, container, opaque, row, text, Space};
+use iced::widget::{button, column, container, opaque, row, scrollable, text, Space};
 use iced::{Alignment, Background, Color, Element, Length};
 
 use crate::app::{Message, TotalControl};
 use crate::theme;
 
 const CARD_W: f32 = 560.0;
+/// More rows than this would make the dialog taller than the window on a
+/// small display, so the list gets a fixed height and its own scrollbar.
+const MAX_VISIBLE_MISMATCHES: usize = 6;
+const MISMATCH_ROW_H: f32 = 16.0;
+
+fn uses_scroll_list(items: usize) -> bool {
+    items > MAX_VISIBLE_MISMATCHES
+}
 
 pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
@@ -27,6 +35,18 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                 .size(theme::TEXT_XS * scale),
         );
     }
+    let differences: Element<'_, Message> = if uses_scroll_list(mismatch.items.len()) {
+        scrollable(differences)
+            .direction(scrollable::Direction::Vertical(theme::thin_scrollbar()))
+            .height(Length::Fixed(
+                MAX_VISIBLE_MISMATCHES as f32 * MISMATCH_ROW_H * scale,
+            ))
+            .width(Length::Fill)
+            .style(theme::scrollable)
+            .into()
+    } else {
+        differences.into()
+    };
 
     let ucx = state.device.is_ucx_model();
     let card = opaque(
@@ -103,4 +123,19 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                 ..container::Style::default()
             }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn six_differences_fit_without_a_scroll_list() {
+        assert!(!uses_scroll_list(MAX_VISIBLE_MISMATCHES));
+    }
+
+    #[test]
+    fn seven_differences_use_the_scroll_list() {
+        assert!(uses_scroll_list(MAX_VISIBLE_MISMATCHES + 1));
+    }
 }

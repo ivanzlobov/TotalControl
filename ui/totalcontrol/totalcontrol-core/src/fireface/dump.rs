@@ -89,6 +89,9 @@ impl UcxDump {
         if self.words.is_empty() {
             return out;
         }
+        // Compare against the same pair-normalised model that the apply
+        // path writes.
+        scene.normalize_ucx_pairs();
 
         for (idx, input) in scene.inputs.iter_mut().enumerate().take(18) {
             if idx < 4 {
@@ -384,7 +387,7 @@ fn linear_db(v: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channel::{ChannelType, InputChannel, OutputChannel};
+    use crate::channel::{ChannelType, InputChannel, InputEq, OutputChannel};
     use std::collections::HashMap;
 
     fn scene() -> Scene {
@@ -438,6 +441,64 @@ mod tests {
         words.insert(0x12a1, 0);
         words.insert(0x13a0, 0);
         words.insert(0x13a1, 0);
+
+        let diff = UcxDump::new(words).differences_into(&mut scene);
+        assert!(diff.is_empty(), "{diff:?}");
+    }
+
+    #[test]
+    fn saved_dump_decodes_known_fields_and_matrix() {
+        let text = include_str!("../../tests/fixtures/ucx-dump-scene.txt");
+        let mut words = HashMap::new();
+        for line in text.lines() {
+            let mut parts = line.split_whitespace();
+            let addr = u16::from_str_radix(parts.next().unwrap(), 16).unwrap();
+            let value = u16::from_str_radix(parts.next().unwrap(), 16).unwrap();
+            words.insert(addr, value);
+        }
+        let dump = UcxDump::new(words);
+        assert_eq!(dump.input(0, 0x20), Some(1));
+        assert_eq!(dump.input(1, 0x20), Some(1));
+        assert_eq!(dump.input(0, 0x40), Some(1));
+        assert_eq!(dump.input(1, 0x40), Some(1));
+        assert_eq!(dump.input(0, 0x01), Some((-650i16) as u16));
+        // 0x18 is Phones, 0x12 is AN1/2.
+        assert_eq!(dump.output(0, 0, 0x03), Some((-455i16) as u16));
+        assert_eq!(dump.output(1, 0, 0x03), Some(0));
+        assert_eq!(dump.output(1, 0, 0x00), Some((-122i16) as u16));
+        let (level, pan) = dump.matrix_at(1, 0, 0).unwrap();
+        assert_eq!(pan, (-100i16) as u16);
+        assert!((UcxDump::matrix_level(level) - 0.000_562).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linked_pairs_compare_against_the_left_values_and_clamped_fx_return() {
+        let mut scene = scene();
+        scene.settings.input_pair_link = vec![true, false, false];
+        scene.inputs[0].eq = Some(InputEq {
+            enabled: true,
+            low_cut_enabled: true,
+            ..Default::default()
+        });
+        scene.inputs[1].eq = Some(InputEq::default());
+        scene.settings.output_link = vec![true; 9];
+        scene.outputs[0].fx_return_db = -45.5;
+        scene.outputs[1].fx_return_db = -45.5;
+        scene.outputs[2].fx_return_db = 6.0;
+        scene.outputs[3].fx_return_db = 6.0;
+
+        let mut words = HashMap::new();
+        // Linked AN1/2: both sides carry the left EQ/low-cut state.
+        words.insert(0x0020, 1);
+        words.insert(0x0120, 1);
+        words.insert(0x0040, 1);
+        words.insert(0x0140, 1);
+        // 0x18 is Phones, 0x12 is AN1/2.  AN1/2's +6.0 dB request is
+        // clamped to the unit's 0 dB maximum.
+        words.insert(0x1803, (-455i16) as u16);
+        words.insert(0x1903, (-455i16) as u16);
+        words.insert(0x1203, 0);
+        words.insert(0x1303, 0);
 
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(diff.is_empty(), "{diff:?}");

@@ -4338,13 +4338,11 @@ impl RmeDevice for Fireface {
                 MUTED
             } else {
                 // Restore the model's return for that channel, in 0.1 dB.
-                let idx = match reg {
-                    0x1203 => 0,
-                    0x1303 => 1,
-                    0x1803 => 6,
-                    _ => 7,
-                };
-                (self.outputs[idx].fx_return_db * 10.0).round() as i16 as u16
+                // The model is Phones-first: 0x12 is AN1/2 and 0x18 is
+                // Phones, not the other way around.
+                let idx = ucx::output_index_from_state(reg & 0xff00)
+                    .ok_or_else(|| Error::InvalidChannel(format!("output 0x{reg:04x}")))?;
+                (self.outputs[idx].fx_return_db.clamp(-65.0, 0.0) * 10.0).round() as i16 as u16
             };
             self.write_word(reg, value)?;
         }
@@ -4856,7 +4854,10 @@ impl RmeDevice for Fireface {
         if output >= self.outputs.len() {
             return Err(Error::InvalidChannel(format!("output {output}")));
         }
-        let db = db.clamp(-65.0, 6.0);
+        // The FX return fader tops out at 0 dB on the unit.  Positive
+        // values are ignored by the device, so keep the model and the
+        // write inside the readable range.
+        let db = db.clamp(-65.0, 0.0);
         let pair = output / 2;
         if self.output_linked(pair) {
             let left = pair * 2;
@@ -5072,6 +5073,14 @@ impl RmeDevice for Fireface {
         // word separately made a connect take several seconds.
         let started = Instant::now();
         let batch = self.begin_write_batch();
+        let normalized = if self.model == Model::Ucx {
+            let mut scene = scene.clone();
+            scene.normalize_ucx_pairs();
+            Some(scene)
+        } else {
+            None
+        };
+        let scene = normalized.as_ref().unwrap_or(scene);
         scene.check_compatible(self.canonical_model())?;
         if scene.inputs.len() != self.inputs.len()
             || scene.playbacks.len() != self.playbacks.len()
@@ -6231,6 +6240,51 @@ mod tests {
         assert!(words.contains(&(0x1203, 0xfd76)));
         assert!(dev.settings().mono);
         assert!(dev.settings().mute_fx);
+    }
+
+    #[test]
+    fn ucx_mute_fx_restores_phones_first_fx_returns() {
+        let (mut dev, writes) = open(Model::Ucx);
+        // Internal order is Phones, AN1/2, AN3/4...; the registers are
+        // 0x18 for Phones and 0x12 for AN1/2.
+        dev.outputs[0].fx_return_db = -45.5;
+        dev.outputs[1].fx_return_db = -45.5;
+        dev.outputs[2].fx_return_db = -12.3;
+        dev.outputs[3].fx_return_db = -12.3;
+        dev.settings.mute_fx = true;
+        writes.lock().unwrap().clear();
+        dev.set_mute_fx(false).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x1803, (-455i16) as u16)));
+        assert!(words.contains(&(0x1903, (-455i16) as u16)));
+        assert!(words.contains(&(0x1203, (-123i16) as u16)));
+        assert!(words.contains(&(0x1303, (-123i16) as u16)));
+    }
+
+    #[test]
+    fn ucx_scene_apply_normalises_linked_eq_and_clamps_fx_return() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.settings.input_pair_link = vec![true, false, false];
+        scene.inputs[0].eq = Some(InputEq {
+            enabled: true,
+            low_cut_enabled: true,
+            ..Default::default()
+        });
+        scene.inputs[1].eq = Some(InputEq::default());
+        scene.outputs[2].fx_return_db = 6.0;
+        scene.outputs[3].fx_return_db = 6.0;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x0020, 1)));
+        assert!(words.contains(&(0x0120, 1)));
+        assert!(words.contains(&(0x0040, 1)));
+        assert!(words.contains(&(0x0140, 1)));
+        assert!(words.contains(&(0x1203, 0)));
+        assert!(words.contains(&(0x1303, 0)));
+        assert!(dev.inputs()[1].eq.unwrap().enabled);
+        assert_eq!(dev.outputs()[2].fx_return_db, 0.0);
     }
 
     #[test]

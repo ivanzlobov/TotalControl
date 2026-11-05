@@ -339,7 +339,7 @@ Output registers are the input layout mirrored at `+0x1200`:
 | `0x00` | volume | 0.1 dB, signed |
 | `0x01` | balance | −100..+100 |
 | `0x02` | mute | 0/1 |
-| `0x03` | FX Return | 0.1 dB, signed |
+| `0x03` | FX Return | 0.1 dB, signed, −65.0..0.0 dB |
 | `0x04` | stereo mode | 0 mono, 1 stereo |
 | `0x05` | MS processing | 0/1 |
 | `0x07` | phase L, and R at `+0x100` | 0/1 |
@@ -393,11 +393,27 @@ The fader base is submix-dependent: the selected hardware output chooses the
 | `0x3c25` | Echo volume | 0.1 dB, signed |
 | `0x3c26` | Echo width | 0..100 |
 | `NN02` | output mode word | bit 0 mute, bit 1 monitor routing |
-| `0x3d00` | control-room state | 0 idle, 1 Speaker B active |
-| `0x3d03` | DIM / Recall | 0/1 |
+| `0x3d00` | Speaker B active | 0/1 |
+| `0x3d01` | Mute Enable flag | 0/1; writable, audio effect not measured |
+| `0x3d02` | Main Dim amount | 0.1 dB, signed |
+| `0x3d03` | Dim active | 0/1 |
+| `0x3d04` | Main Recall level | 0.1 dB, signed |
+| `0x3d20` | control-room Main pair | read-only; 0 = AN1/2 in the tested state |
+| `0x3d21` | control-room Speaker B pair | read-only; 2 = AN3/4 in the normal state |
+| `0x3d22` | unknown | 0 in the tested states |
+| `0x3d40` | host-session/runtime flag | read-only; 0 in a Linux-only session, 1 after a TotalMix session |
+| `0x3d41`, `0x3d42` | unknown | read-only, 0 in the tested states |
+| `0x3d43` | unknown boolean | writable 0/1 |
+| `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
+| `0x3d45`, `0x3d46` | unknown | writable words |
 | `0x3f00` | heartbeat / window | sequence |
 | `0x3f98` | monitor mask; `0x83ff` with Mono, `0xfc40` with Cue, `0xffff` idle | — |
 | `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 Mono Main Out | — |
+
+The requested dump emits only `0x3d00`–`0x3d04`, `0x3d20`–`0x3d22` and
+`0x3d40`–`0x3d46`. `0x3d05`–`0x3d1f` and `0x3d23`–`0x3d3f` are not present.
+The unknown words are preserved in the raw dump and are not written by the
+backend.
 
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
@@ -412,6 +428,19 @@ Switching Speaker B on writes `NN02` bit 1 on the Main pair, clears it on the
 Speaker B pair, and writes `0x3d00 = 1`. Switching it off reverses the two
 mode words and writes `0x3d00 = 0`. Bit 0 is the output mute and is preserved
 in both writes.
+
+### 4.5 Setup store
+
+The unit has six setup slots. The host stores its current internal mixer
+state into slot `N` (`1..6`) with one global word:
+
+```text
+0x3f97 = 0x0910 + (N - 1)
+```
+
+The host does not upload a scene. The unit snapshots the state it currently
+holds, including routing, faders, EQ, FX, references and options. Slots 1 and
+2 are measured; the remaining slots use the same counter.
 
 ## 5. Channel topology
 
@@ -644,8 +673,10 @@ ADAT 7/8    0x2201 / 0x2301
 
 ### 7.2 FX Return
 
-`NN03` sets the effect return for one output channel: 0.1 dB, signed. A
-linked pair writes both channels.
+`NN03` sets the effect return for one output channel: 0.1 dB, signed,
+−65.0..0.0 dB. A linked pair writes both channels; writing either side
+updates both registers in the state dump. Values above 0.0 dB are ignored by
+the unit.
 
 ### 7.3 Loopback
 
@@ -714,6 +745,11 @@ The writer maps frequency directly in Hz and Q as Q × 10.
 | Slope | 6/12/18/24 dB/oct | `NN22` |
 
 The slope writer maps 6/12/18/24 to 0/1/2/3.
+
+A linked input pair exposes one EQ/low-cut block to the host: writing either
+side updates both `NN20`–`NN22` and `NN40`–`NN4b` registers, and the device
+keeps the last value written. The left channel is the reference; the GUI and
+the scene carry the same values on both sides.
 
 ## 9. Dynamics and AutoLevel
 
@@ -1096,7 +1132,7 @@ Each channel uses the same offset block:
 | `0x0000` | volume | signed 0.1 dB; `0xff86` = −12.2 dB |
 | `0x0001` | balance | signed −100..+100 |
 | `0x0002` | mute | 0/1 |
-| `0x0003` | FX return | signed 0.1 dB |
+| `0x0003` | FX return | signed 0.1 dB, −65.0..0.0 dB; writing either side of a linked pair updates both |
 | `0x0004` | stereo | 0/1 |
 | `0x0005`, `0x0006` | unknown | 0 observed |
 | `0x0007` | phase, left | 0/1 |
@@ -1135,6 +1171,17 @@ state is not in this snapshot.
 | `0x3c01`..`0x3c0d` | Reverb parameters |
 | `0x3c20` | Echo enable |
 | `0x3c21`..`0x3c26` | Echo parameters |
-| `0x3d00`..`0x3d46` | monitor, control-room and global state |
+| `0x3d00` | Speaker B active |
+| `0x3d01` | Mute Enable flag |
+| `0x3d02` | Main Dim amount |
+| `0x3d03` | Dim active |
+| `0x3d04` | Main Recall level |
+| `0x3d20` | control-room Main pair |
+| `0x3d21` | control-room Speaker B pair |
+| `0x3d22` | unknown |
+| `0x3d40` | host-session/runtime flag |
+| `0x3d41`–`0x3d42` | unknown/read-only |
+| `0x3d43`–`0x3d46` | unknown/writable |
 
+The dump does not contain `0x3d05`–`0x3d1f` or `0x3d23`–`0x3d3f`.
 `0x3f00`..`0x3f50` are heartbeat/status words, not state.
