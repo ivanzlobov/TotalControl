@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="150 150 724 724" role="img" aria-labelledby="title">
   <title id="title">TotalControl tray icon</title>
-  <circle cx="512" cy="512" r="344" fill="#000000"/>
-  <circle cx="512" cy="512" r="300" fill="none" stroke="#4a4b52" stroke-width="42"/>
-  <path d="M 299.868 724.132 A 300 300 0 1 1 724.132 724.132" fill="none" stroke="#ff9f43" stroke-width="42" stroke-linecap="round"/>
-  <g fill="#ffffff">
-    <rect x="350" y="326" width="324" height="92" rx="12"/>
-    <rect x="454" y="380" width="116" height="322" rx="12"/>
+  <g transform="translate(512 512) scale(1.02105) translate(-512 -512)">
+    <circle cx="512" cy="512" r="344" fill="#000000"/>
+    <circle cx="512" cy="512" r="300" fill="none" stroke="#4a4b52" stroke-width="42"/>
+    <path d="M 299.868 724.132 A 300 300 0 1 1 724.132 724.132" fill="none" stroke="#ff9f43" stroke-width="42" stroke-linecap="round"/>
+    <g fill="#ffffff">
+      <rect x="350" y="326" width="324" height="92" rx="12"/>
+      <rect x="454" y="380" width="116" height="322" rx="12"/>
+    </g>
   </g>
 </svg>

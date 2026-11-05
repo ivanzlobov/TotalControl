@@ -22,11 +22,13 @@ const MARK_PNG: &[u8] = include_bytes!("../assets/totalcontrol-mark-256.png");
 /// The tray icon at the sizes panels ask for: the input-gain badge on a
 /// small black disc (`assets/totalcontrol-tray.svg`), so the orange arc and
 /// white T keep their contrast on both dark and light panels.
-const TRAY_PNGS: [&[u8]; 4] = [
+const TRAY_PNGS: [&[u8]; 6] = [
     include_bytes!("../assets/totalcontrol-tray-16.png"),
     include_bytes!("../assets/totalcontrol-tray-22.png"),
     include_bytes!("../assets/totalcontrol-tray-32.png"),
     include_bytes!("../assets/totalcontrol-tray-48.png"),
+    include_bytes!("../assets/totalcontrol-tray-64.png"),
+    include_bytes!("../assets/totalcontrol-tray-96.png"),
 ];
 
 /// Every tray size as RGBA8 plus dimensions; a size that cannot be decoded
@@ -82,9 +84,9 @@ mod tests {
     }
 
     #[test]
-    fn the_tray_icon_has_all_four_sizes() {
+    fn the_tray_icon_has_all_six_sizes() {
         let sizes: Vec<u32> = super::tray_rgba().iter().map(|(w, _, _)| *w).collect();
-        assert_eq!(sizes, vec![16, 22, 32, 48]);
+        assert_eq!(sizes, vec![16, 22, 32, 48, 64, 96]);
     }
 
     /// The mark feeds the top bar and the About dialog: it must decode,

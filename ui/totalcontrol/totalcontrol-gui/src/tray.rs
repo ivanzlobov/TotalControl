@@ -76,10 +76,13 @@ pub fn subscription() -> Subscription<TrayEvent> {
 // ── The icon ─────────────────────────────────────────────────────
 
 /// What the menu shows: kept here, refreshed by `set_status`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Status {
     pub window_visible: bool,
     pub dim: bool,
+    /// The connected model, or a short disconnected state; shown as the
+    /// tooltip's second line.
+    pub device: String,
 }
 
 struct Icon {
@@ -111,10 +114,10 @@ impl ksni::Tray for Icon {
             icon_name: String::new(),
             icon_pixmap: self.icon_pixmap(),
             title: "TotalControl".into(),
-            description: if self.status.window_visible {
-                "RME Fireface mixer and router — click to hide".into()
+            description: if self.status.device.is_empty() {
+                "No device connected".into()
             } else {
-                "RME Fireface mixer and router — click to show".into()
+                self.status.device.clone()
             },
         }
     }
@@ -198,8 +201,8 @@ pub fn set_status(status: Status) {
         return;
     };
     let Ok(mut last) = LAST.lock() else { return };
-    if *last != Some(status) {
-        *last = Some(status);
+    if last.as_ref() != Some(&status) {
+        *last = Some(status.clone());
         handle.update(|icon| icon.status = status);
     }
 }
@@ -335,12 +338,15 @@ mod tests {
     #[test]
     fn the_tray_tooltip_names_totalcontrol() {
         let icon = Icon {
-            status: Status::default(),
+            status: Status {
+                device: "Fireface UCX".into(),
+                ..Default::default()
+            },
         };
         let tip = ksni::Tray::tool_tip(&icon);
         assert_eq!(tip.title, "TotalControl");
-        assert!(tip.description.contains("Fireface"));
-        assert_eq!(tip.icon_pixmap.len(), 4);
+        assert_eq!(tip.description, "Fireface UCX");
+        assert_eq!(tip.icon_pixmap.len(), 6);
         assert!(tip.icon_pixmap.iter().all(|i| i.width == i.height));
     }
 

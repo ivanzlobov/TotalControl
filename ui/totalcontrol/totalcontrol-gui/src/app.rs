@@ -6928,9 +6928,23 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 state.notice = None;
             }
             if state.tray_active {
+                let model = state
+                    .device
+                    .model_name()
+                    .strip_suffix(" (mock)")
+                    .unwrap_or_else(|| state.device.model_name())
+                    .to_string();
+                let device = if !state.device.is_connected() {
+                    format!("{model} (disconnected)")
+                } else if state.device.is_mock() {
+                    format!("{model} (simulated)")
+                } else {
+                    model
+                };
                 crate::tray::set_status(crate::tray::Status {
                     window_visible: !state.window_hidden,
                     dim: state.device.settings().dim,
+                    device,
                 });
             }
             flush_prefs(state);
