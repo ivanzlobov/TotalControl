@@ -140,9 +140,12 @@ pub struct Prefs {
     /// the startup mismatch prompt and write the saved TotalControl scene.
     #[serde(default)]
     pub always_init_device: bool,
-    /// Classic RME OSC control surface, enabled from the app settings.
+    /// OSC control surface, enabled from the app settings.
     #[serde(default)]
     pub osc_enabled: bool,
+    /// Classic banked or absolute-channel Global OSC.
+    #[serde(default)]
+    pub osc_mode: crate::osc::OscDialect,
     #[serde(default = "default_osc_recv_port")]
     pub osc_recv_port: u16,
     #[serde(default = "default_osc_send_port")]
@@ -190,6 +193,7 @@ mod tests {
         let p: Prefs = serde_json::from_str(r#"{ "two_row": true }"#).unwrap();
         assert_eq!(p.two_row, Some(true));
         assert_eq!(p.view, None);
+        assert_eq!(p.osc_mode, crate::osc::OscDialect::Classic);
         assert!(p.labels.is_empty());
     }
 
@@ -214,6 +218,7 @@ mod tests {
             surround_51: true,
             surround_71: true,
             osc_enabled: true,
+            osc_mode: crate::osc::OscDialect::Global,
             osc_recv_port: 9010,
             osc_send_port: 9011,
             ..Default::default()

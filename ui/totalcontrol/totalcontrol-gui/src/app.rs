@@ -1977,6 +1977,9 @@ pub enum Message {
     /// One raw classic RME OSC message.  Parsed on the UI thread so the
     /// parser can resolve `Toggle` against the confirmed mixer model.
     OscRmeIn(String, Vec<OscType>),
+    /// One decoded Global OSC command.  The transport is absolute and
+    /// value-native, so no page or bank state is involved.
+    OscGlobalIn(crate::osc_global::GlobalCommand),
     /// A `Toggle` control whose direction depends on the current model.
     RmeToggle(crate::osc_rme::RmeToggle),
     /// `/1/mastervolume`: the Main Out pair fader.
@@ -2001,8 +2004,10 @@ pub enum Message {
     /// `--osc` is active).
     ToggleOscLog,
     ClearOscLog,
-    /// Settings sheet: start/stop the classic OSC surface.
+    /// Settings sheet: start/stop the OSC surface.
     SetOscEnabled(bool),
+    /// Settings sheet: choose the classic banked or Global OSC dialect.
+    SetOscMode(crate::osc::OscDialect),
     OscRecvPortChanged(String),
     OscSendPortChanged(String),
     /// Parse both port fields and restart the worker if they changed.
@@ -2400,6 +2405,7 @@ pub struct TotalControl {
     pub osc_enabled: bool,
     pub osc_recv_port: u16,
     pub osc_send_port: u16,
+    pub osc_dialect: crate::osc::OscDialect,
     pub osc_recv_text: String,
     pub osc_send_text: String,
     /// `--osc` was passed: the command line overrides the saved switch.
@@ -2921,6 +2927,9 @@ pub fn new_with_device(
     let osc_cli = osc_config.is_some();
     let osc_recv_port = osc_config.map(|c| c.recv_port).unwrap_or(9000);
     let osc_send_port = osc_config.map(|c| c.send_port).unwrap_or(9001);
+    let osc_dialect = osc_config
+        .map(|c| c.dialect)
+        .unwrap_or(crate::osc::OscDialect::Classic);
     let osc_enabled = osc_cli;
 
     let state = TotalControl {
@@ -2980,6 +2989,7 @@ pub fn new_with_device(
         osc_enabled,
         osc_recv_port,
         osc_send_port,
+        osc_dialect,
         osc_recv_text: osc_recv_port.to_string(),
         osc_send_text: osc_send_port.to_string(),
         osc_cli,
@@ -3116,6 +3126,7 @@ fn rebuild_osc_config(state: &mut TotalControl) {
             recv_port: state.osc_recv_port,
             send_port: state.osc_send_port,
             send_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            dialect: state.osc_dialect,
         });
     } else {
         state.osc_config = None;
@@ -3170,6 +3181,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         sync_direction: Some(state.sync_direction),
         always_init_device: state.always_init_device,
         osc_enabled: state.osc_enabled,
+        osc_mode: state.osc_dialect,
         osc_recv_port: state.osc_recv_port,
         osc_send_port: state.osc_send_port,
         input_pair_link: state.device.settings().input_pair_link.clone(),
@@ -3258,6 +3270,7 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
             prefs.osc_send_port
         };
         state.osc_enabled = prefs.osc_enabled;
+        state.osc_dialect = prefs.osc_mode;
         rebuild_osc_config(state);
     }
 
@@ -4531,21 +4544,869 @@ fn rme_toggle_message(
     })
 }
 
+fn global_channel(
+    state: &TotalControl,
+    bus: crate::osc_global::Bus,
+    index: usize,
+) -> Option<ChannelId> {
+    let count = match bus {
+        crate::osc_global::Bus::Input => state.device.inputs().len(),
+        crate::osc_global::Bus::Playback => state.device.playbacks().len(),
+        crate::osc_global::Bus::Output => state.device.outputs().len(),
+    };
+    (index < count).then_some(match bus {
+        crate::osc_global::Bus::Input => ChannelId::Input(index),
+        crate::osc_global::Bus::Playback => ChannelId::Playback(index),
+        crate::osc_global::Bus::Output => ChannelId::Output(index),
+    })
+}
+
+fn global_gain(state: &TotalControl, index: usize, db: f32) -> Option<u32> {
+    let input = state.device.inputs().get(index)?;
+    let max = input
+        .gain_max
+        .unwrap_or(if index < 2 { 65 } else { state.rme.gain_max_34 });
+    // Global OSC sends the preamp value in dB.  Inputs 1/2 use whole dB,
+    // inputs 3/4 use half-dB steps in the device model.
+    let raw = if index < 2 {
+        db.round()
+    } else {
+        (db * 2.0).round()
+    };
+    Some(raw.clamp(0.0, max as f32) as u32)
+}
+
+fn global_input_level(value: usize) -> Option<InputLevel> {
+    InputLevel::from_code(value as u16)
+}
+
+fn global_pan(value: f32) -> i8 {
+    (value * 100.0).round().clamp(-100.0, 100.0) as i8
+}
+
+fn global_eq_type(band: usize, kind: usize) -> Option<EqBandType> {
+    match band {
+        0 => match kind {
+            0 => Some(EqBandType::Bell),
+            1 => Some(EqBandType::LowShelf),
+            _ => None,
+        },
+        1 => (kind == 0).then_some(EqBandType::Bell),
+        2 => match kind {
+            0 => Some(EqBandType::Bell),
+            1 => Some(EqBandType::HighShelf),
+            2 => Some(EqBandType::LowPass),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn global_lowcut_messages(
+    cid: ChannelId,
+    control: &crate::osc_global::LowCutControl,
+) -> Vec<Message> {
+    match control {
+        crate::osc_global::LowCutControl::Enable(on) => {
+            vec![Message::EqLowCutEnabled(cid, *on)]
+        }
+        crate::osc_global::LowCutControl::Freq(hz) => {
+            vec![Message::EqLowCutFreq(cid, hz.round().clamp(0.0, 20_000.0) as u16)]
+        }
+        crate::osc_global::LowCutControl::Slope(slope) => {
+            vec![Message::EqLowCutSlope(cid, slope.round().clamp(6.0, 24.0) as u8)]
+        }
+        crate::osc_global::LowCutControl::LoadPreset => Vec::new(),
+    }
+}
+
+fn global_eq_messages(cid: ChannelId, control: &crate::osc_global::EqControl) -> Vec<Message> {
+    match control {
+        crate::osc_global::EqControl::Enable(on) => vec![Message::EqEnabled(cid, *on)],
+        crate::osc_global::EqControl::BandGain { band, db } if (1..=3).contains(band) => {
+            vec![Message::EqBandGain(cid, band - 1, db.clamp(-24.0, 24.0))]
+        }
+        crate::osc_global::EqControl::BandFreq { band, hz } if (1..=3).contains(band) => {
+            vec![Message::EqBandFreq(
+                cid,
+                band - 1,
+                hz.round().clamp(20.0, 20_000.0) as u16,
+            )]
+        }
+        crate::osc_global::EqControl::BandQ { band, q } if (1..=3).contains(band) => {
+            vec![Message::EqBandQ(cid, band - 1, q.clamp(0.05, 10.0))]
+        }
+        crate::osc_global::EqControl::BandType { band, kind } if (1..=3).contains(band) => {
+            global_eq_type(band - 1, *kind)
+                .map(|ty| vec![Message::EqBandType(cid, band - 1, ty)])
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn global_dynamics_messages(
+    state: &TotalControl,
+    cid: ChannelId,
+    control: &crate::osc_global::DynamicsControl,
+) -> Vec<Message> {
+    if matches!(cid, ChannelId::Playback(_)) {
+        return Vec::new();
+    }
+    if let crate::osc_global::DynamicsControl::Enable(on) = control {
+        return vec![Message::DynamicsEnabled(cid, *on)];
+    }
+    let mut d = dynamics_for(state, cid);
+    match control {
+        crate::osc_global::DynamicsControl::Gain(v) => d.gain_db = *v,
+        crate::osc_global::DynamicsControl::Attack(v) => {
+            d.attack_ms = v.round().clamp(0.0, 200.0) as u16
+        }
+        crate::osc_global::DynamicsControl::Release(v) => {
+            d.release_ms = v.round().clamp(100.0, 999.0) as u16
+        }
+        crate::osc_global::DynamicsControl::CompThreshold(v) => d.comp_threshold_db = *v,
+        crate::osc_global::DynamicsControl::CompRatio(v) => d.comp_ratio = *v,
+        crate::osc_global::DynamicsControl::ExpThreshold(v) => d.exp_threshold_db = *v,
+        crate::osc_global::DynamicsControl::ExpRatio(v) => d.exp_ratio = *v,
+        crate::osc_global::DynamicsControl::LoadPreset => return Vec::new(),
+        crate::osc_global::DynamicsControl::Enable(_) => unreachable!(),
+    }
+    vec![Message::DynamicsChanged(cid, d.clamped())]
+}
+
+fn global_autolevel_messages(
+    state: &TotalControl,
+    cid: ChannelId,
+    control: &crate::osc_global::AutoLevelControl,
+) -> Vec<Message> {
+    if matches!(cid, ChannelId::Playback(_)) {
+        return Vec::new();
+    }
+    let mut d = dynamics_for(state, cid);
+    match control {
+        crate::osc_global::AutoLevelControl::Enable(on) => d.auto_level = *on,
+        crate::osc_global::AutoLevelControl::MaxGain(v) => d.auto_max_gain_db = *v,
+        crate::osc_global::AutoLevelControl::Headroom(v) => d.auto_headroom_db = *v,
+        crate::osc_global::AutoLevelControl::RiseTime(v) => d.auto_rise_s = *v,
+        crate::osc_global::AutoLevelControl::LoadPreset => return Vec::new(),
+    }
+    vec![Message::DynamicsChanged(cid, d.clamped())]
+}
+
+fn global_channel_messages(
+    state: &TotalControl,
+    bus: crate::osc_global::Bus,
+    channel: usize,
+    cid: ChannelId,
+    control: &crate::osc_global::ChannelControl,
+) -> Vec<Message> {
+    use crate::osc_global::ChannelControl;
+    match control {
+        ChannelControl::Mute(on) => vec![Message::Mute(cid, *on)],
+        ChannelControl::Stereo(on) => vec![Message::StereoLinkChanged(cid, *on)],
+        ChannelControl::Name(name) => vec![Message::RmeRename(cid, name.clone())],
+        ChannelControl::MsProc(on) => match bus {
+            crate::osc_global::Bus::Input => vec![Message::InputMsProcChanged(channel, *on)],
+            crate::osc_global::Bus::Playback => {
+                vec![Message::PlaybackMsProcChanged(channel, *on)]
+            }
+            crate::osc_global::Bus::Output => Vec::new(),
+        },
+        ChannelControl::Phase(on) => match bus {
+            crate::osc_global::Bus::Input => vec![Message::PhaseChanged(cid, *on)],
+            crate::osc_global::Bus::Output => {
+                vec![Message::OutputPhaseChanged(channel, *on)]
+            }
+            crate::osc_global::Bus::Playback => Vec::new(),
+        },
+        ChannelControl::Width(width) => match bus {
+            crate::osc_global::Bus::Input | crate::osc_global::Bus::Playback => {
+                vec![Message::ChannelWidthChanged(cid, width.clamp(0.0, 1.0))]
+            }
+            crate::osc_global::Bus::Output => Vec::new(),
+        },
+        ChannelControl::Gain(db) if bus == crate::osc_global::Bus::Input => {
+            global_gain(state, channel, *db)
+                .map(|raw| vec![Message::Gain(channel, raw)])
+                .unwrap_or_default()
+        }
+        ChannelControl::RefLevel(code) if bus == crate::osc_global::Bus::Input => {
+            global_input_level(*code)
+                .map(|level| vec![Message::LevelChanged(channel, level)])
+                .unwrap_or_default()
+        }
+        ChannelControl::Phantom(on) if bus == crate::osc_global::Bus::Input => {
+            vec![Message::Phantom(channel, *on)]
+        }
+        ChannelControl::Instrument(on) if bus == crate::osc_global::Bus::Input => {
+            vec![Message::Instrument(channel, *on)]
+        }
+        ChannelControl::Pad(on) if bus == crate::osc_global::Bus::Input => {
+            vec![Message::Pad(channel, *on)]
+        }
+        ChannelControl::Autoset(on) if bus == crate::osc_global::Bus::Input => {
+            vec![Message::Autoset(channel, *on)]
+        }
+        ChannelControl::Volume(db) if bus == crate::osc_global::Bus::Output => {
+            vec![Message::VolumeChanged(
+                cid,
+                channel,
+                db_to_vol(*db).clamp(0.0, 2.0),
+            )]
+        }
+        ChannelControl::VolumeLin(norm) if bus == crate::osc_global::Bus::Output => {
+            let gain = crate::osc_rme::fader_gain(&OscType::Float(*norm)).unwrap_or(0.0);
+            vec![Message::VolumeChanged(cid, channel, gain)]
+        }
+        ChannelControl::Balance(balance) if bus == crate::osc_global::Bus::Output => {
+            vec![Message::PanChanged(cid, channel, global_pan(*balance))]
+        }
+        ChannelControl::FxSend(db) if bus != crate::osc_global::Bus::Output => {
+            vec![Message::FxSendChanged(cid, *db)]
+        }
+        ChannelControl::FxReturn(db) if bus == crate::osc_global::Bus::Output => {
+            vec![Message::FxReturnChanged(channel, *db)]
+        }
+        ChannelControl::Loopback(on) if bus == crate::osc_global::Bus::Output => {
+            vec![Message::LoopbackChanged(channel, *on)]
+        }
+        ChannelControl::TalkbackSel(on) if bus == crate::osc_global::Bus::Output => {
+            vec![Message::TalkbackReceiveChanged(channel, *on)]
+        }
+        ChannelControl::LowCut(control) if bus != crate::osc_global::Bus::Playback => {
+            global_lowcut_messages(cid, control)
+        }
+        ChannelControl::Eq(control) if bus != crate::osc_global::Bus::Playback => {
+            global_eq_messages(cid, control)
+        }
+        ChannelControl::Dynamics(control) => global_dynamics_messages(state, cid, control),
+        ChannelControl::AutoLevel(control) => global_autolevel_messages(state, cid, control),
+        _ => Vec::new(),
+    }
+}
+
+fn global_mix_messages(
+    state: &TotalControl,
+    source: crate::osc_global::Bus,
+    channel: usize,
+    submix: usize,
+    control: &crate::osc_global::MixControl,
+) -> Vec<Message> {
+    let Some(cid) = global_channel(state, source, channel) else {
+        return Vec::new();
+    };
+    match control {
+        crate::osc_global::MixControl::Fader(db) => {
+            vec![Message::MatrixCellChanged(cid, submix, db_to_vol(*db).clamp(0.0, 2.0))]
+        }
+        crate::osc_global::MixControl::FaderLin(norm) => {
+            let gain = crate::osc_rme::fader_gain(&OscType::Float(*norm)).unwrap_or(0.0);
+            vec![Message::MatrixCellChanged(cid, submix, gain)]
+        }
+        crate::osc_global::MixControl::Balance(balance) => {
+            vec![Message::PanChanged(cid, submix, global_pan(*balance))]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn global_control_room_messages(
+    state: &TotalControl,
+    control: &crate::osc_global::ControlRoomControl,
+) -> Vec<Message> {
+    use crate::osc_global::ControlRoomControl;
+    match control {
+        ControlRoomControl::MainOut(channel) => {
+            vec![Message::AssignOutput(0, Some(channel / 2))]
+        }
+        ControlRoomControl::MainOutB(channel) => {
+            vec![Message::AssignOutput(1, Some(channel / 2))]
+        }
+        ControlRoomControl::Phones { slot, channel } => {
+            vec![Message::AssignOutput(1 + slot, Some(channel / 2))]
+        }
+        ControlRoomControl::MainMono(on) => vec![Message::ControlRoomMono(*on)],
+        ControlRoomControl::Dim(on) => vec![Message::Dim(*on)],
+        ControlRoomControl::SpeakerB(on) => vec![Message::SpeakerB(*on)],
+        ControlRoomControl::MuteFx(on) => vec![Message::ControlRoomMuteFx(*on)],
+        ControlRoomControl::Talkback(on) => vec![Message::TalkbackChanged(*on)],
+        ControlRoomControl::LinkAB(on) => vec![Message::SpeakerBLinked(*on)],
+        ControlRoomControl::Recall => vec![Message::ControlRoomRecall],
+        ControlRoomControl::CueChannel(channel) => {
+            let pair = channel / 2;
+            state
+                .assign
+                .iter()
+                .take(OUTPUT_DESTS)
+                .position(|slot| *slot == Some(pair))
+                .filter(|dest| CUE_TARGETS.contains(dest))
+                .map(|dest| vec![Message::AssignCueTarget(dest)])
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn global_feedback_is_typed(command: &crate::osc_global::GlobalCommand) -> bool {
+    use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+    match command {
+        GlobalCommand::Channel { bus, control, .. } => match control {
+            ChannelControl::Mute(_) => true,
+            ChannelControl::Volume(_) | ChannelControl::VolumeLin(_) | ChannelControl::Balance(_) => {
+                *bus == Bus::Output
+            }
+            _ => false,
+        },
+        GlobalCommand::Mix { control, .. } => matches!(
+            control,
+            MixControl::Fader(_) | MixControl::FaderLin(_) | MixControl::Balance(_)
+        ),
+        _ => false,
+    }
+}
+
+fn global_messages(state: &TotalControl, command: &crate::osc_global::GlobalCommand) -> Vec<Message> {
+    use crate::osc_global::GlobalCommand;
+    match command {
+        GlobalCommand::Channel {
+            bus,
+            channel,
+            control,
+        } => global_channel(state, *bus, *channel)
+            .map(|cid| global_channel_messages(state, *bus, *channel, cid, control))
+            .unwrap_or_default(),
+        GlobalCommand::Mix {
+            source,
+            channel,
+            submix,
+            control,
+        } => global_mix_messages(state, *source, *channel, *submix, control),
+        GlobalCommand::ControlRoom(control) => global_control_room_messages(state, control),
+        GlobalCommand::Reverb(crate::osc_global::FxControl::Enable(on)) => {
+            vec![Message::OscRmeFx {
+                echo: false,
+                field: "on",
+                value: if *on { 1.0 } else { 0.0 },
+            }]
+        }
+        GlobalCommand::Echo(crate::osc_global::FxControl::Enable(on)) => {
+            vec![Message::OscRmeFx {
+                echo: true,
+                field: "on",
+                value: if *on { 1.0 } else { 0.0 },
+            }]
+        }
+        GlobalCommand::MuteGroup { .. }
+        | GlobalCommand::SoloGroup { .. }
+        | GlobalCommand::FaderGroup { .. }
+        | GlobalCommand::Reverb(_)
+        | GlobalCommand::Echo(_)
+        | GlobalCommand::Durec(_)
+        | GlobalCommand::Send(_)
+        | GlobalCommand::ShowWindow(_)
+        | GlobalCommand::Level { .. }
+        | GlobalCommand::Status(_) => Vec::new(),
+        GlobalCommand::GlobalMute(on) => {
+            let current = all_channel_ids(state)
+                .into_iter()
+                .any(|cid| channel_is_muted(state, cid));
+            (current != *on)
+                .then_some(vec![Message::GlobalMuteToggle])
+                .unwrap_or_default()
+        }
+        GlobalCommand::GlobalSolo(on) => {
+            let current = all_channel_ids(state)
+                .into_iter()
+                .any(|cid| channel_is_soloed(state, cid));
+            (current != *on)
+                .then_some(vec![Message::GlobalSoloToggle])
+                .unwrap_or_default()
+        }
+        GlobalCommand::Undo => vec![Message::Undo],
+        GlobalCommand::Redo => vec![Message::Redo],
+        GlobalCommand::SnapshotLoad { number, .. } if (1..=8).contains(number) => {
+            vec![Message::SnapshotClicked(*number as u8)]
+        }
+        GlobalCommand::LayoutLoad(number) if (1..=6).contains(number) => {
+            vec![Message::LayoutClicked(*number as u8)]
+        }
+        GlobalCommand::SnapshotLoad { .. } | GlobalCommand::LayoutLoad(_) => Vec::new(),
+        GlobalCommand::SnapshotSave => vec![Message::SnapshotStore],
+    }
+}
+
+fn global_gain_db(gain: f32) -> f32 {
+    if gain <= 0.0 {
+        -300.0
+    } else {
+        20.0 * gain.log10()
+    }
+}
+
+fn global_eq_controls(eq: &totalcontrol_core::channel::InputEq) -> Vec<crate::osc_global::ChannelControl> {
+    use crate::osc_global::{ChannelControl, EqControl, LowCutControl};
+    let mut out = vec![
+        ChannelControl::LowCut(LowCutControl::Enable(eq.low_cut_enabled)),
+        ChannelControl::LowCut(LowCutControl::Freq(f32::from(eq.low_cut_freq_hz))),
+        ChannelControl::LowCut(LowCutControl::Slope(f32::from(eq.low_cut_slope_db_oct))),
+        ChannelControl::Eq(EqControl::Enable(eq.enabled)),
+    ];
+    for (i, band) in eq.bands.iter().take(3).enumerate() {
+        let number = i + 1;
+        out.push(ChannelControl::Eq(EqControl::BandGain {
+            band: number,
+            db: band.gain_db,
+        }));
+        out.push(ChannelControl::Eq(EqControl::BandFreq {
+            band: number,
+            hz: f32::from(band.freq_hz),
+        }));
+        out.push(ChannelControl::Eq(EqControl::BandQ {
+            band: number,
+            q: band.q,
+        }));
+        let kind = match (i, band.band_type) {
+            (0, EqBandType::Bell) | (1, EqBandType::Bell) | (2, EqBandType::Bell) => Some(0),
+            (0, EqBandType::LowShelf) => Some(1),
+            (2, EqBandType::HighShelf) => Some(1),
+            (2, EqBandType::LowPass) => Some(2),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            out.push(ChannelControl::Eq(EqControl::BandType {
+                band: number,
+                kind,
+            }));
+        }
+    }
+    out
+}
+
+fn global_dynamics_controls(d: &Dynamics) -> Vec<crate::osc_global::ChannelControl> {
+    use crate::osc_global::{AutoLevelControl, ChannelControl, DynamicsControl};
+    vec![
+        ChannelControl::Dynamics(DynamicsControl::Enable(d.on)),
+        ChannelControl::Dynamics(DynamicsControl::Gain(d.gain_db)),
+        ChannelControl::Dynamics(DynamicsControl::Attack(f32::from(d.attack_ms))),
+        ChannelControl::Dynamics(DynamicsControl::Release(f32::from(d.release_ms))),
+        ChannelControl::Dynamics(DynamicsControl::CompThreshold(d.comp_threshold_db)),
+        ChannelControl::Dynamics(DynamicsControl::CompRatio(d.comp_ratio)),
+        ChannelControl::Dynamics(DynamicsControl::ExpThreshold(d.exp_threshold_db)),
+        ChannelControl::Dynamics(DynamicsControl::ExpRatio(d.exp_ratio)),
+        ChannelControl::AutoLevel(AutoLevelControl::Enable(d.auto_level)),
+        ChannelControl::AutoLevel(AutoLevelControl::MaxGain(d.auto_max_gain_db)),
+        ChannelControl::AutoLevel(AutoLevelControl::Headroom(d.auto_headroom_db)),
+        ChannelControl::AutoLevel(AutoLevelControl::RiseTime(d.auto_rise_s)),
+    ]
+}
+
+fn global_channel_state(
+    state: &TotalControl,
+    bus: crate::osc_global::Bus,
+    channel: usize,
+) -> Vec<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{Bus, ChannelControl, GlobalCommand};
+    let Some(cid) = global_channel(state, bus, channel) else {
+        return Vec::new();
+    };
+    let command = |control| GlobalCommand::Channel {
+        bus,
+        channel,
+        control,
+    };
+    let mut out = Vec::new();
+    match bus {
+        Bus::Input => {
+            let Some(c) = state.device.inputs().get(channel) else {
+                return out;
+            };
+            out.push(command(ChannelControl::Mute(c.mute)));
+            out.push(command(ChannelControl::Name(rme_name(state, cid))));
+            out.push(command(ChannelControl::Stereo(
+                state.device.input_pair_linked(channel / 2),
+            )));
+            out.push(command(ChannelControl::MsProc(c.ms_proc)));
+            out.push(command(ChannelControl::Phase(c.phase)));
+            out.push(command(ChannelControl::Width(c.width.clamp(0.0, 1.0))));
+            if let Some(raw) = c.gain {
+                out.push(command(ChannelControl::Gain(rme_gain_db(
+                    state, channel, raw,
+                ))));
+            }
+            if let Some(level) = c.level {
+                out.push(command(ChannelControl::RefLevel(level.code() as usize)));
+            }
+            out.push(command(ChannelControl::Phantom(c.phantom)));
+            out.push(command(ChannelControl::Instrument(c.instrument)));
+            out.push(command(ChannelControl::Pad(c.pad)));
+            out.push(command(ChannelControl::Autoset(c.autoset)));
+            out.push(command(ChannelControl::FxSend(c.fx_send_db)));
+            if let Some(eq) = c.eq.as_ref() {
+                out.extend(global_eq_controls(eq).into_iter().map(command));
+            }
+            if let Some(d) = c.dynamics.as_ref() {
+                out.extend(global_dynamics_controls(d).into_iter().map(command));
+            }
+        }
+        Bus::Playback => {
+            let Some(c) = state.device.playbacks().get(channel) else {
+                return out;
+            };
+            out.push(command(ChannelControl::Mute(c.mute)));
+            out.push(command(ChannelControl::Name(rme_name(state, cid))));
+            out.push(command(ChannelControl::Stereo(!c.split)));
+            out.push(command(ChannelControl::MsProc(c.ms_proc)));
+            out.push(command(ChannelControl::Width(c.width.clamp(0.0, 1.0))));
+            out.push(command(ChannelControl::FxSend(c.fx_send_db)));
+        }
+        Bus::Output => {
+            let Some(c) = state.device.outputs().get(channel) else {
+                return out;
+            };
+            out.push(command(ChannelControl::Mute(c.mute)));
+            out.push(command(ChannelControl::Name(rme_name(state, cid))));
+            out.push(command(ChannelControl::Stereo(
+                state.device.output_linked(channel / 2),
+            )));
+            out.push(command(ChannelControl::Phase(c.phase_l)));
+            out.push(command(ChannelControl::Volume(global_gain_db(c.volume))));
+            out.push(command(ChannelControl::VolumeLin(
+                crate::osc_rme::gain_to_fader(c.volume),
+            )));
+            out.push(command(ChannelControl::Balance(
+                f32::from(c.balance) / 100.0,
+            )));
+            out.push(command(ChannelControl::FxReturn(c.fx_return_db)));
+            out.push(command(ChannelControl::Loopback(c.loopback)));
+            out.push(command(ChannelControl::TalkbackSel(c.talkback)));
+            if let Some(eq) = c.eq.as_ref() {
+                out.extend(global_eq_controls(eq).into_iter().map(command));
+            }
+            if let Some(d) = c.dynamics.as_ref() {
+                out.extend(global_dynamics_controls(d).into_iter().map(command));
+            }
+        }
+    }
+    out
+}
+
+fn global_matrix_state(
+    state: &TotalControl,
+    mode: u8,
+    only_pair: Option<usize>,
+) -> Vec<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{Bus, GlobalCommand, MixControl};
+    let pairs = state.device.output_pair_count();
+    let mut out = Vec::new();
+    for (bus, count) in [
+        (Bus::Input, state.device.inputs().len()),
+        (Bus::Playback, state.device.playbacks().len()),
+    ] {
+        for channel in 0..count {
+            let Some(cid) = global_channel(state, bus, channel) else {
+                continue;
+            };
+            for pair in 0..pairs {
+                if only_pair.is_some_and(|only| only != pair) {
+                    continue;
+                }
+                let Ok(volume) = state.device.volume(cid, pair) else {
+                    continue;
+                };
+                let db = global_gain_db(volume);
+                if mode == 2 && db <= -65.0 {
+                    continue;
+                }
+                let submix = pair * 2;
+                out.push(GlobalCommand::Mix {
+                    source: bus,
+                    channel,
+                    submix,
+                    control: MixControl::Fader(db),
+                });
+                out.push(GlobalCommand::Mix {
+                    source: bus,
+                    channel,
+                    submix,
+                    control: MixControl::Balance(
+                        f32::from(channel_pan(state, cid, pair)) / 100.0,
+                    ),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn global_control_room_state(state: &TotalControl) -> Vec<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{ControlRoomControl, GlobalCommand};
+    let mut out = Vec::new();
+    for (dest, pair) in state.assign.iter().take(OUTPUT_DESTS).enumerate() {
+        let Some(pair) = *pair else { continue };
+        let channel = pair * 2;
+        out.push(GlobalCommand::ControlRoom(match dest {
+            0 => ControlRoomControl::MainOut(channel),
+            1 => ControlRoomControl::MainOutB(channel),
+            slot => ControlRoomControl::Phones {
+                slot: slot - 1,
+                channel,
+            },
+        }));
+    }
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::MainMono(
+        state.device.settings().mono,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::DimReduction(
+        state.control_room.main_dim_db,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::Dim(
+        state.device.settings().dim,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::RecallVolume(
+        state.control_room.recall_db,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::Talkback(
+        state.talkback_on,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::LinkAB(
+        state.control_room.speaker_b_linked,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::SpeakerB(
+        state.device.settings().speaker_b,
+    )));
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::MuteFx(
+        state.device.settings().mute_fx,
+    )));
+    if let Some(input) = state.control_room.talkback_input {
+        out.push(GlobalCommand::ControlRoom(ControlRoomControl::TalkChannel(
+            input,
+        )));
+    }
+    out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExternalIn(
+        state.control_room.external_input.is_some(),
+    )));
+    if let Some(pair) = state.control_room.external_input {
+        out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExtInChannel(
+            pair * 2,
+        )));
+        out.push(GlobalCommand::ControlRoom(ControlRoomControl::ExtInGain(
+            state.control_room.external_gain_db,
+        )));
+    }
+    if let Some(dest) = state.assign[CUE_DEST] {
+        if let Some(pair) = state.assign.get(dest).and_then(|slot| *slot) {
+            out.push(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
+                pair * 2,
+            )));
+        }
+    }
+    out
+}
+
+fn global_fx_state(state: &TotalControl) -> Vec<crate::osc_global::GlobalCommand> {
+    let settings = state.device.settings();
+    vec![
+        crate::osc_global::GlobalCommand::Reverb(crate::osc_global::FxControl::Enable(
+            settings.reverb.unwrap_or_default().on,
+        )),
+        crate::osc_global::GlobalCommand::Echo(crate::osc_global::FxControl::Enable(
+            settings.echo.unwrap_or_default().on,
+        )),
+    ]
+}
+
+fn global_status_state(state: &TotalControl) -> Vec<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{GlobalCommand, StatusControl};
+    let mut out = vec![
+        GlobalCommand::Status(StatusControl::Device(
+            state.device.kind().label().to_string(),
+        )),
+        GlobalCommand::Status(StatusControl::Connection(
+            state.device.is_connected(),
+        )),
+        GlobalCommand::GlobalMute(any_channel_muted(state)),
+        GlobalCommand::GlobalSolo(any_channel_soloed(state)),
+    ];
+    for number in 1..=8 {
+        let value = if state.active_snapshot == Some(number) {
+            if state.snapshot_dirty {
+                3.0
+            } else {
+                2.0
+            }
+        } else {
+            0.0
+        };
+        out.push(GlobalCommand::SnapshotLoad {
+            number,
+            state: value,
+        });
+    }
+    out
+}
+
+fn global_state_commands(
+    state: &TotalControl,
+    control: &crate::osc_global::SendControl,
+) -> Vec<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{Bus, GlobalCommand, SendControl};
+    match control {
+        SendControl::SendAll(mode) => {
+            let mut out = Vec::new();
+            for channel in 0..state.device.inputs().len() {
+                out.extend(global_channel_state(state, Bus::Input, channel));
+            }
+            for channel in 0..state.device.playbacks().len() {
+                out.extend(global_channel_state(state, Bus::Playback, channel));
+            }
+            for channel in 0..state.device.outputs().len() {
+                out.extend(global_channel_state(state, Bus::Output, channel));
+            }
+            out.extend(global_matrix_state(state, *mode, None));
+            out.extend(global_control_room_state(state));
+            out.extend(global_fx_state(state));
+            out.extend(global_status_state(state));
+            out
+        }
+        SendControl::SendSettings => {
+            let mut out = global_control_room_state(state);
+            out.extend(global_fx_state(state));
+            out.push(GlobalCommand::GlobalMute(any_channel_muted(state)));
+            out.push(GlobalCommand::GlobalSolo(any_channel_soloed(state)));
+            out
+        }
+        SendControl::SendChannel { bus, channel } => global_channel_state(state, *bus, *channel),
+        SendControl::SendMix(mode) => global_matrix_state(state, *mode, None),
+        SendControl::SendSubmix { submix, mode } => {
+            global_matrix_state(state, *mode, Some(submix / 2))
+        }
+        SendControl::SendState => global_status_state(state),
+    }
+}
+
+fn send_global_state(state: &mut TotalControl, control: &crate::osc_global::SendControl) {
+    let commands = global_state_commands(state, control);
+    log::debug!("OSC global: sending {} state messages", commands.len());
+    for command in commands {
+        send_global(state, command);
+    }
+}
+
 /// Low-level feedback send.  Everything that reaches a controller goes
 /// through here with an already-classic RME address.
 fn send_osc(state: &mut TotalControl, addr: String, args: Vec<OscType>) {
+    // The classic feedback builder is also used by the device mirror.  Do
+    // not leak classic page addresses into a Global OSC connection.
+    if state.osc_dialect != crate::osc::OscDialect::Classic {
+        return;
+    }
     if let Some(tx) = state.osc_tx.as_mut() {
         let _ = tx.try_send(OscOutbound::Raw { addr, args });
     }
 }
 
+fn global_feedback(msg: &OscOutbound) -> Option<crate::osc_global::GlobalCommand> {
+    use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+    match msg {
+        OscOutbound::Volume(cid, out, gain) => {
+            let db = if *gain <= 0.0 {
+                -300.0
+            } else {
+                20.0 * gain.log10()
+            };
+            Some(match cid {
+                ChannelId::Output(i) => GlobalCommand::Channel {
+                    bus: Bus::Output,
+                    channel: *i,
+                    control: ChannelControl::Volume(db),
+                },
+                ChannelId::Input(i) => GlobalCommand::Mix {
+                    source: Bus::Input,
+                    channel: *i,
+                    submix: out * 2,
+                    control: MixControl::Fader(db),
+                },
+                ChannelId::Playback(i) => GlobalCommand::Mix {
+                    source: Bus::Playback,
+                    channel: *i,
+                    submix: out * 2,
+                    control: MixControl::Fader(db),
+                },
+            })
+        }
+        OscOutbound::Pan(cid, out, pan) => {
+            let value = f32::from(*pan) / 100.0;
+            Some(match cid {
+                ChannelId::Output(i) => GlobalCommand::Channel {
+                    bus: Bus::Output,
+                    channel: *i,
+                    control: ChannelControl::Balance(value),
+                },
+                ChannelId::Input(i) => GlobalCommand::Mix {
+                    source: Bus::Input,
+                    channel: *i,
+                    submix: out * 2,
+                    control: MixControl::Balance(value),
+                },
+                ChannelId::Playback(i) => GlobalCommand::Mix {
+                    source: Bus::Playback,
+                    channel: *i,
+                    submix: out * 2,
+                    control: MixControl::Balance(value),
+                },
+            })
+        }
+        OscOutbound::Mute(cid, on) => Some(match cid {
+            ChannelId::Input(i) => GlobalCommand::Channel {
+                bus: Bus::Input,
+                channel: *i,
+                control: ChannelControl::Mute(*on),
+            },
+            ChannelId::Playback(i) => GlobalCommand::Channel {
+                bus: Bus::Playback,
+                channel: *i,
+                control: ChannelControl::Mute(*on),
+            },
+            ChannelId::Output(i) => GlobalCommand::Channel {
+                bus: Bus::Output,
+                channel: *i,
+                control: ChannelControl::Mute(*on),
+            },
+        }),
+        OscOutbound::Solo(..) | OscOutbound::Raw { .. } | OscOutbound::Global(_) => None,
+    }
+}
+
+fn send_global(state: &mut TotalControl, command: crate::osc_global::GlobalCommand) {
+    if let Some(tx) = state.osc_tx.as_mut() {
+        let _ = tx.try_send(OscOutbound::Global(command));
+    }
+}
+
 fn notify_osc(state: &mut TotalControl, msg: OscOutbound) {
     match msg {
-        OscOutbound::Volume(cid, _, _)
-        | OscOutbound::Pan(cid, _, _)
-        | OscOutbound::Mute(cid, _)
-        | OscOutbound::Solo(cid, _) => notify_rme_channel(state, cid),
-        OscOutbound::Raw { addr, args } => notify_rme_native(state, &addr, &args),
+        OscOutbound::Global(command) => {
+            if state.osc_dialect == crate::osc::OscDialect::Global {
+                send_global(state, command);
+            }
+        }
+        other => {
+            if state.osc_dialect == crate::osc::OscDialect::Global {
+                if let Some(command) = global_feedback(&other) {
+                    send_global(state, command);
+                }
+                return;
+            }
+            match other {
+                OscOutbound::Volume(cid, _, _)
+                | OscOutbound::Pan(cid, _, _)
+                | OscOutbound::Mute(cid, _)
+                | OscOutbound::Solo(cid, _) => notify_rme_channel(state, cid),
+                OscOutbound::Raw { addr, args } => notify_rme_native(state, &addr, &args),
+                OscOutbound::Global(_) => unreachable!(),
+            }
+        }
     }
 }
 
@@ -5736,6 +6597,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::EngineRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
+                | Message::OscGlobalIn(_)
                 | Message::WindowResized(_)
                 | Message::WindowSize(..)
         )
@@ -5774,6 +6636,33 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         if changed {
             notify_rme_page(state, page);
+        }
+        return Task::none();
+    }
+    // Global OSC: absolute paths map straight to the ordinary mixer
+    // messages, then the applied value is echoed in the same dialect.  The
+    // classic feedback builder is suppressed in Global mode by `send_osc`.
+    if let Message::OscGlobalIn(command) = &message {
+        if let crate::osc_global::GlobalCommand::Send(control) = command {
+            send_global_state(state, control);
+            return Task::none();
+        }
+        let messages = global_messages(state, command);
+        if messages.is_empty() {
+            log::debug!("OSC global: no mapping for {command:?}");
+            return Task::none();
+        }
+        let echo = !matches!(
+            command,
+            crate::osc_global::GlobalCommand::Send(_)
+                | crate::osc_global::GlobalCommand::Level { .. }
+                | crate::osc_global::GlobalCommand::Status(_)
+        ) && !global_feedback_is_typed(command);
+        for message in messages {
+            let _ = update(state, message);
+        }
+        if echo {
+            notify_osc(state, OscOutbound::Global(command.clone()));
         }
         return Task::none();
     }
@@ -7263,18 +8152,30 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.osc_tx = Some(tx);
             // A controller connecting after startup shouldn't stay blind
             // until the next manual change — snapshot everything once.
-            notify_rme_page(state, state.rme.page);
+            if state.osc_dialect == crate::osc::OscDialect::Global {
+                send_global_state(
+                    state,
+                    &crate::osc_global::SendControl::SendState,
+                );
+            } else {
+                notify_rme_page(state, state.rme.page);
+            }
         }
         Message::OscLog(line) => {
             state.osc_log.push_front(line);
             state.osc_log.truncate(OSC_LOG_MAX);
         }
         // Handled at the top of `update`, before this match.
-        Message::OscRmeIn(_, _) => {}
+        Message::OscRmeIn(_, _) | Message::OscGlobalIn(_) => {}
         Message::ToggleOscLog => state.show_osc_log = !state.show_osc_log,
         Message::ClearOscLog => state.osc_log.clear(),
         Message::SetOscEnabled(on) => {
             state.osc_enabled = on;
+            state.prefs_dirty = true;
+            rebuild_osc_config(state);
+        }
+        Message::SetOscMode(mode) => {
+            state.osc_dialect = mode;
             state.prefs_dirty = true;
             rebuild_osc_config(state);
         }
@@ -9059,6 +9960,23 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
+    let osc_mode = row![
+        text("Protocol")
+            .color(theme::TEXT_SEC)
+            .size(theme::TEXT_XS * ts),
+        toggle(
+            "Classic",
+            state.osc_dialect == crate::osc::OscDialect::Classic,
+            Message::SetOscMode(crate::osc::OscDialect::Classic),
+        ),
+        toggle(
+            "Global",
+            state.osc_dialect == crate::osc::OscDialect::Global,
+            Message::SetOscMode(crate::osc::OscDialect::Global),
+        ),
+    ]
+    .spacing(theme::SPACE_SM * scale)
+    .align_y(iced::Alignment::Center);
     let osc_ports = row![
         text("Receive")
             .color(theme::TEXT_SEC)
@@ -9084,12 +10002,13 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let osc = column![
         osc_section,
         toggle(
-            "Classic TotalMix OSC control surface",
+            "Enable OSC control surface",
             state.osc_enabled,
             Message::SetOscEnabled(!state.osc_enabled),
         ),
+        osc_mode,
         osc_ports,
-        text("Loopback only. A TotalMix-compatible controller drives and reads the mixer on these ports.")
+        text("Loopback only. Classic uses the banked 1.96–2.11 address space; Global uses absolute channels and native values (TotalMix FX 2.1+).")
             .color(theme::TEXT_SEC)
             .size(theme::TEXT_XS * ts),
     ]
@@ -15077,7 +15996,8 @@ mod tests {
         any_channel_muted, any_channel_soloed, apply_pending_resize,
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
-        input_gain_knob_label,
+        global_feedback, global_feedback_is_typed, global_messages, global_state_commands,
+        input_gain_knob_label, TotalControl,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
@@ -15091,6 +16011,7 @@ mod tests {
         FX_ECHO_CONTROLS_H, FX_FADER_W, FX_HEADER_H, FX_KNOBS_W, FX_REV_CONTROLS_H,
         FX_REV_TAIL_H, FX_ROW_H, FX_TYPE_H, FX_W,
     };
+    use crate::osc::OscOutbound;
     use crate::sidebar;
     use crate::theme;
     use crate::widgets::strip;
@@ -17508,6 +18429,229 @@ mod tests {
         state.selected.insert(b);
         let _ = update(&mut state, Message::Solo(a, true));
         assert!(state.selected.contains(&a) && state.selected.contains(&b));
+    }
+
+    fn apply_global(state: &mut TotalControl, command: crate::osc_global::GlobalCommand) {
+        for message in global_messages(state, &command) {
+            let _ = update(state, message);
+        }
+    }
+
+    #[test]
+    fn global_osc_channel_mute_reaches_the_mock() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::Channel {
+                bus: crate::osc_global::Bus::Input,
+                channel: 0,
+                control: crate::osc_global::ChannelControl::Mute(true),
+            },
+        );
+        assert!(state.device.inputs()[0].mute);
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::Channel {
+                bus: crate::osc_global::Bus::Input,
+                channel: 0,
+                control: crate::osc_global::ChannelControl::Mute(false),
+            },
+        );
+        assert!(!state.device.inputs()[0].mute);
+    }
+
+    #[test]
+    fn global_osc_output_volume_is_native_db() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::Channel {
+                bus: crate::osc_global::Bus::Output,
+                channel: 0,
+                control: crate::osc_global::ChannelControl::Volume(-6.0),
+            },
+        );
+        let volume = state.device.outputs()[0].volume;
+        assert!((volume - 0.501).abs() < 0.01, "expected -6 dB, got {volume}");
+    }
+
+    #[test]
+    fn global_osc_mix_fader_reaches_the_send() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::Mix {
+                source: crate::osc_global::Bus::Input,
+                channel: 1,
+                submix: 0,
+                control: crate::osc_global::MixControl::Fader(-12.0),
+            },
+        );
+        let volume = state.device.inputs()[1].volumes[0];
+        assert!((volume - 0.251).abs() < 0.01, "expected -12 dB, got {volume}");
+    }
+
+    #[test]
+    fn global_osc_control_room_changes_the_mock() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::ControlRoom(
+                crate::osc_global::ControlRoomControl::Dim(true),
+            ),
+        );
+        assert!(state.device.settings().dim);
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::ControlRoom(
+                crate::osc_global::ControlRoomControl::MainMono(true),
+            ),
+        );
+        assert!(state.device.settings().mono);
+    }
+
+    #[test]
+    fn global_typed_feedback_is_not_echoed_twice() {
+        use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+        assert!(global_feedback_is_typed(&GlobalCommand::Channel {
+            bus: Bus::Output,
+            channel: 0,
+            control: ChannelControl::Volume(-6.0),
+        }));
+        assert!(!global_feedback_is_typed(&GlobalCommand::Channel {
+            bus: Bus::Input,
+            channel: 0,
+            control: ChannelControl::Volume(-6.0),
+        }));
+        assert!(global_feedback_is_typed(&GlobalCommand::Mix {
+            source: Bus::Input,
+            channel: 0,
+            submix: 0,
+            control: MixControl::Fader(-6.0),
+        }));
+        assert!(!global_feedback_is_typed(&GlobalCommand::ControlRoom(
+            crate::osc_global::ControlRoomControl::Dim(true)
+        )));
+    }
+
+    #[test]
+    fn global_state_queries_cover_channels_matrix_and_status() {
+        use crate::osc_global::{GlobalCommand, SendControl};
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+
+        let channel = global_state_commands(
+            &state,
+            &SendControl::SendChannel {
+                bus: crate::osc_global::Bus::Input,
+                channel: 0,
+            },
+        );
+        assert!(channel.iter().any(|c| matches!(
+            c,
+            GlobalCommand::Channel {
+                bus: crate::osc_global::Bus::Input,
+                channel: 0,
+                control: crate::osc_global::ChannelControl::Mute(_)
+            }
+        )));
+        assert!(channel.iter().any(|c| matches!(
+            c,
+            GlobalCommand::Channel {
+                control: crate::osc_global::ChannelControl::Name(_),
+                ..
+            }
+        )));
+
+        let state_messages = global_state_commands(&state, &SendControl::SendState);
+        assert!(state_messages.iter().any(|c| matches!(
+            c,
+            GlobalCommand::Status(crate::osc_global::StatusControl::Device(_))
+        )));
+        assert_eq!(
+            state_messages
+                .iter()
+                .filter(|c| matches!(c, GlobalCommand::SnapshotLoad { .. }))
+                .count(),
+            8
+        );
+
+        let all_mix = global_state_commands(&state, &SendControl::SendMix(1));
+        let one_submix = global_state_commands(
+            &state,
+            &SendControl::SendSubmix {
+                submix: 0,
+                mode: 1,
+            },
+        );
+        assert!(!one_submix.is_empty());
+        assert!(all_mix.len() > one_submix.len());
+        assert!(one_submix.iter().all(|c| matches!(
+            c,
+            GlobalCommand::Mix { submix: 0, .. }
+        )));
+
+        let all = global_state_commands(&state, &SendControl::SendAll(2));
+        assert!(all.len() > all_mix.len());
+        assert!(all.iter().any(|c| matches!(
+            c,
+            GlobalCommand::Channel {
+                bus: crate::osc_global::Bus::Output,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn global_feedback_uses_native_paths_and_values() {
+        use crate::osc_global::{Bus, ChannelControl, GlobalCommand, MixControl};
+        let volume = global_feedback(&OscOutbound::Volume(
+            ChannelId::Input(2),
+            4,
+            0.25118864,
+        ));
+        assert!(matches!(
+            volume,
+            Some(GlobalCommand::Mix {
+                source: Bus::Input,
+                channel: 2,
+                submix: 8,
+                control: MixControl::Fader(db),
+            }) if (db + 12.0).abs() < 0.01
+        ));
+        let pan = global_feedback(&OscOutbound::Pan(ChannelId::Output(0), 0, -50));
+        assert!(matches!(
+            pan,
+            Some(GlobalCommand::Channel {
+                bus: Bus::Output,
+                channel: 0,
+                control: ChannelControl::Balance(value),
+            }) if (value + 0.5).abs() < 0.001
+        ));
+    }
+
+    #[test]
+    fn global_osc_mode_is_persisted() {
+        let mut state = new(true, None, None);
+        let _ = update(
+            &mut state,
+            Message::SetOscMode(crate::osc::OscDialect::Global),
+        );
+        assert_eq!(state.osc_dialect, crate::osc::OscDialect::Global);
+        assert_eq!(prefs_of(&state).osc_mode, crate::osc::OscDialect::Global);
+        state.osc_enabled = true;
+        let _ = update(
+            &mut state,
+            Message::SetOscMode(crate::osc::OscDialect::Classic),
+        );
+        assert_eq!(
+            state.osc_config.map(|c| c.dialect),
+            Some(crate::osc::OscDialect::Classic)
+        );
     }
 
     #[test]

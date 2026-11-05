@@ -100,10 +100,13 @@ when the application exits. The setting is persisted. The sinks follow the
 selected Fireface/MR18 Pro Audio device and bridge to the first six or eight
 SW playback pairs.
 
-OSC has `Classic TotalMix OSC control surface`, a receive-port field, a
-send-port field and `Apply`. Enabling it starts the loopback UDP surface;
-disabling it stops it. The switch and both ports are persisted. The command
-line `--osc`, `--osc-port` and `--osc-send-port` remain a development override.
+OSC has an enable switch, `Classic` and `Global` protocol buttons, a
+receive-port field, a send-port field and `Apply`. `Classic` is the banked
+TotalMix FX 1.96–2.11 address space; `Global` is the absolute-channel TotalMix
+FX 2.1+ address space. Enabling it starts the loopback UDP surface; disabling
+it stops it. The switch, protocol and both ports are persisted. The command
+line `--osc`, `--osc-mode`, `--osc-port` and `--osc-send-port` remain a
+development override.
 
 ### 2.0 FX fader
 

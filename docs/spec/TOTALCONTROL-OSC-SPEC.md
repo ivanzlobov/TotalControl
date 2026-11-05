@@ -5,7 +5,8 @@ the mapping from that surface to the Fireface UCX register protocol.  The
 address space and behaviour described here target the classic TotalMix FX OSC
 surface used by 2.10 and 2.11.  The latest RME table for that surface is
 `OscTableTotalMix_240722`, labelled TotalMix FX 1.96.  TotalMix FX 2.1 and
-later also expose a separate Global OSC dialect; that is not this surface.
+later also expose a separate Global OSC dialect, implemented by
+`totalcontrol-gui/src/osc_global.rs`; that is not this surface.
 
 The document covers protocol behaviour only. Enabling OSC in TotalMix FX and
 configuring the network are operational steps and live outside this

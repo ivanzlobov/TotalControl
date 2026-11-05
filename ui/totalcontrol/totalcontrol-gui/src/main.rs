@@ -5,7 +5,8 @@
 //! cargo run -p totalcontrol-gui -- --mock    # simulation (Babyface Pro FS)
 //! cargo run -p totalcontrol-gui -- --mock-ucx # simulation (Fireface UCX)
 //! cargo run -p totalcontrol-gui -- --mock-uc  # simulation (Fireface UC)
-//! cargo run -p totalcontrol-gui -- --mock --osc   # + OSC control surface
+//! cargo run -p totalcontrol-gui -- --mock --osc   # + classic OSC surface
+//! cargo run -p totalcontrol-gui -- --mock --osc --osc-mode global  # + Global OSC
 //! cargo run -p totalcontrol-gui -- --backend usb  # force libusb over the kernel driver
 //! cargo run -p totalcontrol-gui -- --view mixer  # open straight on the Mixer page
 //! cargo run -p totalcontrol-gui -- --fullscreen  # start fullscreen (F11 toggles)
@@ -19,6 +20,7 @@ mod icon;
 mod layouts;
 mod matrix;
 mod osc;
+mod osc_global;
 mod osc_rme;
 mod prefs;
 mod scenes;
@@ -117,6 +119,14 @@ fn main() -> iced::Result {
 
     // Opt-in, loopback-only OSC control surface — see osc.rs. Off unless
     // `--osc` is passed, so enabling it is always a deliberate choice.
+    let osc_dialect = match arg_value(&args, "--osc-mode").as_deref() {
+        Some("global") => osc::OscDialect::Global,
+        Some("classic") | None => osc::OscDialect::Classic,
+        Some(other) => {
+            eprintln!("Unknown --osc-mode value {other:?} (use classic|global), using classic");
+            osc::OscDialect::Classic
+        }
+    };
     let osc_config = args.iter().any(|a| a == "--osc").then(|| osc::OscConfig {
         recv_port: arg_value(&args, "--osc-port")
             .and_then(|v| v.parse().ok())
@@ -127,6 +137,7 @@ fn main() -> iced::Result {
         send_host: arg_value(&args, "--osc-host")
             .and_then(|v| v.parse::<IpAddr>().ok())
             .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        dialect: osc_dialect,
     });
 
     let start_view = parse_view(&args);

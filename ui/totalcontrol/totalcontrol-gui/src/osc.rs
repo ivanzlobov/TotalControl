@@ -1,8 +1,9 @@
 //! OSC (Open Sound Control) transport.
 //!
-//! The wire surface is the classic TotalMix FX address space implemented in
-//! [`crate::osc_rme`].  This module only owns the UDP socket, the debug log
-//! and the outgoing feedback queue; it never decodes a control path itself.
+//! The wire surface is either the classic TotalMix FX address space in
+//! [`crate::osc_rme`] or the absolute Global OSC address space in
+//! [`crate::osc_global`].  This module only owns the UDP socket, the debug
+//! log and the outgoing feedback queue; the codecs decode the paths.
 //!
 //! Opt-in from the app settings or `--osc` (see `main.rs`).  Off by default,
 //! and bound to loopback only, so enabling it never silently exposes control
@@ -27,6 +28,18 @@ pub struct OscConfig {
     pub recv_port: u16,
     pub send_port: u16,
     pub send_host: IpAddr,
+    pub dialect: OscDialect,
+}
+
+/// Which TotalMix FX OSC compatibility mode the worker speaks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OscDialect {
+    /// Banked TotalMix FX 1.96–2.11 address space.
+    #[default]
+    Classic,
+    /// Absolute-channel TotalMix FX 2.1+ address space.
+    Global,
 }
 
 /// An internal change hint consumed by the app's RME feedback layer.
@@ -44,6 +57,11 @@ pub enum OscOutbound {
         addr: String,
         args: Vec<OscType>,
     },
+    /// A Global OSC command or feedback value.  Encoded by
+    /// [`crate::osc_global::encode`].  The feedback mapping is the next
+    /// layer; the transport and codec are already in place.
+    #[allow(dead_code)]
+    Global(crate::osc_global::GlobalCommand),
 }
 
 fn channel_prefix(id: ChannelId) -> (&'static str, usize) {
@@ -90,6 +108,9 @@ impl OscOutbound {
                 )
             }
             OscOutbound::Raw { addr, args } => (addr, args),
+            OscOutbound::Global(command) => {
+                return crate::osc_global::encode(&command);
+            }
         };
         OscPacket::Message(OscMessage { addr, args })
     }
@@ -110,6 +131,20 @@ fn log_line(dir: &str, addr: &str, args: &[OscType]) -> String {
         "{h:02}:{m:02}:{s:02}.{:03} {dir} {addr} {args:?}",
         elapsed.subsec_millis()
     )
+}
+
+/// Flatten an OSC packet into its individual messages.  TotalMix wraps its
+/// feedback in bundles, and bundles can nest.
+fn flatten(packet: OscPacket) -> Vec<OscMessage> {
+    let mut messages = Vec::new();
+    let mut pending = vec![packet];
+    while let Some(packet) = pending.pop() {
+        match packet {
+            OscPacket::Message(msg) => messages.push(msg),
+            OscPacket::Bundle(bundle) => pending.extend(bundle.content.into_iter().rev()),
+        }
+    }
+    messages
 }
 
 /// Runs the OSC bridge as an iced `Subscription` recipe: binds a UDP
@@ -150,15 +185,28 @@ pub fn worker(config: &OscConfig) -> impl Stream<Item = Message> {
                 res = socket.recv_from(&mut buf) => {
                     let Ok((size, _from)) = res else { continue };
                     let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) else { continue };
-                    if let OscPacket::Message(msg) = packet {
+                    for msg in flatten(packet) {
                         let _ = output
                             .send(Message::OscLog(log_line("IN ", &msg.addr, &msg.args)))
                             .await;
-                        if output
-                            .send(Message::OscRmeIn(msg.addr, msg.args))
-                            .await
-                            .is_err()
-                        {
+                        let sent = match config.dialect {
+                            OscDialect::Classic => {
+                                output.send(Message::OscRmeIn(msg.addr, msg.args)).await
+                            }
+                            OscDialect::Global => match crate::osc_global::parse(&msg.addr, &msg.args) {
+                                Ok(command) => output.send(Message::OscGlobalIn(command)).await,
+                                Err(err) => {
+                                    if err != crate::osc_global::DecodeError::Ignored {
+                                        log::debug!(
+                                            "OSC global: {} is not understood ({err})",
+                                            msg.addr
+                                        );
+                                    }
+                                    continue;
+                                }
+                            },
+                        };
+                        if sent.is_err() {
                             return;
                         }
                     }
@@ -198,6 +246,52 @@ mod tests {
         };
         assert_eq!(msg.addr, "/1/mute/1/1");
         assert_eq!(msg.args, vec![OscType::Float(1.0)]);
+    }
+
+    #[test]
+    fn global_outbound_uses_the_absolute_address() {
+        let packet = OscOutbound::Global(crate::osc_global::GlobalCommand::Channel {
+            bus: crate::osc_global::Bus::Output,
+            channel: 4,
+            control: crate::osc_global::ChannelControl::Mute(true),
+        })
+        .into_packet();
+        let OscPacket::Message(msg) = packet else {
+            panic!("expected a message");
+        };
+        assert_eq!(msg.addr, "/output/4/mute");
+        assert_eq!(msg.args, vec![OscType::Float(1.0)]);
+    }
+
+    #[test]
+    fn nested_bundles_are_flattened_in_order() {
+        use rosc::{OscBundle, OscTime};
+        let message = |addr: &str| {
+            OscPacket::Message(OscMessage {
+                addr: addr.into(),
+                args: vec![OscType::Float(1.0)],
+            })
+        };
+        let inner = OscPacket::Bundle(OscBundle {
+            timetag: OscTime {
+                seconds: 0,
+                fractional: 0,
+            },
+            content: vec![message("/input/0/mute")],
+        });
+        let outer = OscPacket::Bundle(OscBundle {
+            timetag: OscTime {
+                seconds: 0,
+                fractional: 0,
+            },
+            content: vec![message("/output/0/volume"), inner, message("/status/dsp")],
+        });
+        let flat = flatten(outer);
+        let addresses: Vec<_> = flat.iter().map(|m| m.addr.as_str()).collect();
+        assert_eq!(
+            addresses,
+            vec!["/output/0/volume", "/input/0/mute", "/status/dsp"]
+        );
     }
 
     #[test]
