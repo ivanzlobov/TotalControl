@@ -140,9 +140,9 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_SM * scale);
 
-    // The mark beside the identity block: the same asset the window icon
-    // wears, decoded by the crate's own `png` decoder and shown through
-    // iced's codec-free image widget (see `icon::mark`).
+    // The knob/T mark without its tile beside the identity block, decoded
+    // by the crate's own `png` decoder and shown through iced's codec-free
+    // image widget (see `icon::mark`).
     let identity_row: Element<'_, Message> = match crate::icon::mark() {
         Some((handle, ratio)) => {
             let mark_h = 44.0 * scale;

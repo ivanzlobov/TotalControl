@@ -14,14 +14,13 @@ use std::sync::OnceLock;
 use iced::widget::image::Handle;
 
 const PNG: &[u8] = include_bytes!("../assets/totalcontrol-256.png");
-/// The mark alone: the tile icon's artwork without its tile, flat white
-/// on transparency, rendered from `assets/totalcontrol-logo.svg` with
-/// `rsvg-convert -w 256`.
+/// The mark alone: the orange gain arc and white T without the tile,
+/// rendered from `assets/totalcontrol-logo.svg` at 256 px.
 const MARK_PNG: &[u8] = include_bytes!("../assets/totalcontrol-mark-256.png");
 
-/// The tray icon at the sizes panels ask for: the mark as a thick white
-/// line with a soft dark edge (`assets/totalcontrol-tray.svg`), because the tile
-/// reduced to 22 px is a grey smear on a dark panel.
+/// The tray icon at the sizes panels ask for: the input-gain badge on a
+/// small black disc (`assets/totalcontrol-tray.svg`), so the orange arc and
+/// white T keep their contrast on both dark and light panels.
 const TRAY_PNGS: [&[u8]; 4] = [
     include_bytes!("../assets/totalcontrol-tray-16.png"),
     include_bytes!("../assets/totalcontrol-tray-22.png"),
@@ -42,10 +41,8 @@ pub fn rgba() -> Option<(u32, u32, Vec<u8>)> {
     decode(PNG)
 }
 
-/// The bare mark as a ready-to-draw handle plus its width/height ratio
-/// (the bird is wider than tall, so callers size it by height and scale
-/// the width), decoded once per process; later calls clone the handle,
-/// not the pixels.
+/// The bare mark as a ready-to-draw handle plus its width/height ratio,
+/// decoded once per process; later calls clone the handle, not the pixels.
 pub fn mark() -> Option<(Handle, f32)> {
     static MARK: OnceLock<Option<(Handle, f32)>> = OnceLock::new();
     MARK.get_or_init(|| {
@@ -90,43 +87,43 @@ mod tests {
     }
 
     /// The mark feeds the top bar and the About dialog: it must decode,
-    /// be wider than tall (the bird, not the square tile), and be the one
-    /// white ink on transparency the rasterization is supposed to emit.
-    /// An empty or solid-black rasterization would paint a blank box or
-    /// a black one into the lockup.
+    /// be square, and contain exactly the white T and the orange gain arc.
+    /// An empty or solid-black rasterization would paint a blank box or a
+    /// black one into the lockup.
     #[test]
-    fn the_packaged_mark_is_one_white_ink_on_transparency() {
+    fn the_packaged_mark_is_white_and_orange_on_transparency() {
         let (width, height, pixels) = decode(MARK_PNG).expect("the mark must decode");
-        assert!(
-            width > height,
-            "the mark is wider than tall: {width}x{height}"
-        );
-        let mut drawn = 0usize;
+        assert_eq!((width, height), (256, 256));
+        let mut white = 0usize;
+        let mut orange = 0usize;
         for px in pixels.chunks_exact(4) {
-            // Only fully opaque pixels are checked: the antialiased rim is
-            // allowed to blend, the ink itself is not.
+            // Only fully opaque pixels are checked: the soft track and the
+            // antialiased rim are allowed to blend.
             if px[3] > 230 {
-                drawn += 1;
-                assert!(
-                    px[0] > 0xdc && px[1] > 0xdc && px[2] > 0xdc,
-                    "drawn pixels must be the white ink, got {:?}",
-                    &px[..3]
-                );
+                let (r, g, b) = (px[0], px[1], px[2]);
+                if r > 0xdc && g > 0xdc && b > 0xdc {
+                    white += 1;
+                } else if r > 0xd0 && (0x60..=0xc8).contains(&g) && b < 0x90 {
+                    orange += 1;
+                } else {
+                    panic!("unexpected opaque mark pixel: {:?}", &px[..3]);
+                }
             }
         }
+        assert!(white > 1000, "the white T must be drawn, got {white} pixels");
         assert!(
-            drawn > 1000,
-            "the mark must actually be drawn, got {drawn} pixels"
+            orange > 500,
+            "the orange arc must be drawn, got {orange} pixels"
         );
     }
 
-    /// `mark()` memoizes: the second call must hand back the same ratio
-    /// without touching the PNG again.
+    /// `mark()` memoizes: the second call must hand back the same square
+    /// ratio without touching the PNG again.
     #[test]
     fn mark_is_decoded_once_and_keeps_a_sane_ratio() {
         let (_, first) = mark().expect("the mark must decode");
         let (_, second) = mark().expect("second call");
         assert_eq!(first, second);
-        assert!(first > 1.5 && first < 1.6, "unexpected ratio {first}");
+        assert!((first - 1.0).abs() < 0.001, "unexpected ratio {first}");
     }
 }
