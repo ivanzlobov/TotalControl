@@ -6,5 +6,6 @@ Comment=Open-source TotalMix replacement for RME audio interfaces on Linux
 Exec=totalcontrol
 Icon=totalcontrol
 Terminal=false
+StartupNotify=true
 Categories=AudioVideo;Audio;Mixer;
 Keywords=RME;TotalMix;Babyface;Fireface;mixer;audio interface;
