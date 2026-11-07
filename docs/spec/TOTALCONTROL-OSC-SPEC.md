@@ -289,6 +289,10 @@ scales.
 | `/2/trackname` | Channel name | `String` | all |
 | `/2/levelLeft`, `/2/levelRight` | Meter level | `Level` | all |
 
+On a linked input pair, a gain command addressed to the left channel also
+moves the right preamp by the same step. `/2/gainRight` remains the
+independent right-side address. On an unlinked pair each side moves alone.
+
 ### 7.1 Toggle commands
 
 `mute`, `solo`, `phase`, `phaseRight`, `phantom`, `instrument`, `pad`,

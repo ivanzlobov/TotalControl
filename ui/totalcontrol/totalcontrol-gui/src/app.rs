@@ -497,6 +497,13 @@ impl RmeDevice for DeviceHandle {
     fn set_gain(&mut self, idx: usize, gain: u32) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_gain(idx, gain))
     }
+    fn set_input_gain_right(
+        &mut self,
+        idx: usize,
+        gain: u32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_input_gain_right(idx, gain))
+    }
     fn set_input_level(
         &mut self,
         idx: usize,
@@ -7503,8 +7510,47 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             notify_osc_bool(state, format!("/input/{idx}/autoset"), on);
         }
-        Message::Gain(idx, g) => {            if let Err(e) = state.device.set_input_gain(idx, g) {
+        Message::Gain(idx, g) => {
+            // A linked pair's gain control moves both preamps by the same
+            // step, preserving any offset between them.  The device still
+            // stores the two gains independently, so the right side goes
+            // through its own register; backends without one fall back to
+            // the odd channel's normal gain setter.
+            // The linked gain knob is the left strip's control (even index).
+            // An odd index is the right side addressed directly, e.g. by
+            // `/2/gainRight` or a Global OSC input path; leave that side
+            // independent.
+            let linked = idx % 2 == 0 && state.device.input_pair_linked(idx / 2);
+            let max = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain_max)
+                .unwrap_or(65);
+            let old_left = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain)
+                .unwrap_or(g);
+            let old_right = state
+                .device
+                .inputs()
+                .get(idx)
+                .and_then(|c| c.gain_right)
+                .or_else(|| state.device.inputs().get(idx + 1).and_then(|c| c.gain))
+                .unwrap_or(old_left);
+            if let Err(e) = state.device.set_input_gain(idx, g) {
                 fail(state, "set_input_gain", &e);
+            }
+            if linked {
+                let delta = g as i64 - old_left as i64;
+                let right = (old_right as i64 + delta).clamp(0, max as i64) as u32;
+                if state.device.set_input_gain_right(idx, right).is_err() {
+                    if let Err(e) = state.device.set_input_gain(idx + 1, right) {
+                        fail(state, "set_input_gain_right", &e);
+                    }
+                }
             }
             let actual = state
                 .device
@@ -18816,6 +18862,36 @@ mod tests {
         assert_eq!(input_gain_knob_label(40, Some(35), false, true), "40\n35");
         assert_eq!(input_gain_knob_label(7, Some(5), true, true), "3.5\n2.5");
         assert_eq!(input_gain_knob_label(40, Some(35), false, false), "40");
+    }
+
+    #[test]
+    fn linked_gain_moves_both_preamps_by_the_same_step() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, true).unwrap();
+        state.device.set_input_gain(0, 10).unwrap();
+        state.device.set_input_gain_right(0, 20).unwrap();
+
+        let _ = update(&mut state, Message::Gain(0, 15));
+
+        assert_eq!(state.device.inputs()[0].gain, Some(15));
+        assert_eq!(
+            state.device.inputs()[0].gain_right,
+            Some(25),
+            "the right preamp must follow the linked left control by the same step"
+        );
+    }
+
+    #[test]
+    fn unlinked_gain_leaves_the_right_preamp_alone() {
+        let mut state = new(true, None, None);
+        state.device.set_input_pair_linked(0, false).unwrap();
+        state.device.set_input_gain(0, 10).unwrap();
+        state.device.set_input_gain_right(0, 20).unwrap();
+
+        let _ = update(&mut state, Message::Gain(0, 15));
+
+        assert_eq!(state.device.inputs()[0].gain, Some(15));
+        assert_eq!(state.device.inputs()[0].gain_right, Some(20));
     }
 
     #[test]

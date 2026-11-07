@@ -675,6 +675,13 @@ impl RmeDevice for Mirror {
         Ok(())
     }
 
+    fn set_input_gain_right(&mut self, idx: usize, gain: u32) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_input_gain_right(idx, gain);
+        });
+        Ok(())
+    }
+
     fn set_autoset(&mut self, idx: usize, on: bool) -> Result<(), Error> {
         self.run(move |d| {
             let _ = d.set_autoset(idx, on);
@@ -1044,10 +1051,10 @@ pub struct MeterSnapshot {
     pub inputs: [f32; 18],
     pub playbacks: [f32; 18],
     pub outputs: [f32; 18],
-    /// Peak-hold values for the same channels, held for a second and then
-    /// falling at 20 dB/s while the service polls at the device rate.  A
-    /// canvas may only draw 30 frames a second; these catch transients
-    /// that fall between those frames.
+    /// Peak-hold values for the same channels, held for two seconds and
+    /// then falling at 20 dB/s while the service polls at the device
+    /// rate.  A canvas may only draw 30 frames a second; these catch
+    /// transients that fall between those frames.
     pub input_peaks: [f32; 18],
     pub playback_peaks: [f32; 18],
     pub output_peaks: [f32; 18],
@@ -1359,7 +1366,7 @@ fn run(
     }
 }
 
-/// Hold each channel's peak for one second, then fall at 20 dB/s.  The
+/// Hold each channel's peak for two seconds, then fall at 20 dB/s.  The
 /// service sees every device packet, so a transient shorter than a canvas
 /// frame still reaches the needle.
 fn hold_peaks(
@@ -1375,8 +1382,8 @@ fn hold_peaks(
             peak_at[i] = now;
         } else {
             let held = now.duration_since(peak_at[i]).as_secs_f32();
-            if held > 1.0 {
-                let decayed = *slot * 10f32.powf(-(held - 1.0));
+            if held > 2.0 {
+                let decayed = *slot * 10f32.powf(-(held - 2.0));
                 *slot = decayed.max(value);
             }
         }
@@ -1514,9 +1521,13 @@ mod tests {
         super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(900));
         assert!((peaks[0] - 0.8).abs() < 1e-6);
 
-        // After the one-second hold it falls at 20 dB/s (a factor of ten
-        // per second).
+        // Still held at 1.9 s: the default TotalMix hold is two seconds.
         super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(1900));
+        assert!((peaks[0] - 0.8).abs() < 1e-6);
+
+        // After the two-second hold it falls at 20 dB/s (a factor of ten
+        // per second).
+        super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(2900));
         assert!((peaks[0] - 0.8 * 0.1f32.powf(0.9)).abs() < 1e-4);
     }
 

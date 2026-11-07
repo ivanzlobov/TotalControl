@@ -61,7 +61,8 @@ A full strip contains:
 - channel name and type;
 - pan or balance knob;
 - mute and solo; outputs use mute and cue;
-- level fader and a peak meter with peak hold;
+- level fader and a meter with a green RMS bar, a yellow peak line and
+  peak hold;
 - a right-hand column in fixed order: Trim, settings gear, EQ, Dynamics;
 - the channel's active panel, when open.
 
@@ -234,6 +235,31 @@ double click on a channel name starts a rename, on the strip background
 collapses the strip, and on a Matrix cell toggles the cell between off and
 unity. Ordinary push buttons act once per click and have no separate double
 click.
+
+### 2.7 Meters
+
+Each channel meter has the two TotalMix indicators:
+
+- a **green RMS bar** with a slow time constant;
+- a **yellow peak line** with zero attack, held for a fixed two seconds and
+  then decaying;
+- a **fixed red clip block** at the top, which lights when the peak reaches
+  full scale; the RMS bar itself stays green.
+
+Peak hold applies only to the yellow line. The green RMS bar is never held;
+it continues to follow the RMS value. The meter scale runs from -60 dB at
+the bottom to +6 dB at the top; below -60 dB reads as silence. The green bar
+is mathematically correct RMS, so a full-scale sine reads about -3 dB; no
+RMS +3 dB shift is applied.
+
+The peak hold is fixed at two seconds. The red clip block lights on a
+full-scale peak; there is no configurable hold time or OVR sample count.
+
+Input and playback meters are pre-fader and post-trim: the trim changes the
+reading, the send fader and selected submix do not. Hardware output meters
+are post-fader and go to zero when the output is muted. A linked pair shows
+one bar per channel; each bar measures its own channel, so linking does not
+copy an input signal or meter value to its sibling.
 
 ## 3. Runtime reference
 
@@ -687,8 +713,8 @@ not animate.
 Linking an input pair uses the left channel as the reference for mute, solo,
 phantom, Inst, Level, reference level and AutoSet. It also copies the left
 channel's FX send, low cut, EQ, dynamics and AutoLevel settings to the
-right. Gain and phase remain per-channel: the linked gain control uses the
-left value while the right value is retained.
+right. The linked gain knob moves both preamps by the same step and preserves
+their offset; the knob shows both values. Phase remains per-channel.
 
 Linking does not copy or flatten the two channel volumes: the linked fader
 displays the louder channel, and moving it shifts both channels by the same

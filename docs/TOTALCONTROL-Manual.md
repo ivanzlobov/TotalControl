@@ -168,16 +168,47 @@ suffix. Double-clicking that readout opens a numeric entry field.
 Output strips also carry a **balance** knob that pans the output pair
 between its two channels; it appears only while the pair is linked.
 
-Meters are peak meters with a held peak marker. They show the level as it
-arrives at the interface. If the host (PipeWire) volume is below 0 dB, a
-full-scale recording reaches the interface that much lower and the playback
-meter reads correspondingly low. The device sheet shows the host volume and
-has a `0 dB` button; set it to unity and use the interface's own faders for
-monitoring. A linked output pair shows two meter bars, one per channel.
+Each meter has two indicators, following TotalMix FX:
+
+- the **green bar is RMS**, with a deliberately slow time constant so it
+  shows average loudness;
+- the **yellow line is peak**, with zero attack so a single full-scale
+  sample is visible; it is held for a fixed two seconds and then decays;
+- **overload is the red clip block** above the bar; the bar itself stays
+  green. The block lights when the peak reaches full scale.
+
+Peak hold applies only to the yellow peak line. The green RMS bar is not
+held and keeps following the RMS signal.
+
+The meter scale runs from -60 dB at the bottom to +6 dB at the top. A level
+below -60 dB reads as silence and does not draw a peak line.
+
+Input and playback meters are pre-fader and post-trim: they show the signal
+after the channel trim but before its send fader, so moving a send or
+changing the selected submix does not change them. Hardware output meters
+are post-fader and show the finished bus.
+
+The green bar is mathematically correct RMS: a full-scale sine reads about
+-3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
+makes the RMS reading and the peak line both read 0 dB for a full-scale
+sine; TotalControl does not apply that shift.
+
+TotalControl uses a fixed two-second peak hold. TotalMix FX makes the hold
+time (0.1–9.9 s) and the number of consecutive full-scale samples that
+trigger OVR configurable; TotalControl uses the two-second default and a
+full-scale peak clip indicator instead.
+
+The meters show the level as it arrives at the interface. If the host
+(PipeWire) volume is below 0 dB, a full-scale recording reaches the
+interface that much lower and the playback meter reads correspondingly
+low. The device sheet shows the host volume and has a `0 dB` button; set it
+to unity and use the interface's own faders for monitoring. A linked pair
+shows one meter bar per channel; each bar shows that channel's own signal,
+so linking controls does not copy a signal from one channel to the other.
 
 The meters are read from the interface stream independently of the rest of the
 window. Moving a fader, opening a panel or scrolling does not interrupt or
-freeze them. A short transient lights the peak marker even when it falls
+freeze them. A short transient lights the yellow peak line even when it falls
 between two screen frames. When every meter has been quiet for a moment they
 stop redrawing, so an idle mixer stays still; the next signal wakes them
 immediately and the held peak still catches a transient shorter than a frame.
@@ -206,6 +237,8 @@ Input and playback pairs can be linked. When linked:
 - the fader shows the louder channel of the pair and moving it shifts both
   channels together, preserving their level difference;
 - the pair's balance is visible and adjustable from one knob;
+- the gain knob moves both preamps by the same step, preserving any offset
+  between them, and shows both values;
 - mute, solo, FX send, EQ, low cut and dynamics settings are shared from the
   left channel;
 - panel buttons split into a **linked pair**: a phase pair shows `Ø L` and
@@ -656,9 +689,11 @@ outputs appear only as pairs `L1`/`L3`/`L5` and `A1`/`A3`/`A5`/`A7`. The front
 knob cannot link or unlink a pair; the link state is a TotalControl setting.
 
 A linked input pair always shows both gains in the TotalControl Gain knob:
-the left gain above, the right gain below, even when they are equal. This
-mirrors the device, which always treats inputs 1–4 as unlinked. An unlinked
-input shows one value.
+the left gain above, the right gain below, even when they are equal. Turning
+that knob moves both preamps by the same step, preserving any offset between
+them. This mirrors the device's pair-adjust mode, which moves both channels
+whether or not they are linked. An unlinked input shows one value and moves
+only that channel.
 
 ### Output level
 

@@ -841,14 +841,11 @@ fn safe_clamp(v: f32, lo: f32, hi: f32) -> f32 {
     }
 }
 
-/// The meter's color zones, bottom to top, as (upper edge in dB, color):
-/// signal green up to -12 dB, amber to -3 dB, red above. The last edge is
-/// the top of the scale, so every level falls in some zone.
-const METER_ZONES: [(f32, Color); 3] = [
-    (-12.0, theme::MGREEN),
-    (-3.0, theme::YSIM),
-    (TOP_DB, theme::MRED),
-];
+/// The meter's color zones, bottom to top, as (upper edge in dB, color).
+/// TotalMix's RMS bar is green across the scale; overload is the separate
+/// red clip block at the top, not a red fill zone.  The fast peak
+/// indicator is the separate yellow line.
+const METER_ZONES: [(f32, Color); 1] = [(TOP_DB, theme::MGREEN)];
 
 /// Fill opacity. It used to be 0.55 so the ruler's numbers could be read
 /// *through* the wash; they have their own lane now (`RULER_LANE_W`), so
@@ -1013,26 +1010,38 @@ fn draw_meter_bar(
         }
     }
 
-    // Peak-hold marker: a thin bright line above the bar, held for the
+    // Peak-hold marker: a thin yellow line above the bar, held for the
     // configured time by `MeterAnim`.  It is independent of the bar's
     // fast fall, so a transient remains readable after the bar drops.
+    //
+    // TotalMix draws this line with zero attack and keeps it visible for
+    // any level on the scale.  Compare the two levels on the *display*
+    // curve, not in linear amplitude: a fixed linear gap hides quiet
+    // peaks (a 48 V transient on AN2 peaks around -57 dBFS, where the gap
+    // to the RMS bar is only ~0.0008 in amplitude but several pixels on
+    // the ruler).
     let p = peak.clamp(0.0, 1.0);
-    if p > l + 0.002 {
-        let peak_y = r.y + r.height - r.height * vol_to_t(p);
+    let peak_t = vol_to_t(p);
+    let level_t = vol_to_t(l);
+    let min_gap = 1.0 / r.height.max(1.0);
+    if p > 0.0 && peak_t > level_t + min_gap {
+        let peak_y = r.y + r.height - r.height * peak_t;
         let h = (1.5 * scale).max(1.0);
         frame.fill_rectangle(
             Point::new(r.x, (peak_y - h / 2.0).max(r.y)),
             Size::new(fill_w, h),
             Color {
-                a: 0.9,
-                ..theme::TEXT_PRIMARY
+                a: 0.95,
+                ..theme::YSIM
             },
         );
     }
 
     // Clip LED — a fixed indicator above the track, dim until triggered.
+    // TotalMix's overload is a peak condition: the RMS bar of a full-scale
+    // sine sits at -3 dB, so keying this off `l` would never light it.
     let clip_rect = Rectangle::new(Point::new(r.x, r.y), Size::new(fill_w, clip_h));
-    let clipping = l >= 0.95;
+    let clipping = p >= 0.999;
     let clip_color = if clipping {
         Color {
             a: FILL_ALPHA,
@@ -1479,6 +1488,25 @@ mod tests {
         // point is these two agree.
         let expected = db_to_t(20.0 * 0.5f32.log10());
         assert!((t - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_quiet_peak_line_stays_visible_on_the_tapered_scale() {
+        // AN2's 48 V switching transient measured about -57 dBFS peak
+        // against -64 dB RMS.  The old linear-gap test (`peak > level +
+        // 0.002`) hid it; comparing the tapered display positions keeps
+        // the yellow line visible.
+        let level = 10f32.powf(-64.0 / 20.0);
+        let peak = 10f32.powf(-57.0 / 20.0);
+        let height = 350.0;
+        assert!(
+            peak <= level + 0.002,
+            "the old linear-gap test must hide this quiet peak"
+        );
+        assert!(
+            vol_to_t(peak) > vol_to_t(level) + 1.0 / height,
+            "the tapered display curve must keep at least one pixel between the bar and the peak line"
+        );
     }
 
     #[test]
