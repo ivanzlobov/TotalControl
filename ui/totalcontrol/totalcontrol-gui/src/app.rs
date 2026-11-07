@@ -7382,12 +7382,17 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::QuickChannelSelected(cid) => state.quick_channel = cid,
         Message::SelectOutput(i) => {
-            state.sel_out = i;
+            // A click or OSC message can outlive the device it came from
+            // (an open submix list, a delayed controller update). Keep the
+            // remembered submix inside the current unit's output pairs; the
+            // Quick view derives an output channel from it.
+            let sel_out = i.min(state.device.output_pair_count().saturating_sub(1));
+            state.sel_out = sel_out;
             // Selecting a bus dismisses the Route flyout — it did its
             // job. Doesn't touch any other (Settings/Eq/Trim) flyout
             // that happens to be open elsewhere.
             close_route_flyout(state);
-            notify_osc_raw(state, "/submix", vec![OscType::Int(i as i32)]);
+            notify_osc_raw(state, "/submix", vec![OscType::Int(sel_out as i32)]);
         }
         Message::ModifiersChanged(m) => state.modifiers = m,
         Message::WindowSize(w, h) => {
@@ -9190,6 +9195,27 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     // The new unit has its own layout, topology and scene; never carry the
     // old device's host model into it.
     state.host_scene = None;
+    // Drop every transient channel id from the old topology before the new
+    // device is rendered.  A selected strip, open panel or queued pick-list
+    // action can otherwise name e.g. UCX output 12 on a 12-output Babyface
+    // and make the first frame index past the new output list.
+    state.selected.clear();
+    state.focus_channel = None;
+    state.select_anchor = None;
+    state.hovered_strip = None;
+    state.matrix_hover = None;
+    state.pending_flyout = None;
+    state.flyout_anim.clear();
+    state.collapse_anim.clear();
+    state.stereo_anim.clear();
+    state.assign_anim = None;
+    state.assign_menu = AssignMenu::Closed;
+    state.assign_pinned = false;
+    state.control_room_settings_open = false;
+    state.startup_mismatch = None;
+    state.startup_compare_pending = false;
+    state.startup_compare_scene = None;
+    state.pending_host_merge = None;
     state.undo_stack.clear();
     state.redo_stack.clear();
     state.connected = state.device.is_connected();
@@ -11427,6 +11453,14 @@ fn strip_params<'a>(
         name_locked: false,
         renameable: true,
     };
+
+    // A device switch can leave one stale id in the frame while the next
+    // update is queued.  Never index a channel array with an id the open
+    // device does not have; draw an empty strip until the switch handler
+    // has dropped it.
+    if !channel_exists(state, cid) {
+        return base;
+    }
 
     let caps = state.device.capabilities();
     match cid {
@@ -16017,7 +16051,12 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         .map(|(_, l)| l.clone());
 
     let quick_channel = state.quick_channel;
-    let sel_out = state.sel_out;
+    // Never derive the destination from a submix that belongs to the
+    // previous device; a stale selector may reach the view for one frame
+    // during a switch.
+    let sel_out = state
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
     let dest_cid = ChannelId::Output(sel_out * 2);
 
     // Rebuilt on every layout pass: the content sits behind a `responsive`
@@ -18619,6 +18658,55 @@ mod tests {
         let _ = update(&mut state, Message::Mute(cid, true));
         assert!(state.selected.contains(&cid));
         assert_eq!(state.sel_out, 2);
+    }
+
+    #[test]
+    fn a_stale_output_id_from_the_old_topology_cannot_panic_the_strip_renderer() {
+        let state = new(true, None, None);
+        assert_eq!(state.device.outputs().len(), 12);
+        let p = strip_params(&state, ChannelId::Output(12), state.sel_out);
+        assert!(p.name.is_empty());
+    }
+
+    #[test]
+    fn selecting_a_missing_submix_is_clamped_to_the_current_device() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::SelectOutput(12));
+        assert_eq!(
+            state.sel_out,
+            state.device.output_pair_count().saturating_sub(1)
+        );
+    }
+
+    #[test]
+    fn switching_devices_drops_channel_ids_from_the_previous_topology() {
+        let mut state = new(true, None, None);
+        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::MockUcx))
+            .expect("switch to the UCX simulation");
+
+        let stale = ChannelId::Output(12);
+        state.selected.insert(stale);
+        state.focus_channel = Some(stale);
+        state.select_anchor = Some(stale);
+        state.hovered_strip = Some(stale);
+        state.matrix_hover = Some((stale, 0));
+        state.pending_flyout = Some((stale, strip::FlyoutKind::Settings));
+        state
+            .flyout_open
+            .insert((stale, strip::FlyoutKind::Settings));
+
+        super::switch_device(&mut state, DeviceTarget::kind_only(DeviceKind::Mock))
+            .expect("switch back to the Babyface simulation");
+
+        assert!(state.selected.is_empty());
+        assert_eq!(state.focus_channel, None);
+        assert_eq!(state.select_anchor, None);
+        assert_eq!(state.hovered_strip, None);
+        assert_eq!(state.matrix_hover, None);
+        assert_eq!(state.pending_flyout, None);
+        assert!(state.flyout_open.is_empty());
+        assert!(state.sel_out < state.device.output_pair_count());
+        let _ = super::quick_view(&state);
     }
 
     #[test]
