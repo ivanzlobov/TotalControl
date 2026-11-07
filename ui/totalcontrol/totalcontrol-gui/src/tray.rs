@@ -95,6 +95,35 @@ impl ksni::Tray for Icon {
         "TotalControl".into()
     }
 
+    /// Give Plasma a themed name as well as the pixmap.  Some tray hosts
+    /// prefer the named icon and show nothing for a pixmap-only item.
+    fn icon_name(&self) -> String {
+        "totalcontrol".into()
+    }
+
+    /// Plasma loads a named icon through `IconThemePath` before the system
+    /// theme.  Materialise the packaged app icon into a private runtime
+    /// directory so development builds and installed builds both resolve
+    /// `totalcontrol` without requiring a system icon-theme update.
+    fn icon_theme_path(&self) -> String {
+        static PATH: OnceLock<String> = OnceLock::new();
+        PATH.get_or_init(|| {
+            let base = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir);
+            let dir = base.join("totalcontrol").join("tray-icons");
+            if std::fs::create_dir_all(&dir).is_err() {
+                return String::new();
+            }
+            let png = include_bytes!("../assets/totalcontrol-256.png");
+            if std::fs::write(dir.join("totalcontrol.png"), png).is_err() {
+                return String::new();
+            }
+            dir.to_string_lossy().into_owned()
+        })
+        .clone()
+    }
+
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         crate::icon::tray_rgba()
             .into_iter()
@@ -342,6 +371,20 @@ mod tests {
         assert!(tip.description.contains("Fireface"));
         assert_eq!(tip.icon_pixmap.len(), 4);
         assert!(tip.icon_pixmap.iter().all(|i| i.width == i.height));
+    }
+
+    #[test]
+    fn the_tray_item_exports_a_named_icon_as_well_as_the_pixmap() {
+        let icon = Icon {
+            status: Status::default(),
+        };
+        assert_eq!(ksni::Tray::icon_name(&icon), "totalcontrol");
+        let path = ksni::Tray::icon_theme_path(&icon);
+        if !path.is_empty() {
+            assert!(std::path::Path::new(&path).is_dir());
+            assert!(std::path::Path::new(&path).join("totalcontrol.png").is_file());
+        }
+        assert_eq!(ksni::Tray::icon_pixmap(&icon).len(), 4);
     }
 
     #[test]

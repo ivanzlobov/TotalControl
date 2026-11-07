@@ -11188,10 +11188,9 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     .spacing(theme::SPACE_SM * scale)
     .align_y(iced::Alignment::Center);
 
-    // The mark and the wordmark as one lockup, the same artwork the window
-    // icon wears (see `icon::mark`), flat white like every other engaged
-    // state and sized off the wordmark's own height. A missing asset just
-    // falls back to the plain wordmark.
+    // The knob/T mark without its tile, beside the wordmark and sized off
+    // the wordmark's own height. A missing asset just falls back to the
+    // plain wordmark.
     let brand_row: Element<'_, Message> = match crate::icon::mark() {
         Some((handle, ratio)) => {
             let mark_h = 20.0 * scale;
