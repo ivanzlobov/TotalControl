@@ -696,6 +696,62 @@ impl RmeDevice for MockBabyfacePro {
         Ok(())
     }
 
+    fn set_main_recall(&mut self, db: f32) -> Result<(), Error> {
+        let pair = self
+            .settings
+            .main_out
+            .ok_or_else(|| Error::InvalidChannel("Recall needs a Main Out".into()))?;
+        let level = 10f32.powf(db.clamp(-65.0, 6.0) / 20.0);
+        self.set_volume(ChannelId::Output(pair * 2), 0, level)?;
+        self.set_volume(ChannelId::Output(pair * 2 + 1), 0, level)
+    }
+
+    fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
+        if let Some(pair) = pair {
+            if pair >= self.output_pair_count() {
+                return Err(Error::InvalidChannel(format!("output pair {pair}")));
+            }
+        }
+        if self.settings.main_out != pair {
+            self.settings.speaker_b = false;
+            self.settings.main_out = pair;
+        }
+        Ok(())
+    }
+
+    fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
+        if let Some(pair) = pair {
+            if pair >= self.output_pair_count() {
+                return Err(Error::InvalidChannel(format!("output pair {pair}")));
+            }
+        }
+        if self.settings.main_b_out != pair {
+            self.settings.speaker_b = false;
+            self.settings.main_b_out = pair;
+        }
+        Ok(())
+    }
+
+    fn set_mute_fx(&mut self, on: bool) -> Result<(), Error> {
+        self.settings.mute_fx = on;
+        Ok(())
+    }
+
+    fn set_speaker_b(&mut self, on: bool) -> Result<(), Error> {
+        if self.settings.main_out.is_none() {
+            return Err(Error::InvalidChannel(
+                "Speaker B needs an assigned Main Out".into(),
+            ));
+        }
+        if self.settings.main_b_out.is_none() {
+            return Err(Error::InvalidChannel(
+                "Speaker B needs an assigned output".into(),
+            ));
+        }
+        self.settings.speaker_b = on;
+        Ok(())
+    }
+
     fn set_mono(&mut self, on: bool) -> Result<(), Error> {
         self.settings.mono = on;
         Ok(())

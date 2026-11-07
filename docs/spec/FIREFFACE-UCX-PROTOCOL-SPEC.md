@@ -418,7 +418,12 @@ backend.
 Echo BPM is a host-side field: changing it rewrites `0x3c22`.
 
 Mono Main Out writes `0x3f9e` bit 1 and `0x3f98 = 0x83ff`; switching it off
-writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`.
+writes `0x3f9e` bit 1 clear and `0x3f98 = 0xffff`. It mixes the assigned
+Main Out and Speaker B pairs; the Phones pairs keep their stereo signal.
+
+Dim attenuates the assigned Main and Speaker B output fader values and sets
+`0x3d03 = 1`. The Phones output fader values are not changed. Releasing Dim
+restores the saved fader values and writes `0x3d03 = 0`.
 
 Assigning Speaker B to an output pair writes `NN02 = 2` on that pair and
 `0x3d00 = 0` while Speaker B is off. Clearing the assignment writes

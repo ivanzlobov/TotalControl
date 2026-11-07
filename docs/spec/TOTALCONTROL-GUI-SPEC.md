@@ -763,16 +763,19 @@ Settings stays lit while its dialog is open. `assign` is a selector, not a
 monitoring button: it uses the same compact row and white drop decoration as a
 strip's output-bus trigger, and its row stays lit while the menu is open.
 
-Dim and Recall act on the assigned Main Out pair. Without an assigned Main
-Out both controls leave the mix unchanged and never fall back to a Phones
-pair.
+Recall acts on the assigned Main Out pair. Dim attenuates the assigned Main
+Out and Speaker B pairs; the Phones outputs are not affected. Without an
+assigned Main Out both controls leave the mix unchanged and never fall back
+to a Phones pair.
 
-Dim saves the current Main Out levels, lowers that pair by the configured Dim
-amount and engages the device Dim state. Releasing Dim restores the saved
-levels. A Main Out fader move while Dim is engaged changes the audible level
-but not the saved pre-Dim levels; releasing Dim returns to the saved levels.
-Changing the Main Dim amount while Dim is engaged re-applies the new amount to
-the saved levels. Reassigning or clearing the Main Out releases Dim first.
+Dim saves the current Main Out and Speaker B levels, lowers both speaker
+pairs by the configured Dim amount and engages the device Dim state. Turning
+Dim off restores the saved levels. A speaker fader move while Dim is engaged
+changes the audible level but not the saved pre-Dim levels; turning Dim off
+returns to the saved levels. Dim attenuates both speaker pairs, Main Out and
+Speaker B, and does not touch the Phones outputs. Changing the Main Dim
+amount while Dim is engaged re-applies the new amount to the saved levels.
+Reassigning or clearing the Main Out or Speaker B releases Dim first.
 
 Recall sets the underlying Main Out level to the configured listening volume
 once; it does not latch. When Dim is engaged, Recall updates the saved pre-Dim
@@ -780,13 +783,24 @@ levels and the current dimmed levels together.
 
 Dim and Speaker B are runtime monitoring states. Applying a scene,
 reconnecting, or a stream-start or sample-rate reapply leaves Dim off and does
-not attenuate the Main Out again. The saved scene contains the level that was
-audible, not a pending Dim operation. Speaker B requires assigned Main and
+not attenuate the Main Out again; Speaker B keeps its current monitor path.
+The saved scene contains the level that was audible, not a pending Dim
+operation. Speaker B requires assigned Main and
 Speaker B outputs; its button switches the monitor routing between those
 pairs, and clearing the Speaker B assignment also clears Speaker B. The
-`Link to Main` setting makes Speaker B follow Main fader, Recall and Dim
-changes; unlinked it keeps its own level. Mono and Mute FX are stored in the
-device scene.
+`Link to Main` setting makes Speaker B follow Main fader and Recall changes;
+Dim attenuates both speaker pairs whether linked or not, while the Phones
+outputs are unaffected.
+
+Mono is a latching monitor check: it mixes the assigned Main Out and Speaker
+B pairs to mono and feeds the same signal to both sides of each pair. It does
+not mix the Phones outputs. Mono is stored in the device scene.
+
+Mute FX is a latching scene control. It writes the FX-return levels of the
+AN1/2 and Phones output blocks to `-65 dB` (`0x1203`, `0x1303`, `0x1803`,
+`0x1903`) and restores their saved levels; it does not switch the Reverb or
+Echo processors off. `docs/work/CONTROL-ROOM-SETTINGS.md` records the open
+question about the assigned Main and Speaker B pairs on other outputs.
 
 Control Room channels are always stereo. An assigned pair is linked and
 cannot be unlinked, so the Settings panel's `STEREO` control stays engaged

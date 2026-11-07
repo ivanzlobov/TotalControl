@@ -572,7 +572,7 @@ literal dB value. The authoritative RME OSC table is
 | `/1/globalMute`, `/1/globalSolo` | none | host-side |
 | `/1/trim` | none | host-side |
 | `/1/mainDim` | `0x3d03` | 0/1 |
-| `/1/mainMono` | `0x3f9e` bit 1, `0x3f98` monitor mask | device monitor flags; preserve Talkback bit 0 |
+| `/1/mainMono` | `0x3f9e` bit 1, `0x3f98` monitor mask | speaker monitor path (Main Out and Speaker B); preserve Talkback bit 0 |
 | `/1/mainTalkback` | `0x3f9e` bit 0, read-modify-write | host/device monitor flags; preserve bit 1 (Mono Main Out) |
 | `/1/mainSpeakerB` | Main and Speaker B `NN02`, `0x3d00` | device monitor routing |
 | `/1/speakerBLinked` | none | host-side link state |

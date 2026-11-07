@@ -374,11 +374,12 @@ views of one value. The echo block also shows the FX bus level meters.
 ## 10. Control Room
 
 The Control Room section sits at the right of the Hardware Outputs row. It
-holds your monitoring destinations — `Main`, `Speaker B` and `Phones 1–4`.
-Every hardware output is either assigned in the Control Room or unassigned
-in the Hardware Outputs row; there are no empty slots.
+turns ordinary hardware outputs into monitoring destinations with fixed
+names: `Main`, `Speaker B` and `Phones 1–4`. Every hardware output is either
+assigned in the Control Room or remains an ordinary output in the Hardware
+Outputs row; there are no empty slots.
 
-### Who hears what
+### What the destinations mean
 
 The Control Room is not another mixer bus. It gives names and monitoring
 behaviour to hardware outputs you already have:
@@ -396,95 +397,139 @@ listen on Phones, and the Control Room decides which physical outputs play
 those roles. Assigning a pair moves it out of the ordinary Hardware Outputs
 row and gives it the fixed Control Room name.
 
-### Talkback and Listenback
+### The button stack
 
-Talkback is the engineer’s communication path to the performers. While
-Talkback is active, the selected talkback microphone is sent to the Phones
-outputs that receive it, and the other signals on those Phones outputs are
-attenuated so the performer can hear the engineer clearly without removing
-the cue mix permanently.
+The buttons are one channel wide, in TotalMix’s order:
 
-Listenback is the reverse direction: a microphone in the recording room is
-sent to Main while Talkback is active, with its own attenuation for the Main
-signal. RME’s Control Room uses both directions; TotalControl currently exposes the
-Talkback button and its receive switches.
+- **dim**, **recall**, **speaker B**;
+- **mono**, **talkback**, **ext. input**, **mute FX**;
+- **settings**, immediately above **assign**.
 
-Talkback attenuates the active sends in the monitored mix; silent routes are
-not rewritten. The talkback source is added only to outputs whose Talkback
-receive is enabled. Talkback also silences the FX returns on the monitored
-outputs; it does not switch the Reverb or Echo processors off. Releasing
-Talkback restores the previous sends and FX-return levels.
+| Button | Kind | Outputs affected | In the mixer scene |
+|---|---|---|---|
+| `dim` | Latching | Main Out and Speaker B | No, runtime only |
+| `recall` | Momentary | Main Out; Speaker B if linked | No, momentary |
+| `speaker B` | Latching | Switches monitoring between Main and Speaker B | No, runtime only |
+| `mono` | Latching | Main Out and Speaker B | Yes |
+| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | No, runtime only |
+| `ext. input` | Disabled | — | — |
+| `mute FX` | Latching | Reverb and Echo returns (see below) | Yes |
+| `settings` | Opens the dialog | — | No |
+| `assign` | Opens the menu | The monitoring assignments | No, preferences |
 
-These are temporary monitoring states. Releasing Talkback returns the
-monitor mix to its previous state; talkback is not stored in a scene.
+### Dim
 
-The button stack, on one channel, has:
+Dim needs an assigned Main Out. Without one it leaves the mix unchanged and
+never acts on a Phones output.
 
-- **dim** and **recall** (snapshot recall) and **speaker B**;
-- **mono**, **talkback**, **ext. input** and **mute FX**;
-- **settings** and **assign** at the bottom.
+**Dim** is a latching button. Engaging it saves the current Main Out and
+Speaker B levels, lowers both speaker pairs by the configured Dim amount and
+engages the device Dim state. Turning Dim off restores those saved levels.
+Moving a speaker fader while Dim is engaged changes the level you hear, but
+not the saved pre-Dim level: turning Dim off returns to the level saved when
+Dim was engaged. Changing the Main Dim amount while Dim is engaged updates
+the current attenuation immediately. Reassigning or clearing the Main Out or
+Speaker B turns Dim off first.
 
-| Button | Effect |
-|---|---|
-| `dim` | lowers the monitor level according to the Control Room Dim setting; releasing it restores the level |
-| `recall` | sets the monitor level to the configured listening volume; momentary, not a toggle |
-| `speaker B` | switches monitoring from Main to the Speaker B output |
-| `mono` | sums the Main monitor signal to mono |
-| `talkback` | sends the talkback source to the performers’ Phones outputs and dims the other Phones signals |
-| `ext. input` | selects the configured external input; its runtime path is not active in this build |
-| `mute FX` | removes Reverb and Echo from Main |
-| `settings` | opens the Control Room Settings dialog |
-| `assign` | assigns Main, Speaker B and Phones outputs and selects the Cue/PFL destination |
+Dim affects only the speaker paths, **Main Out and Speaker B**. It does not
+attenuate the Phones outputs; Talkback has its own Phones Dim amount.
+`Speaker B → Link to Main` additionally makes Speaker B follow the Main fader
+and Recall; Dim attenuates both speaker pairs whether or not they are linked.
 
-### Monitoring states
+Dim is runtime only. It is not stored in a scene, and applying a scene or
+changing the sample rate leaves Dim off without lowering the level again.
 
-Dim and Recall need an assigned Main Out. Without one they leave the mix
-unchanged; they never act on a Phones output.
+### Recall
 
-**Dim** saves the current Main Out level, lowers the Main Out by the configured
-Dim amount and engages the device Dim state. Releasing Dim restores the saved
-level. Moving the Main Out fader while Dim is engaged changes the level you
-hear, but not the saved pre-Dim level: releasing Dim returns to the level saved
-when Dim was engaged. Changing the Main Dim amount while Dim is engaged updates
-the current attenuation immediately. Reassigning or clearing the Main Out
-releases Dim first. Dim is runtime only and is not stored in a scene; applying
-a scene or changing the sample rate leaves Dim off without lowering the level
-again.
+**Recall** sets the Main Out level to the configured listening volume. It is
+momentary: it does not latch and has no lit state after release. When Dim is
+engaged, Recall changes the saved pre-Dim level and the current dimmed level
+together.
 
-**Recall** sets the Main Out level to the configured listening volume. When
-Dim is engaged, Recall changes the saved pre-Dim level and the current dimmed
-level together. Recall is momentary and does not latch.
+Recall needs an assigned Main Out and never acts on a Phones output. With
+`Speaker B → Link to Main` enabled, the Speaker B pair follows the Recall
+level; unlinked, it keeps its own level.
 
-**Speaker B** switches monitoring to the output assigned to Speaker B. Both
-the Main Out and Speaker B must be assigned first. Speaker B is runtime only:
-loading a scene or recalling a snapshot does not switch it back on.
+### Speaker B
+
+**Speaker B** is a latching button that switches monitoring from Main to the
+output assigned to Speaker B. Both the Main Out and Speaker B must be
+assigned first. The button lights while Speaker B is the active monitor
+path.
+
+Speaker B is runtime only and is not saved in a scene. Loading a scene or
+recalling a snapshot leaves the current monitor path unchanged, and clearing
+the Speaker B assignment also clears Speaker B and turns the button off.
 
 `Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
-to Main. Linked, the Speaker B pair follows Main fader, Recall and Dim changes;
-unlinked, it keeps its own level.
+to Main. Linked, the Speaker B pair follows Main fader and Recall changes;
+unlinked, it keeps its own fader level. Dim attenuates both speaker pairs in
+either case.
 
-**Mono** sums the Main monitor signal to mono. **Mute FX** removes the Reverb
-and Echo returns from the Control Room outputs. Both are part of the mixer
-scene.
+### Mono
 
-Talkback and Listenback are temporary monitoring states. Releasing Talkback
-returns the monitor mix to its previous state; Talkback is not stored in a
-scene.
+**Mono** is a latching monitor check. It sums the assigned Main Out pair and
+the Speaker B pair to mono and feeds the same signal to both sides of each
+pair, which is useful for checking mono compatibility and phase problems.
+The Phones outputs are not mixed by this button; they keep their own stereo
+signal.
 
-External Input and the Solo/PFL modes have settings in the Control Room
-Settings dialog. Their runtime signal paths are not yet connected in this
-build.
+Mono is part of the mixer scene, so it is saved and restored with the scene.
+
+### Talkback and Listenback
+
+Talkback is the engineer’s communication path to the performers. Click
+**talkback** to switch it on; the button stays lit while it is active. Click
+it again to switch it off. It is a temporary monitoring state and is not
+stored in a scene.
+
+While Talkback is active:
+
+- the selected Talkback microphone is sent to every output whose Talkback
+  receive switch is enabled;
+- the other signals on those outputs are attenuated by the Talkback Dim
+  amount, so the performer hears the engineer without losing the cue mix
+  permanently;
+- the FX returns on the affected outputs are silenced, without switching the
+  Reverb or Echo processors off;
+- Listenback, when configured, sends the recording-room microphone to Main
+  and attenuates Main by the Listenback Dim amount.
+
+Talkback only rewrites active routes; silent sends are left alone. Switching
+Talkback off restores the previous sends and FX-return levels.
+
+The Talkback source, Talkback Dim, Listenback source and Listenback Dim are
+set in Control Room Settings. The Talkback receive switch is on each output’s
+Settings panel. RME’s Control Room uses both directions; TotalControl exposes
+the Talkback button and the receive switches.
+
+### Mute FX
+
+**Mute FX** is a latching scene control. It silences the Reverb and Echo
+returns on the monitored outputs without switching either effect off.
+Releasing it restores the previous return levels.
+
+In the current build Mute FX writes the FX-return levels of the AN1/2 and
+Phones output blocks. On the default assignment that covers Main Out; if
+Main Out or Speaker B is assigned to another pair, Mute FX does not follow
+that assignment. Mute FX is part of the mixer scene.
+
+### External input
+
+**Ext. input** is shown dimmed and does nothing in this build. Its source and
+gain are stored in Control Room Settings, but the runtime signal path that
+would replace the Main mix with the selected stereo input is not implemented.
 
 ### What is stored where
 
 | State | Stored in |
 |---|---|
 | Main and Speaker B assignments | TotalControl preferences |
+| Phones 1–4 destinations | TotalControl preferences |
 | Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences |
 | Dim and Speaker B active state | Runtime only |
 | Talkback and Listenback active state | Runtime only |
 | Mono, Mute FX and the mixer levels | Mixer scene |
-| Phones 1–4 destinations | TotalControl preferences |
 
 ### Control Room Settings
 
@@ -505,18 +550,27 @@ five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
 are saved per device in TotalControl's own preferences, not in the mixer scene.
 
 `OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
-The settings in the dialog are not written while it is open.
+The settings in the dialog are not written while it is open. External Input
+and the Solo/PFL modes are stored, but their runtime signal paths are not
+connected in this build.
+
+### Assigning outputs
 
 `assign` opens the destination menu. The first level lists the destinations
 — the same names as the Control Room channels — plus `Cue/PFL to`, which
-chooses which output carries your cue/PFL signal and never
-reassigns hardware. The second level lists the hardware channels as their
-predetermined names (`None`, then every hardware output, current choice in
-bold). Choosing `None` clears a destination.
+chooses which output carries your cue/PFL signal and never reassigns
+hardware. The second level lists the hardware channels as their predetermined
+names (`None`, then every hardware output, current choice in bold). Choosing
+`None` clears a destination.
+
+A hardware output can sit in only one monitoring destination. Assigning it to
+a second destination moves it there instead of showing it twice. Clearing a
+destination returns the output to the Hardware Outputs row.
 
 Control Room channels are always stereo: an assigned pair is linked and
 cannot be unlinked, so the `STEREO` switch in its Settings panel stays
-engaged and does nothing. A split pair is linked when it is assigned.
+engaged and does nothing. A split pair is linked when it is assigned. `Set
+all channels mono` leaves the assigned pairs linked.
 
 Control Room channel names are fixed: they are always `Main`, `Speaker B`
 and `Phones 1`–`Phones 4`, regardless of the View → Names setting, and they

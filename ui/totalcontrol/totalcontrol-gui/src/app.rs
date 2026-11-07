@@ -590,6 +590,9 @@ impl RmeDevice for DeviceHandle {
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_main_out(pair))
     }
+    fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_main_out_b(pair))
+    }
     fn set_mute_fx(&mut self, on: bool) -> Result<(), totalcontrol_core::Error> {
         delegate!(self, set_mute_fx(on))
     }
@@ -3398,10 +3401,12 @@ pub fn apply_control_room_assignments(
     if state.device.settings().main_out != main {
         state.device.set_main_out(main)?;
     }
-    if let Some(b) = state.assign.get(1).copied().flatten() {
-        if state.device.settings().main_b_out != Some(b) {
-            state.device.set_main_out_b(Some(b))?;
-        }
+    // Include `None`: clearing the Speaker B destination must clear the
+    // device assignment too, otherwise the Speaker B button can still latch
+    // a pair the Control Room no longer shows.
+    let main_b = state.assign.get(1).copied().flatten();
+    if state.device.settings().main_b_out != main_b {
+        state.device.set_main_out_b(main_b)?;
     }
     state
         .device
@@ -14822,13 +14827,13 @@ fn set_output_volumes(scene: &mut totalcontrol_core::Scene, main_pair: usize, b_
 }
 
 /// TotalMix's Control Room, beside the output strips it monitors (manual
-/// 25.4): Assign picks the Main Out, and Dim, Recall, Mono, Speaker B,
-/// External Input, Mute FX and Talkback all apply to that output.
+/// 25.4): Assign picks the Main Out and Speaker B, and the monitoring
+/// buttons act on those speaker pairs or, for Talkback, the Phones outputs.
 ///
-/// `assign`, `ext. input` and `talkback` are drawn without a press handler,
-/// which iced renders dimmed: the assign register, the external-input level
-/// and the talkback source are unmeasured (`docs/work/UCX-OPEN-ITEMS.md`).
-/// The buttons below them carry TotalMix's own order and background groups.
+/// `ext. input` is drawn without a press handler, which iced renders
+/// dimmed: its runtime signal path is not implemented.  `assign` and
+/// `talkback` open their menus or toggle the device path directly.
+/// The buttons carry TotalMix's own order and background groups.
 /// One channel wide: the button stack is exactly a strip wide, and every
 /// Control Room button shares that width.
 const CONTROL_ROOM_W: f32 = strip::STRIP_W;
@@ -16724,10 +16729,21 @@ mod tests {
         let _ = update(&mut state, Message::AssignOutput(1, Some(3)));
         assert_eq!(state.assign[1], Some(3));
         assert_eq!(state.assign[2], None);
+        assert_eq!(
+            state.device.settings().main_b_out,
+            Some(3),
+            "assigning Speaker B must reach the device model"
+        );
         // None clears the slot, so the pair is no longer hidden from the
         // Hardware Outputs row.
         let _ = update(&mut state, Message::AssignOutput(1, None));
         assert_eq!(state.assign[1], None);
+        assert_eq!(
+            state.device.settings().main_b_out,
+            None,
+            "clearing Speaker B must clear the device assignment too"
+        );
+        assert!(!state.device.settings().speaker_b);
         assert!(
             !state.assigned_pairs().any(|p| p == 3),
             "the pair must return to the Hardware Outputs row"

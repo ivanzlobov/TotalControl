@@ -121,9 +121,9 @@ pub struct DeviceSettings {
     /// expose).
     #[serde(default)]
     pub optical_out_spdif: bool,
-    /// Dim engaged on the Phones output (an absolute -20 dB cut,
-    /// independent of the Phones master's own volume). See
-    /// [`RmeDevice::set_dim`].
+    /// Control-room Dim engaged.  The attenuation is applied to the
+    /// assigned Main Out and Speaker B pairs; the Phones outputs are not
+    /// dimmed by this flag.  Runtime only.  See [`RmeDevice::set_dim_with`].
     #[serde(default)]
     pub dim: bool,
     /// Control-room Speaker B switch.
@@ -136,10 +136,13 @@ pub struct DeviceSettings {
     /// Control-room Assign: the Main Out B (Speaker B) pair.
     #[serde(default)]
     pub main_b_out: Option<usize>,
-    /// Control-room Mono monitoring option (host-side).
+    /// Control-room Mono on the speaker monitor path (Main Out and Speaker
+    /// B).  Device-backed through the monitor flags, and part of the mixer
+    /// scene.
     #[serde(default)]
     pub mono: bool,
-    /// Control-room Mute FX option (host-side).
+    /// Control-room Mute FX.  Device-backed by writing the monitored
+    /// outputs' FX-return levels, and part of the mixer scene.
     #[serde(default)]
     pub mute_fx: bool,
     /// FX send level in dB (-65..0, None = unset). 0 dB = max send.

@@ -504,7 +504,14 @@ impl RmeDevice for Mirror {
     }
 
     fn capture_scene(&self) -> Scene {
-        self.scene.clone()
+        // Dim and Speaker B are live monitoring states, not mixer scene
+        // state.  The service snapshot keeps them so the Control Room
+        // buttons can latch, but a saved scene must not carry them: the
+        // output fader values already include Dim's attenuation.
+        let mut scene = self.scene.clone();
+        scene.settings.dim = false;
+        scene.settings.speaker_b = false;
+        scene
     }
 
     fn apply_scene(&mut self, scene: &Scene) -> Result<(), Error> {
@@ -1111,7 +1118,7 @@ pub fn requested() -> bool {
 impl DeviceService {
     /// Take ownership of `device` and start the service thread.
     pub fn spawn(mut device: DeviceHandle) -> Self {
-        let initial = device.capture_scene();
+        let initial = live_scene(&device);
         let info = capture_info(&device);
         let snapshot = Arc::new(Mutex::new(Snapshot {
             scene: initial,
@@ -1196,6 +1203,16 @@ impl Drop for DeviceService {
             let _ = join.join();
         }
     }
+}
+
+/// Capture the live model for the service snapshot.  `capture_scene`
+/// deliberately strips runtime monitor states for persistence; the UI
+/// needs those states to latch the Control Room buttons.
+fn live_scene(device: &DeviceHandle) -> Scene {
+    let mut scene = device.capture_scene();
+    scene.settings.dim = device.settings().dim;
+    scene.settings.speaker_b = device.settings().speaker_b;
+    scene
 }
 
 fn capture_info(device: &DeviceHandle) -> DeviceInfo {
@@ -1338,7 +1355,7 @@ fn run(
         if last_scene.elapsed() >= Duration::from_millis(50) {
             last_scene = Instant::now();
             let connected = device.is_connected();
-            let scene = device.capture_scene();
+            let scene = live_scene(device);
             let hardware_volume = device.hardware_volume();
             let panel_selection = device.panel_selection();
             if scene != last_model
@@ -1529,6 +1546,45 @@ mod tests {
         // per second).
         super::hold_peaks(&mut peaks, &[0.0], &mut at, start + Duration::from_millis(2900));
         assert!((peaks[0] - 0.8 * 0.1f32.powf(0.9)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn runtime_dim_latches_in_the_mirror_but_not_the_saved_scene() {
+        let mut service = DeviceService::spawn(mock());
+        let updates = service.take_updates().expect("the update receiver");
+        let mut mirror = super::Mirror::new(
+            service.snapshot(),
+            service.command_sender(),
+            service.meter_bus(),
+        );
+
+        assert!(!mirror.settings().dim);
+        assert!(mirror.set_dim(true).is_ok());
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                mirror.settings().dim
+            }),
+            "the live Dim flag reaches the mirror so the button can latch"
+        );
+        assert!(
+            !mirror.capture_scene().settings.dim,
+            "the saved scene must not carry the runtime Dim flag"
+        );
+
+        assert!(mirror.set_dim(false).is_ok());
+        assert!(
+            wait_for(|| {
+                while let Ok(snapshot) = updates.try_recv() {
+                    mirror.update(snapshot);
+                }
+                !mirror.settings().dim
+            }),
+            "turning Dim off clears the live flag"
+        );
+        service.stop();
     }
 
     #[test]

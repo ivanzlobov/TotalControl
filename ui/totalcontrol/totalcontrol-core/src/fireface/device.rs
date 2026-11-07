@@ -552,8 +552,10 @@ pub struct Fireface {
     mute_saved: HashMap<ChannelId, (Vec<f32>, Vec<i8>)>,
     /// Saved output fader while the output is muted.
     output_mute_saved: HashMap<usize, f32>,
-    /// Main Out pair and its saved levels while control-room Dim is engaged.
-    dim_saved: Option<(usize, f32, f32)>,
+    /// Speaker pairs and their saved levels while control-room Dim is
+    /// engaged.  RME's Dim attenuates the monitor speakers (Main and
+    /// Speaker B), not the Phones outputs.
+    dim_saved: Vec<(usize, f32, f32)>,
     /// Attenuation applied by the current control-room Dim.
     dim_amount_db: f32,
     /// Speaker B follows Main Out level changes.
@@ -1062,7 +1064,7 @@ impl Fireface {
             soloed: HashSet::new(),
             mute_saved: HashMap::new(),
             output_mute_saved: HashMap::new(),
-            dim_saved: None,
+            dim_saved: Vec::new(),
             dim_amount_db: -20.0,
             speaker_b_linked: false,
             talkback_saved: None,
@@ -2919,7 +2921,13 @@ impl Fireface {
         self.state_words.insert(addr, value);
         if self.startup_dump_pending {
             // Pre-connect snapshot only.  Do not let late dump words
-            // overwrite the scene loaded into the model.
+            // overwrite the scene loaded into the model.  Speaker B is a
+            // runtime monitor state that survives a scene load, so its
+            // state must be taken from the unit even while the rest of the
+            // dump is only recorded.
+            if addr == 0x3d00 {
+                self.settings.speaker_b = value != 0;
+            }
             self.record_ucx_readable_word(addr, value);
             if addr == 0x3d46 && self.state_words.len() > 1500 {
                 self.finish_startup_dump();
@@ -2976,6 +2984,7 @@ impl Fireface {
             }
         }
         match addr {
+            0x3d00 => self.settings.speaker_b = value != 0,
             ucx::global::DIM => self.settings.dim = value != 0,
             ucx::global::MONITOR_FLAGS => {
                 self.settings.mono = value & 0x02 != 0;
@@ -4230,14 +4239,15 @@ impl RmeDevice for Fireface {
                 let amount = amount_db.clamp(-65.0, 0.0);
                 if (amount - self.dim_amount_db).abs() > f32::EPSILON {
                     self.dim_amount_db = amount;
-                    if let Some((pair, left_level, right_level)) = self.dim_saved {
-                        let dim = move |v: f32| {
-                            if v <= 0.0 {
-                                0.0
-                            } else {
-                                db_to_linear(linear_db(v) + amount)
-                            }
-                        };
+                    let saved = self.dim_saved.clone();
+                    let dim = move |v: f32| {
+                        if v <= 0.0 {
+                            0.0
+                        } else {
+                            db_to_linear(linear_db(v) + amount)
+                        }
+                    };
+                    for (pair, left_level, right_level) in saved {
                         self.set_volume(
                             ChannelId::Output(pair * 2),
                             0,
@@ -4254,7 +4264,8 @@ impl RmeDevice for Fireface {
             return Ok(());
         }
         if !on {
-            if let Some((saved_pair, left_level, right_level)) = self.dim_saved.take() {
+            let saved = std::mem::take(&mut self.dim_saved);
+            for (saved_pair, left_level, right_level) in saved {
                 self.set_volume(ChannelId::Output(saved_pair * 2), 0, left_level)?;
                 self.set_volume(ChannelId::Output(saved_pair * 2 + 1), 0, right_level)?;
             }
@@ -4267,14 +4278,26 @@ impl RmeDevice for Fireface {
                 "Dim needs an assigned Main Out".into(),
             ));
         };
-        let left = pair * 2;
-        let right = left + 1;
-        if right >= self.outputs.len() {
-            return Err(Error::InvalidChannel(format!("Main Out pair {pair}")));
+        let mut pairs = vec![pair];
+        if let Some(b) = self.settings.main_b_out {
+            if b != pair {
+                pairs.push(b);
+            }
         }
-        let left_level = self.outputs[left].volume;
-        let right_level = self.outputs[right].volume;
-        self.dim_saved = Some((pair, left_level, right_level));
+        let mut saved = Vec::with_capacity(pairs.len());
+        for pair in pairs {
+            let left = pair * 2;
+            let right = left + 1;
+            if right >= self.outputs.len() {
+                return Err(Error::InvalidChannel(format!("Speaker pair {pair}")));
+            }
+            saved.push((
+                pair,
+                self.outputs[left].volume,
+                self.outputs[right].volume,
+            ));
+        }
+        self.dim_saved = saved;
         self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
         let amount = self.dim_amount_db;
         let dim = move |v: f32| {
@@ -4284,8 +4307,11 @@ impl RmeDevice for Fireface {
                 db_to_linear(linear_db(v) + amount)
             }
         };
-        self.set_volume(ChannelId::Output(left), 0, dim(left_level))?;
-        self.set_volume(ChannelId::Output(right), 0, dim(right_level))?;
+        let saved = self.dim_saved.clone();
+        for (pair, left_level, right_level) in saved {
+            self.set_volume(ChannelId::Output(pair * 2), 0, dim(left_level))?;
+            self.set_volume(ChannelId::Output(pair * 2 + 1), 0, dim(right_level))?;
+        }
         self.write_word(ucx::global::DIM, 1)?;
         self.settings.dim = true;
         Ok(())
@@ -4309,14 +4335,25 @@ impl RmeDevice for Fireface {
         }
         let level = db_to_linear(db.clamp(-65.0, 6.0));
         if self.settings.dim {
-            if let Some((saved_pair, _, _)) = self.dim_saved {
-                if saved_pair == pair {
-                    let dimmed = db_to_linear(linear_db(level) + self.dim_amount_db);
-                    self.dim_saved = Some((pair, level, level));
-                    self.set_volume(ChannelId::Output(left), 0, dimmed)?;
-                    self.set_volume(ChannelId::Output(right), 0, dimmed)?;
-                    return Ok(());
+            if let Some(entry) = self.dim_saved.iter_mut().find(|(p, _, _)| *p == pair) {
+                entry.1 = level;
+                entry.2 = level;
+                let dimmed = db_to_linear(linear_db(level) + self.dim_amount_db);
+                self.set_volume(ChannelId::Output(left), 0, dimmed)?;
+                self.set_volume(ChannelId::Output(right), 0, dimmed)?;
+                if self.speaker_b_linked {
+                    if let Some(b) = self.settings.main_b_out.filter(|b| *b != pair) {
+                        if let Some(entry) =
+                            self.dim_saved.iter_mut().find(|(p, _, _)| *p == b)
+                        {
+                            entry.1 = level;
+                            entry.2 = level;
+                            self.set_volume(ChannelId::Output(b * 2), 0, dimmed)?;
+                            self.set_volume(ChannelId::Output(b * 2 + 1), 0, dimmed)?;
+                        }
+                    }
                 }
+                return Ok(());
             }
         }
         self.set_volume(ChannelId::Output(left), 0, level)?;
@@ -4342,9 +4379,9 @@ impl RmeDevice for Fireface {
         if previous == pair {
             return Ok(());
         }
-        // Dim belongs to the pair that was Main when it engaged.  Release
-        // it before moving or clearing the assignment, so the old pair
-        // returns to its saved level.
+        // Dim saved the levels of the old Main and Speaker B pairs.
+        // Release it before moving or clearing the assignment, so those
+        // pairs return to their saved levels.
         if self.settings.speaker_b {
             self.set_speaker_b(false)?;
         }
@@ -4387,6 +4424,9 @@ impl RmeDevice for Fireface {
         }
         if self.settings.speaker_b {
             self.set_speaker_b(false)?;
+        }
+        if self.settings.dim {
+            self.set_dim(false)?;
         }
         self.settings.main_b_out = pair;
         if let Some(old) = previous {
@@ -4511,6 +4551,22 @@ impl RmeDevice for Fireface {
                         if idx < self.outputs.len() {
                             let volume = self.outputs[idx].volume;
                             self.set_volume(ChannelId::Output(b * 2 + side), 0, volume)?;
+                        }
+                    }
+                    // If the link is engaged while Dim is active, the B
+                    // pair adopts the Main pair's saved pre-Dim levels as
+                    // well as its current dimmed levels.
+                    if self.settings.dim {
+                        if let Some((_, left, right)) =
+                            self.dim_saved.iter().find(|(pair, _, _)| *pair == main).copied()
+                        {
+                            match self.dim_saved.iter_mut().find(|(pair, _, _)| *pair == b) {
+                                Some(entry) => {
+                                    entry.1 = left;
+                                    entry.2 = right;
+                                }
+                                None => self.dim_saved.push((b, left, right)),
+                            }
                         }
                     }
                 }
@@ -5557,7 +5613,7 @@ impl RmeDevice for Fireface {
             // already in the output fader values; applying the flag again
             // would dim the Main Out a second time.
             self.settings.dim = false;
-            self.dim_saved = None;
+            self.dim_saved.clear();
             self.write_word(ucx::global::DIM, 0)?;
             self.set_mono(self.settings.mono)?;
             self.set_mute_fx(self.settings.mute_fx)?;
@@ -6188,6 +6244,52 @@ mod tests {
     }
 
     #[test]
+    fn ucx_state_word_reports_speaker_b_active() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.apply_ucx_state_word(0x3d00, 6);
+        assert!(dev.settings().speaker_b);
+        dev.apply_ucx_state_word(0x3d00, 0);
+        assert!(!dev.settings().speaker_b);
+    }
+
+    #[test]
+    fn ucx_startup_dump_reports_speaker_b_active() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.startup_dump_pending = true;
+        dev.apply_ucx_state_word(0x3d00, 1);
+        assert!(
+            dev.settings().speaker_b,
+            "the pre-connect dump must expose a Speaker B state set elsewhere"
+        );
+        dev.apply_ucx_state_word(0x3d00, 0);
+        assert!(!dev.settings().speaker_b);
+    }
+
+    #[test]
+    fn ucx_dim_affects_main_and_speaker_b_but_not_phones() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        let phones = (dev.outputs()[0].volume, dev.outputs()[1].volume);
+        let main_before = (dev.outputs()[2].volume, dev.outputs()[3].volume);
+        let b_before = (dev.outputs()[4].volume, dev.outputs()[5].volume);
+
+        dev.set_dim_with(true, -20.0).unwrap();
+        assert!(dev.outputs()[2].volume < main_before.0);
+        assert!(dev.outputs()[3].volume < main_before.1);
+        assert!(dev.outputs()[4].volume < b_before.0);
+        assert!(dev.outputs()[5].volume < b_before.1);
+        assert!((dev.outputs()[0].volume - phones.0).abs() < 1e-6);
+        assert!((dev.outputs()[1].volume - phones.1).abs() < 1e-6);
+
+        dev.set_dim(false).unwrap();
+        assert!((dev.outputs()[2].volume - main_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[3].volume - main_before.1).abs() < 1e-6);
+        assert!((dev.outputs()[4].volume - b_before.0).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - b_before.1).abs() < 1e-6);
+    }
+
+    #[test]
     fn ucx_speaker_b_link_follows_main_volume_changes() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
@@ -6226,6 +6328,27 @@ mod tests {
         let level = db_to_linear(-10.0);
         assert!((dev.outputs()[4].volume - level).abs() < 1e-6);
         assert!((dev.outputs()[5].volume - level).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ucx_speaker_b_link_during_dim_adopts_the_main_saved_level() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
+        dev.set_output_volume(1, 0, 0.4).unwrap();
+        dev.set_output_volume(2, 0, 0.8).unwrap();
+
+        dev.set_dim_with(true, -20.0).unwrap();
+        dev.set_speaker_b_linked(true).unwrap();
+        // B follows Main's current (dimmed) level while linked.
+        let dimmed = 0.4 * 0.1;
+        assert!((dev.outputs()[4].volume - dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - dimmed).abs() < 1e-6);
+
+        // The saved pre-Dim level is Main's, not B's old independent level.
+        dev.set_dim(false).unwrap();
+        assert!((dev.outputs()[4].volume - 0.4).abs() < 1e-6);
+        assert!((dev.outputs()[5].volume - 0.4).abs() < 1e-6);
     }
 
     #[test]
