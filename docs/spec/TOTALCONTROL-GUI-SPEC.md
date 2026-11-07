@@ -61,7 +61,7 @@ A full strip contains:
 - channel name and type;
 - pan or balance knob;
 - mute and solo; outputs use mute and cue;
-- level fader and a meter with a green RMS bar, a yellow peak line and
+- level fader and a meter with a coloured RMS bar, a matching peak line and
   peak hold;
 - a right-hand column in fixed order: Trim, settings gear, EQ, Dynamics;
 - the channel's active panel, when open.
@@ -240,20 +240,22 @@ click.
 
 Each channel meter has the two TotalMix indicators:
 
-- a **green RMS bar** with a slow time constant;
-- a **yellow peak line** with zero attack, held for a fixed two seconds and
-  then decaying;
-- a **fixed red clip block** at the top, which lights when the peak reaches
-  full scale; the RMS bar itself stays green.
+- an **RMS bar** with a slow time constant, coloured in three bands: green
+  below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
+- a **peak line** with zero attack, held for a fixed two seconds and then
+  decaying; its colour follows the same green/yellow/red bands;
+- a **fixed red OVR block** at the top, which lights when a full-scale
+  sample is detected.
 
-Peak hold applies only to the yellow line. The green RMS bar is never held;
-it continues to follow the RMS value. The meter scale runs from -60 dB at
-the bottom to +6 dB at the top; below -60 dB reads as silence. The green bar
-is mathematically correct RMS, so a full-scale sine reads about -3 dB; no
-RMS +3 dB shift is applied.
+Peak hold applies only to the peak line. The RMS bar is never held; it
+continues to follow the RMS value. The meter scale runs from -60 dB at the
+bottom to +6 dB at the top; below -60 dB reads as silence. About 6 dB of
+headroom above 0 dB is visible as the red band before the OVR block lights.
+The bar is mathematically correct RMS, so a full-scale sine reads about
+-3 dB; no RMS +3 dB shift is applied.
 
-The peak hold is fixed at two seconds. The red clip block lights on a
-full-scale peak; there is no configurable hold time or OVR sample count.
+The peak hold is fixed at two seconds. The OVR block lights on a full-scale
+peak; there is no configurable hold time or OVR sample count.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters

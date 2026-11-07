@@ -145,7 +145,10 @@ impl MeterFrame {
 /// they could be read through it. The column is now `[meter][ruler lane]`,
 /// the meter fully opaque; `METER_RULER_W` is still the whole column, so
 /// `layout_x` and the collapsed `vu_meter` keep sizing against one number.
-const METER_W: f32 = 9.0;
+/// Width of the coloured VU wash.  Kept a little wider than the minimum
+/// needed for the ruler labels so the stereo bars in a linked pair and the
+/// meter against a busy fader remain easy to read at normal zoom.
+const METER_W: f32 = 13.0;
 const LANE_GAP: f32 = 1.0;
 const RULER_LANE_W: f32 = 12.0;
 const METER_RULER_W: f32 = METER_W + LANE_GAP + RULER_LANE_W;
@@ -201,6 +204,24 @@ pub(crate) fn vol_to_t(vol: f32) -> f32 {
         0.0
     } else {
         db_to_t(20.0 * vol.log10())
+    }
+}
+
+/// Colour of a meter segment at `vol` (linear amplitude), matching the
+/// three bands TotalMix uses: green below -3 dB, yellow from -3 dB to 0 dB,
+/// red above 0 dB.
+fn meter_zone_color(vol: f32) -> Color {
+    let db = if vol > 0.0 {
+        20.0 * vol.log10()
+    } else {
+        FLOOR_DB
+    };
+    if db > 0.0 {
+        theme::MRED
+    } else if db > -3.0 {
+        theme::YSIM
+    } else {
+        theme::MGREEN
     }
 }
 
@@ -842,10 +863,15 @@ fn safe_clamp(v: f32, lo: f32, hi: f32) -> f32 {
 }
 
 /// The meter's color zones, bottom to top, as (upper edge in dB, color).
-/// TotalMix's RMS bar is green across the scale; overload is the separate
-/// red clip block at the top, not a red fill zone.  The fast peak
-/// indicator is the separate yellow line.
-const METER_ZONES: [(f32, Color); 1] = [(TOP_DB, theme::MGREEN)];
+/// Current TotalMix (2.x) colours the VU bar in three bands: green below
+/// -3 dB, yellow from -3 dB to 0 dB, and red above 0 dB.  Its meter scale
+/// keeps about 6 dB of headroom above 0, so a hot signal is visible as a
+/// red segment before the separate OVR block lights.
+const METER_ZONES: [(f32, Color); 3] = [
+    (-3.0, theme::MGREEN),
+    (0.0, theme::YSIM),
+    (TOP_DB, theme::MRED),
+];
 
 /// Fill opacity. It used to be 0.55 so the ruler's numbers could be read
 /// *through* the wash; they have their own lane now (`RULER_LANE_W`), so
@@ -880,13 +906,17 @@ const FILL_ALPHA: f32 = 0.92;
 /// Splits the meter column into one full-width bar, or two thin bars for a
 /// linked stereo pair.
 fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
-    if !second {
-        return (r, None);
-    }
-    let gap = 1.0 * scale;
+    // Every bar is half the wash column, whether the channel is mono or
+    // stereo.  A mono channel shows one left-aligned bar, not a full-width
+    // bar that reads as two stereo bars merged together.
+    let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
+    let left = Rectangle::new(r.position(), Size::new(half_w, r.height));
+    if !second {
+        return (left, None);
+    }
     (
-        Rectangle::new(r.position(), Size::new(half_w, r.height)),
+        left,
         Some(Rectangle::new(
             Point::new(r.x + half_w + gap, r.y),
             Size::new(half_w, r.height),
@@ -1026,22 +1056,26 @@ fn draw_meter_bar(
     let min_gap = 1.0 / r.height.max(1.0);
     if p > 0.0 && peak_t > level_t + min_gap {
         let peak_y = r.y + r.height - r.height * peak_t;
-        let h = (1.5 * scale).max(1.0);
+        // A 2.5 px marker is still a line, but stays visible against the
+        // opaque fill and the ruler marks at the default UI scale.
+        let h = (2.5 * scale).max(1.0);
         frame.fill_rectangle(
             Point::new(r.x, (peak_y - h / 2.0).max(r.y)),
             Size::new(fill_w, h),
             Color {
                 a: 0.95,
-                ..theme::YSIM
+                ..meter_zone_color(p)
             },
         );
     }
 
-    // Clip LED — a fixed indicator above the track, dim until triggered.
-    // TotalMix's overload is a peak condition: the RMS bar of a full-scale
-    // sine sits at -3 dB, so keying this off `l` would never light it.
+    // OVR block — a fixed indicator above the track, dim until triggered.
+    // TotalMix's overload detection counts full-scale samples, so the
+    // threshold is 0 dBFS (linear 1.0), not the top of the +6 dB display
+    // range and not a level below full scale.  The tiny epsilon keeps a
+    // value that should be 1.0 from being lost to float rounding.
     let clip_rect = Rectangle::new(Point::new(r.x, r.y), Size::new(fill_w, clip_h));
-    let clipping = p >= 0.999;
+    let clipping = p >= 1.0 - 1e-5;
     let clip_color = if clipping {
         Color {
             a: FILL_ALPHA,
@@ -1601,6 +1635,27 @@ mod tests {
     }
 
     #[test]
+    fn stereo_meter_bars_never_touch() {
+        let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
+        let (left, right) = meter_split(r, 1.0, true);
+        let right = right.expect("a stereo meter has a right bar");
+        assert!(
+            right.x >= left.x + left.width + 1.0,
+            "the two bars need at least one clear pixel"
+        );
+        assert!(right.x + right.width <= r.x + r.width + f32::EPSILON);
+    }
+
+    #[test]
+    fn mono_meter_bar_has_one_stereo_bar_width() {
+        let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
+        let (mono, _) = meter_split(r, 1.0, false);
+        let (stereo_left, _) = meter_split(r, 1.0, true);
+        assert!((mono.width - stereo_left.width).abs() < f32::EPSILON);
+        assert!((mono.height - r.height).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn meter_zones_cover_the_scale_in_order() {
         let mut lower = FLOOR_DB;
         for (upper, _) in METER_ZONES {
@@ -1608,5 +1663,16 @@ mod tests {
             lower = upper;
         }
         assert_eq!(lower, TOP_DB);
+    }
+
+    #[test]
+    fn meter_zone_colors_match_the_three_totalmix_bands() {
+        let at = |db: f32| meter_zone_color(10f32.powf(db / 20.0));
+        assert_eq!(at(-12.0), theme::MGREEN);
+        assert_eq!(at(-3.0), theme::MGREEN);
+        assert_eq!(at(-2.9), theme::YSIM);
+        assert_eq!(at(0.0), theme::YSIM);
+        assert_eq!(at(0.1), theme::MRED);
+        assert_eq!(meter_zone_color(0.0), theme::MGREEN);
     }
 }

@@ -91,7 +91,7 @@ const COLLAPSED_METER_H: f32 = STRIP_H - COLLAPSED_CHROME_H;
 /// strips there measure ~29px against ~75px full strips — a ~0.39 ratio,
 /// well under half, not the ~0.6 ours had. `44` keeps that same ratio
 /// against the current (wider) `STRIP_W` while still leaving room for
-/// the existing `vu_meter` widget's own fixed `METER_RULER_W` (30) plus
+/// the existing `vu_meter` widget's own fixed meter/ruler column plus
 /// padding without clipping it — matching TotalMix's exact ~0.39 would
 /// need a narrower meter widget too, not attempted this pass.
 pub(crate) const COLLAPSED_W: f32 = 44.0;

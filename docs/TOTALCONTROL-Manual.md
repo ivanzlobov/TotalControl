@@ -170,33 +170,36 @@ between its two channels; it appears only while the pair is linked.
 
 Each meter has two indicators, following TotalMix FX:
 
-- the **green bar is RMS**, with a deliberately slow time constant so it
-  shows average loudness;
-- the **yellow line is peak**, with zero attack so a single full-scale
-  sample is visible; it is held for a fixed two seconds and then decays;
-- **overload is the red clip block** above the bar; the bar itself stays
-  green. The block lights when the peak reaches full scale.
+- the **RMS bar** has a deliberately slow time constant so it shows average
+  loudness. It is green below -3 dB, yellow from -3 dB to 0 dB and red above
+  0 dB;
+- the **peak line** has zero attack so a single full-scale sample is
+  visible; it is held for a fixed two seconds and then decays. Its colour
+  follows the same green/yellow/red bands;
+- **overload is the red OVR block** above the bar. It lights when a
+  full-scale sample is detected.
 
-Peak hold applies only to the yellow peak line. The green RMS bar is not
-held and keeps following the RMS signal.
+Peak hold applies only to the peak line. The RMS bar is not held and keeps
+following the RMS signal.
 
-The meter scale runs from -60 dB at the bottom to +6 dB at the top. A level
-below -60 dB reads as silence and does not draw a peak line.
+The meter scale runs from -60 dB at the bottom to +6 dB at the top, leaving
+about 6 dB of headroom above 0 dB for the red band. A level below -60 dB
+reads as silence and does not draw a peak line.
 
 Input and playback meters are pre-fader and post-trim: they show the signal
 after the channel trim but before its send fader, so moving a send or
 changing the selected submix does not change them. Hardware output meters
 are post-fader and show the finished bus.
 
-The green bar is mathematically correct RMS: a full-scale sine reads about
+The RMS bar is mathematically correct RMS: a full-scale sine reads about
 -3 dB on it. TotalMix FX offers an optional **RMS +3 dB** display shift that
 makes the RMS reading and the peak line both read 0 dB for a full-scale
 sine; TotalControl does not apply that shift.
 
 TotalControl uses a fixed two-second peak hold. TotalMix FX makes the hold
 time (0.1–9.9 s) and the number of consecutive full-scale samples that
-trigger OVR configurable; TotalControl uses the two-second default and a
-full-scale peak clip indicator instead.
+trigger OVR configurable; TotalControl uses the two-second hold and a
+full-scale OVR block instead.
 
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the
@@ -208,7 +211,7 @@ so linking controls does not copy a signal from one channel to the other.
 
 The meters are read from the interface stream independently of the rest of the
 window. Moving a fader, opening a panel or scrolling does not interrupt or
-freeze them. A short transient lights the yellow peak line even when it falls
+freeze them. A short transient lights the peak line even when it falls
 between two screen frames. When every meter has been quiet for a moment they
 stop redrawing, so an idle mixer stays still; the next signal wakes them
 immediately and the held peak still catches a transient shorter than a frame.
