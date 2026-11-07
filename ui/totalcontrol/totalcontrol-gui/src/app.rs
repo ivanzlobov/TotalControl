@@ -16266,8 +16266,6 @@ mod tests {
 
     #[test]
     fn page_feedback_uses_classic_addresses_and_val_companions() {
-        use iced::futures::TryStreamExt;
-
         let mut state = new(true, None, None);
         state.device.settings_mut().main_out = Some(0);
         let (tx, mut rx) = iced::futures::channel::mpsc::channel(4096);
@@ -16275,7 +16273,7 @@ mod tests {
         super::notify_rme_page(&mut state, 1);
 
         let mut addrs = Vec::new();
-        while let Ok(Some(message)) = rx.try_next() {
+        while let Ok(message) = rx.try_recv() {
             if let crate::osc::OscOutbound::Raw { addr, .. } = message {
                 addrs.push(addr);
             }
