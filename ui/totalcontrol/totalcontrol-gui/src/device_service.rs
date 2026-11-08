@@ -1416,27 +1416,14 @@ fn run(
             let playbacks = device
                 .device_playback_meters()
                 .unwrap_or_else(|| device.playback_meters());
-            let mut outputs = device.device_output_meters().unwrap_or_default();
+            let outputs = device.device_output_meters().unwrap_or_default();
             let input_peaks = device.input_peaks().unwrap_or_else(|| inputs.clone());
             let playback_peaks = device
                 .device_playback_peaks()
                 .unwrap_or_else(|| playbacks.clone());
-            let mut output_peaks = device
+            let output_peaks = device
                 .device_output_peaks()
                 .unwrap_or_else(|| outputs.clone());
-            // A muted output reads zero even if a backend's post-fader
-            // packet is taken before its mute stage, preserving the
-            // direct-path display.
-            for (i, channel) in device.outputs().iter().enumerate() {
-                if channel.mute {
-                    if let Some(level) = outputs.get_mut(i) {
-                        *level = 0.0;
-                    }
-                    if let Some(peak) = output_peaks.get_mut(i) {
-                        *peak = 0.0;
-                    }
-                }
-            }
             let fx = device.fx_meters().unwrap_or([0.0, 0.0]);
             let overload = device.fx_overload().unwrap_or([false, false]);
             let mut m = meters.lock().unwrap();

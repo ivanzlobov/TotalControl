@@ -7889,17 +7889,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             let playback_trims: Vec<f32> =
                 state.device.playbacks().iter().map(|c| c.trim).collect();
             let pb_levels = trim_meter_levels(&pb_levels, &playback_trims);
-            let mut out_levels = device_output
+            let out_levels = device_output
                 .unwrap_or_else(|| state.device.output_meters_from(&in_levels, &pb_levels));
-            // A muted output must read zero even if a backend's post-fader
-            // packet is taken before its mute stage.
-            for (i, ch) in state.device.outputs().iter().enumerate() {
-                if ch.mute {
-                    if let Some(level) = out_levels.get_mut(i) {
-                        *level = 0.0;
-                    }
-                }
-            }
             for (i, m) in state.playback_meters.iter_mut().enumerate() {
                 m.step_elapsed(pb_levels.get(i).copied().unwrap_or(0.0));
             }

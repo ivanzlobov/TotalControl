@@ -505,11 +505,12 @@ mod tests {
     }
 
     #[test]
-    fn output_mode_bit_one_is_not_mute() {
+    fn output_mode_bit_one_is_not_the_output_mute_bit() {
         let mut scene = scene();
         scene.outputs[2].mute = false;
         let mut words = HashMap::new();
-        // AN1's 0xNN02 is 2: Main Out, not mute.
+        // AN1's 0xNN02 = 2 is monitor-muted.  The dump does not decode the
+        // mode word, so it must not be mistaken for output mute bit 0.
         words.insert(0x1202, 2);
         let diff = UcxDump::new(words).differences_into(&mut scene);
         assert!(diff.is_empty(), "{diff:?}");

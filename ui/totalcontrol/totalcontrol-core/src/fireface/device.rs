@@ -1932,16 +1932,18 @@ impl Fireface {
         )
     }
 
-    /// The output mode word: bit 0 = mute, bit 1 = this pair is the Main
-    /// Out. Both bits share `0xNN02`, so every write composes the whole
-    /// word rather than clobbering the Main flag with a mute.
+    /// The output mode word: bit 0 = mute, bit 1 = monitor-muted.
+    ///
+    /// Bit 1 is not an assignment marker.  Only the Main pair is
+    /// monitor-muted, and only while Speaker B is active.  An assigned
+    /// Speaker B pair stays at its normal mode while Speaker B is off;
+    /// writing bit 1 merely because the pair was assigned mutes it.
     fn ucx_write_output_mode(&self, idx: usize, mute: bool) -> Result<(), Error> {
         let pair = idx / 2;
-        let monitoring = self.settings.main_out == Some(pair)
-            || self.settings.main_b_out == Some(pair);
+        let monitor_muted = self.settings.speaker_b && self.settings.main_out == Some(pair);
         self.ucx_write_output_mode_value(
             idx,
-            (mute as u16) | ((monitoring as u16) << 1),
+            (mute as u16) | ((monitor_muted as u16) << 1),
         )
     }
 
@@ -3383,11 +3385,28 @@ impl Fireface {
         self.ucx_write_options()
     }
 
+    /// Whether the assigned Main Out pair is muted.  TotalMix mirrors this
+    /// in `0x3f9e` bit 2; the UCX keeps the output muted until that bit is
+    /// cleared as well as the `NN02` mode bit.
+    fn main_out_muted(&self) -> bool {
+        let Some(pair) = self.settings.main_out else {
+            return false;
+        };
+        self.outputs
+            .get(pair * 2)
+            .is_some_and(|output| output.mute)
+            || self
+                .outputs
+                .get(pair * 2 + 1)
+                .is_some_and(|output| output.mute)
+    }
+
     /// Current monitor flag word (`0x3f9e`): bit 0 Talkback, bit 1 Mono,
-    /// bit 5 External Input.
+    /// bit 2 Main Out mute, bit 5 External Input.
     fn monitor_flags(&self) -> u16 {
         (self.talkback_active as u16)
             | ((self.settings.mono as u16) << 1)
+            | ((self.main_out_muted() as u16) << 2)
             | ((self.settings.external_input as u16) << 5)
     }
 
@@ -4106,6 +4125,9 @@ impl RmeDevice for Fireface {
                     }
                 }
                 self.outputs[idx].mute = mute;
+                if !self.is_uc() && self.settings.main_out == Some(idx / 2) {
+                    self.write_word(0x3f9e, self.monitor_flags())?;
+                }
             }
             ChannelId::Input(idx) => {
                 if idx >= self.inputs.len() {
@@ -4598,10 +4620,10 @@ impl RmeDevice for Fireface {
         self.set_volume(ChannelId::Output(right), 0, level)
     }
 
-    /// Control Room Assign: the Main Out is marked by bit 1 of the output
-    /// mode word (`0xNN02`), and only one pair carries it. The old pair's
-    /// bit is cleared, the new one's set; each side of the pair gets its
-    /// own word, composed with that channel's mute (capture H51/H52).
+    /// Control Room Assign: Main Out is a host-side monitor assignment on
+    /// the UCX.  The physical output keeps its own submix and mode word;
+    /// only the monitor state word changes.  `0xNN02` bit 1 means
+    /// monitor-muted, not "this pair is Main".
     fn set_main_out(&mut self, pair: Option<usize>) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
@@ -4635,24 +4657,16 @@ impl RmeDevice for Fireface {
             self.set_dim(false)?;
         }
         self.settings.main_out = pair;
-        if let Some(old) = previous {
-            if old < BLOCKS / 2 {
-                let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(old * 2, mute)?;
-                self.ucx_write_output_mode(old * 2 + 1, mute)?;
-            }
-        }
-        if let Some(pair) = pair {
-            let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-            self.ucx_write_output_mode(pair * 2, mute)?;
-            self.ucx_write_output_mode(pair * 2 + 1, mute)?;
-        }
+        // Assigning Main is host-side monitor bookkeeping on the UCX.  The
+        // physical output keeps its normal submix; writing the output mode
+        // word here would set bit 1 and mute the newly selected pair.
+        self.write_word(0x3f9e, self.monitor_flags())?;
         Ok(())
     }
 
-    /// Assign Main Out B: bit 1 on the chosen pair, plus the control-room
-    /// state word.  The captured state word is `0` while Speaker B is off
-    /// and `6` while it is active.
+    /// Assign Speaker B: the pair is host-side monitor bookkeeping.  The
+    /// control-room state word stays `0` while Speaker B is off; assigning
+    /// a pair must not set that pair's mode bit or mute it.
     fn set_main_out_b(&mut self, pair: Option<usize>) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
@@ -4681,28 +4695,13 @@ impl RmeDevice for Fireface {
             self.set_dim(false)?;
         }
         self.settings.main_b_out = pair;
-        if let Some(old) = previous {
-            if old < BLOCKS / 2 {
-                let mute = self.outputs.get(old * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(old * 2, mute)?;
-                self.ucx_write_output_mode(old * 2 + 1, mute)?;
-            }
+        // Assigning Speaker B is host-side bookkeeping.  Writing NN02 bit 1
+        // here mutes the newly assigned pair; the pair must keep its normal
+        // mode until Speaker B is actually switched on.
+        if pair.is_none() {
+            self.settings.speaker_b = false;
         }
-        match pair {
-            Some(pair) => {
-                let mute = self.outputs.get(pair * 2).map(|o| o.mute).unwrap_or(false);
-                self.ucx_write_output_mode(pair * 2, mute)?;
-                self.ucx_write_output_mode(pair * 2 + 1, mute)?;
-                self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
-            }
-            None => {
-                // Clearing the assignment also leaves Speaker B.  The
-                // captured clear writes the old pair's mode words to zero
-                // and 0x3d00 to zero.
-                self.settings.speaker_b = false;
-                self.write_word(0x3d00, 0)?;
-            }
-        }
+        self.write_word(0x3d00, if self.settings.speaker_b { 1 } else { 0 })?;
         Ok(())
     }
 
@@ -4957,22 +4956,19 @@ impl RmeDevice for Fireface {
                 "Speaker B needs an assigned output".into(),
             ));
         };
-        // The mode word carries mute in bit 0 and the monitor routing in
-        // bit 1.  While Speaker B is active the Main pair carries bit 1 and
-        // the B pair does not; while it is inactive the reverse holds.
+        // The mode word carries mute in bit 0 and monitor-muted in bit 1.
+        // Only the Main pair is monitor-muted while Speaker B is active.
+        // Switching Speaker B off restores Main and leaves the B pair at
+        // its normal mode; it must not mute the assigned B pair.
         for idx in [main * 2, main * 2 + 1] {
             let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-            self.ucx_write_output_mode_value(
-                idx,
-                mute as u16 | if on { 2 } else { 0 },
-            )?;
+            self.ucx_write_output_mode_value(idx, mute as u16 | if on { 2 } else { 0 })?;
         }
-        for idx in [b * 2, b * 2 + 1] {
-            let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
-            self.ucx_write_output_mode_value(
-                idx,
-                mute as u16 | if on { 0 } else { 2 },
-            )?;
+        if on && b != main {
+            for idx in [b * 2, b * 2 + 1] {
+                let mute = self.outputs.get(idx).is_some_and(|o| o.mute);
+                self.ucx_write_output_mode_value(idx, mute as u16)?;
+            }
         }
         self.write_word(0x3d00, if on { 1 } else { 0 })?;
         self.settings.speaker_b = on;
@@ -5948,6 +5944,12 @@ impl RmeDevice for Fireface {
                 // Scene recall must also clear a mute left on the unit.
                 self.set_mute(ChannelId::Output(idx), mute)?;
             }
+            // TotalMix enables the output mute bits in its connect write.
+            // Without this the NN02 mute bits are stored but ignored.
+            self.write_word(ucx::global::MUTE_ENABLE, 1)?;
+            // Refresh the monitor flags too; this clears a stale Main Out
+            // mute bit left by an earlier session.
+            self.write_word(0x3f9e, self.monitor_flags())?;
             // Balance and stereo mode are separate registers from volume.
             for pair in 0..PAIRS {
                 let linked = self.output_linked(pair);
@@ -6361,6 +6363,104 @@ mod tests {
     }
 
     #[test]
+    fn ucx_output_mute_writes_the_phones_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_mute(ChannelId::Output(0), true).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1802, 1)),
+            "Phones mute mode bit"
+        );
+
+        writes.lock().unwrap().clear();
+        dev.set_mute(ChannelId::Output(0), false).unwrap();
+        assert!(
+            written_words(&writes).contains(&(0x1802, 0)),
+            "Phones mute mode bit cleared"
+        );
+    }
+
+    #[test]
+    fn ucx_assigning_main_does_not_write_the_output_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        writes.lock().unwrap().clear();
+        dev.set_main_out(Some(1)).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            !w.iter().any(|(reg, _)| *reg == 0x1202 || *reg == 0x1302),
+            "Main assignment must not touch the AN1/2 mode word"
+        );
+        assert!(w.contains(&(0x3f9e, 0)));
+    }
+
+    #[test]
+    fn ucx_assigning_speaker_b_does_not_write_the_output_mode_bit() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_main_out_b(Some(0)).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            !w.iter().any(|(reg, _)| *reg == 0x1802 || *reg == 0x1902),
+            "Speaker B assignment must not touch the Phones mode word"
+        );
+        assert!(w.contains(&(0x3d00, 0)));
+    }
+
+    #[test]
+    fn ucx_main_output_mute_sets_and_clears_the_monitor_flag() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        writes.lock().unwrap().clear();
+
+        dev.set_mute(ChannelId::Output(2), true).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            w.iter()
+                .any(|(reg, value)| *reg == 0x1202 && value & 1 == 1),
+            "Main mute mode bit"
+        );
+        assert!(w.contains(&(0x3f9e, 4)), "Main mute monitor flag");
+
+        writes.lock().unwrap().clear();
+        dev.set_mute(ChannelId::Output(2), false).unwrap();
+        let w = written_words(&writes);
+        assert!(
+            w.iter()
+                .any(|(reg, value)| *reg == 0x1202 && value & 1 == 0),
+            "Main mute mode bit cleared"
+        );
+        assert!(w.contains(&(0x3f9e, 0)), "Main mute monitor flag cleared");
+    }
+
+    #[test]
+    fn ucx_mono_preserves_the_main_output_mute_flag() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_mute(ChannelId::Output(2), true).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_mono(true).unwrap();
+        assert!(written_words(&writes).contains(&(0x3f9e, 6)));
+    }
+
+    #[test]
+    fn ucx_connect_enables_output_mute_and_clears_a_stale_main_mute_flag() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        let scene = dev.capture_scene();
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let words = written_words(&writes);
+        assert!(
+            words.contains(&(ucx::global::MUTE_ENABLE, 1)),
+            "TotalMix enables the output mute bits at connect"
+        );
+        assert!(
+            words.contains(&(0x3f9e, 0)),
+            "a stale Main Out mute flag must be cleared at connect"
+        );
+    }
+
+    #[test]
     fn scene_channel_order_is_mapped_by_name_not_position() {
         // An older UCX scene had Phones first, then AN1/AN2.  The current
         // profile has AN1/AN2 first, so positional cloning would swap them.
@@ -6735,9 +6835,12 @@ mod tests {
             let w = writes.lock().unwrap();
             assert!(w.contains(&Write::Words(vec![(0x1202, 0)])));
             assert!(w.contains(&Write::Words(vec![(0x1302, 0)])));
-            assert!(w.contains(&Write::Words(vec![(0x1402, 2)])));
-            assert!(w.contains(&Write::Words(vec![(0x1502, 2)])));
             assert!(w.contains(&Write::Words(vec![(0x3d00, 0)])));
+            assert!(
+                !w.iter().any(|x| matches!(x, Write::Words(v)
+                    if v.iter().any(|(reg, _)| *reg == 0x1402 || *reg == 0x1502))),
+                "switching Speaker B off must not mute the assigned B pair"
+            );
         }
         assert!(!dev.settings().speaker_b);
 
