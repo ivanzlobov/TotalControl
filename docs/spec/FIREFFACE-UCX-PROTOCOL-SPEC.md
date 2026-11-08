@@ -574,6 +574,12 @@ A fader drag writes `0x0000` to the send and restores the knob value when
 the drag ends; the send value itself is the knob value and does not track
 the fader.  The post-fader coupling is not expressed in `NN01`.
 
+**Playback FX send** uses one consecutive register per software-playback
+channel: `0x47a0 + n` and `0x47e0 + n` for channel `n` (0..17). The value
+is the amplifier word produced by `matrix_gain`; `0x0000` is off. A send
+at the `-65.0 dB` off position writes `0x0000`, not a small non-zero
+amplitude.
+
 ### 6.2.1 Talkback activation
 
 Talkback is a host-driven rewrite of the monitored sends. The source route

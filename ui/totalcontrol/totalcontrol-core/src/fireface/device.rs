@@ -5262,13 +5262,18 @@ impl RmeDevice for Fireface {
                 if idx >= self.playbacks.len() {
                     return Err(Error::InvalidChannel(format!("playback {idx}")));
                 }
-                // Playback send is the `0x47A0` family, stride +2 per
-                // channel, an amplitude word rather than dB (measured H86).
-                let linear = 10f32.powf(db / 20.0).clamp(0.0, 1.0);
+                // Playback send is the `0x47A0` family: one consecutive
+                // address per channel, mirrored 0x40 higher.  -65 dB is the
+                // off position and writes 0, not a tiny non-zero amplitude.
+                let linear = if db <= -65.0 {
+                    0.0
+                } else {
+                    10f32.powf(db / 20.0).clamp(0.0, 1.0)
+                };
                 let value = ucx::matrix_gain(linear as f64);
-                let base = 0x47a0u16 + 2 * idx as u16;
+                let base = 0x47a0u16 + idx as u16;
                 self.write_word(base, value)?;
-                self.write_word(base + 0x41, value)?;
+                self.write_word(base + 0x40, value)?;
                 self.playbacks[idx].fx_send_db = db;
                 Ok(())
             }
@@ -8588,7 +8593,7 @@ mod tests {
 
     #[test]
     fn ucx_scene_applies_fx_sends_solo_and_phase() {
-        let (mut dev, _writes) = open(Model::Ucx);
+        let (mut dev, writes) = open(Model::Ucx);
         let mut scene = dev.capture_scene();
         scene.inputs[0].fx_send_db = -24.0;
         scene.playbacks[0].fx_send_db = -18.0;
@@ -8618,8 +8623,24 @@ mod tests {
         cleared.outputs[1].phase_r = false;
         cleared.inputs[0].solo = false;
 
+        writes.lock().unwrap().clear();
         dev.apply_scene(&cleared).unwrap();
 
+        let words = written_words(&writes);
+        assert!(
+            words.contains(&(0x47a0, 0)),
+            "a -65 dB playback FX send must write zero"
+        );
+        assert!(
+            words.contains(&(0x47e0, 0)),
+            "the mirrored playback FX send must use +0x40, not +0x41"
+        );
+        assert!(
+            !words
+                .iter()
+                .any(|(a, _)| (0x47b2..=0x47df).contains(a) || (0x47f2..=0x4803).contains(a)),
+            "playback FX sends must not spill into the next register family"
+        );
         assert_eq!(dev.inputs()[0].fx_send_db, -65.0);
         assert_eq!(dev.playbacks()[0].fx_send_db, -65.0);
         assert!(!dev.inputs()[0].phase);
