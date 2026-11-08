@@ -43,13 +43,11 @@
 //! dead until TotalControl is restarted. `is_connected()` reports the gap so
 //! the UI does not keep showing stale peaks.
 //!
-//! `CaptureMeter::start` takes the channel count, so the same reader
-//! serves the 18-channel UCX (`UcxAlsa`): capture 0..17 maps identity
-//! to AN1-8, SPDIF L/R and ADAT 1-8. Those words are the unit's raw
-//! input stream, i.e. **pre-fader**: moving a matrix fader, panning or
-//! muting a channel does not change them, matching TotalMix, whose
-//! input and playback meters are pre-fader and whose output meters are
-//! post-fader.
+//! `CaptureMeter::start` takes the channel count. Those words are the
+//! unit's raw input stream, i.e. **pre-fader**: moving a matrix fader,
+//! panning or muting a channel does not change them, matching TotalMix,
+//! whose input and playback meters are pre-fader and whose output meters
+//! are post-fader.
 //!
 //! `TOTALCONTROL_METER_DEBUG=1` prints every channel once a second for future
 //! hardware checks; the normal path only uses the table.

@@ -18,8 +18,6 @@ pub mod babyface;
 #[cfg(feature = "alsa")]
 pub mod fireface;
 #[cfg(feature = "alsa")]
-pub mod ucx_alsa;
-#[cfg(feature = "alsa")]
 pub(crate) mod capture_meter;
 pub mod capabilities;
 pub mod channel;
@@ -44,8 +42,6 @@ pub mod usb;
 pub use babyface::BabyfacePro;
 #[cfg(feature = "alsa")]
 pub use fireface::{DeviceIdentity as FirefaceIdentity, DeviceInfo as FirefaceInfo, Fireface, Model as FirefaceModel};
-#[cfg(feature = "alsa")]
-pub use ucx_alsa::UcxAlsa;
 pub use capabilities::DeviceCapabilities;
 pub use channel::{
     ChannelId, ChannelType, Dynamics, Echo, InputChannel, InputLevel, OutputChannel,

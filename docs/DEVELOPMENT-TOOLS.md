@@ -23,7 +23,7 @@ testing.
 |---|---|
 | Kernel driver + hwdep | supported user path |
 | `totalcontrol-usb` direct libusb | development only |
-| `UcxAlsa` / `BabyfacePro` legacy ALSA | development fallback |
+| `BabyfacePro` ALSA | development fallback |
 | ALSA PCM plugin | development only |
 | Probe and capture programs | development only |
 | Mock backends | development and tests |
@@ -52,13 +52,13 @@ totalcontrol --backend usb
 Do not use this mode for normal monitoring. The kernel driver path is the
 supported one.
 
-## Legacy ALSA backends
+## Babyface ALSA backend
 
-`UcxAlsa` and `BabyfacePro` read and write ALSA mixer controls exposed by older
-drivers. The hwdep `Fireface` backend is preferred and is tried first. The
-legacy backends remain as fallbacks and comparison paths.
+`BabyfacePro` reads and writes the ALSA mixer controls exposed by the Babyface
+kernel driver. It is used when the direct hwdep path is not available for that
+unit.
 
-They are selected automatically when hwdep is not available, or explicitly:
+It is selected automatically when its card is present, or explicitly:
 
 ```sh
 totalcontrol --backend alsa

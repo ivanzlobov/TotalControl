@@ -32,10 +32,6 @@ name = "panel-watch"
 required-features = ["alsa"]
 
 [[example]]
-name = "ucx-scan"
-required-features = ["alsa"]
-
-[[example]]
 name = "fireface-scan"
 required-features = ["alsa"]
 

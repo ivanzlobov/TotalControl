@@ -352,9 +352,7 @@ pub trait RmeDevice {
     }
 
     /// Whether this backend can toggle a playback pair's stereo split.
-    /// Defaults to [`Self::protocol_features`]; the UCX v1 ALSA backend
-    /// implements the split through its matrix model even though the full
-    /// RME feature set (EQ/FX/trim) is not available yet.
+    /// Defaults to [`Self::protocol_features`].
     fn stereo_split_supported(&self) -> bool {
         self.protocol_features()
     }

@@ -87,7 +87,6 @@ the controls that connection can drive.
 | Variant | Transport | Support |
 |---|---|---|
 | `Fireface` | Fireface UC/UCX over the kernel hwdep node | production |
-| `UcxAlsa`, `Uc` | legacy ALSA mixer controls | development fallback |
 | `BabyfacePro` | Babyface ALSA controls | development fallback |
 | `BabyfaceProUsb` | direct libusb vendor protocol | development only |
 | `Mirror` | UI-side copy owned by the device service | production |
@@ -306,8 +305,8 @@ audio and the vendor mixer is unavailable.
 ## 11. Development tools
 
 Everything except the kernel driver plus hwdep is a development tool:
-legacy ALSA backends, the direct libusb backend, the ALSA PCM plugin, probe
-programs, capture decoders and mock modes.
+the Babyface ALSA backend, the direct libusb backend, the ALSA PCM plugin,
+probe programs, capture decoders and mock modes.
 
 They are not user-facing installation options. `DEVELOPMENT-TOOLS.md`
 describes what each tool does and how to run it.

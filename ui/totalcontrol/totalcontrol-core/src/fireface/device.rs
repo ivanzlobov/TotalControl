@@ -1,8 +1,7 @@
 //! Fireface UC/UCX userspace device model over the kernel hwdep transport.
 //!
-//! This is the replacement for the old `ucx_alsa` backend: the kernel no
-//! longer exposes device-model ALSA controls, so all routing, fader, preamp,
-//! meter and scene logic lives here.
+//! The kernel exposes a raw hwdep node instead of device-model ALSA controls,
+//! so all routing, fader, preamp, meter and scene logic lives here.
 //!
 //! Both models share the TotalControl [`RmeDevice`] surface, but their protocol
 //! paths are kept separate:

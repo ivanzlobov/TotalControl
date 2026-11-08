@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use totalcontrol_core::channel::EqBandType;
 use totalcontrol_core::fireface::UcxDump;
 #[cfg(feature = "alsa")]
-use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel, UcxAlsa};
+use totalcontrol_core::{BabyfacePro, Fireface, FirefaceModel};
 use totalcontrol_core::{
     BabyfaceProUsb, ChannelId, ChannelType, Dynamics, Echo, InputLevel, MockBabyfacePro, RmeDevice,
     Reverb, Scene, Sensitivity, TalkbackConfig,
@@ -293,14 +293,8 @@ impl DeviceKind {
 pub enum DeviceHandle {
     #[cfg(feature = "alsa")]
     Real(BabyfacePro),
-    #[cfg(feature = "alsa")]
-    Ucx(UcxAlsa),
-    /// The Fireface UC: same ALSA control surface as the UCX, ISO/IF5
-    /// streaming, no EQ/FX.
-    #[cfg(feature = "alsa")]
-    Uc(UcxAlsa),
-    /// Fireface UC/UCX through the kernel hwdep transport.  This is the
-    /// refactored path: the kernel owns USB/PCM, TotalControl owns the model.
+    /// Fireface UC/UCX through the kernel hwdep transport.  The kernel owns
+    /// USB/PCM, TotalControl owns the model.
     #[cfg(feature = "alsa")]
     Fireface(Fireface),
     Mock(MockBabyfacePro),
@@ -372,10 +366,6 @@ macro_rules! delegate {
         #[cfg(feature = "alsa")]
         DeviceHandle::Real(d) => d.$method($($arg),*),
         #[cfg(feature = "alsa")]
-        DeviceHandle::Ucx(d) => d.$method($($arg),*),
-        #[cfg(feature = "alsa")]
-        DeviceHandle::Uc(d) => d.$method($($arg),*),
-        #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method($($arg),*),
     } };
     ($self:expr, $method:ident) => { match $self {
@@ -384,10 +374,6 @@ macro_rules! delegate {
         DeviceHandle::Mirror(d) => d.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Real(d) => d.$method(),
-        #[cfg(feature = "alsa")]
-        DeviceHandle::Ucx(d) => d.$method(),
-        #[cfg(feature = "alsa")]
-        DeviceHandle::Uc(d) => d.$method(),
         #[cfg(feature = "alsa")]
         DeviceHandle::Fireface(d) => d.$method(),
     } };
@@ -785,20 +771,6 @@ impl DeviceHandle {
                 }
                 Err(e) => log::debug!("Fireface hwdep open not available: {e:?}"),
             }
-            match UcxAlsa::open() {
-                Ok(d) => {
-                    log::info!("Device backend: ALSA (Fireface UCX)");
-                    return Some(DeviceHandle::Ucx(d));
-                }
-                Err(e) => log::debug!("Fireface UCX ALSA open not available: {e:?}"),
-            }
-            match UcxAlsa::open_uc() {
-                Ok(d) => {
-                    log::info!("Device backend: ALSA (Fireface UC)");
-                    return Some(DeviceHandle::Uc(d));
-                }
-                Err(e) => log::debug!("Fireface UC ALSA open not available: {e:?}"),
-            }
             match BabyfacePro::open() {
                 Ok(d) => {
                     log::info!("Device backend: ALSA (kernel driver)");
@@ -874,10 +846,6 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => DeviceKind::Babyface,
             #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => DeviceKind::Ucx,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => DeviceKind::Uc,
-            #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => match d.model() {
                 FirefaceModel::Ucx => DeviceKind::Ucx,
                 FirefaceModel::Uc => DeviceKind::Uc,
@@ -894,10 +862,6 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => "BabyfacePro",
             #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => "FirefaceUCX",
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => "FirefaceUC",
-            #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.spec().card_id,
         }
     }
@@ -912,15 +876,9 @@ impl DeviceHandle {
             #[cfg(not(feature = "alsa"))]
             DeviceKind::Fireface => None,
             #[cfg(feature = "alsa")]
-            DeviceKind::Ucx => Fireface::open_ucx()
-                .ok()
-                .map(DeviceHandle::Fireface)
-                .or_else(|| UcxAlsa::open().ok().map(DeviceHandle::Ucx)),
+            DeviceKind::Ucx => Fireface::open_ucx().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
-            DeviceKind::Uc => Fireface::open_uc()
-                .ok()
-                .map(DeviceHandle::Fireface)
-                .or_else(|| UcxAlsa::open_uc().ok().map(DeviceHandle::Uc)),
+            DeviceKind::Uc => Fireface::open_uc().ok().map(DeviceHandle::Fireface),
             #[cfg(feature = "alsa")]
             DeviceKind::Babyface => BabyfacePro::open()
                 .ok()
@@ -971,10 +929,6 @@ impl DeviceHandle {
             }
             DeviceHandle::Mirror(d) => d.info().target.clone(),
             #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => DeviceTarget::kind_only(DeviceKind::Ucx),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => DeviceTarget::kind_only(DeviceKind::Uc),
-            #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => DeviceTarget::from_identity(d.identity()),
         }
     }
@@ -1011,10 +965,6 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
             #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
-            #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.meters().unwrap_or_else(|| vec![0.0; n]),
         }
     }
@@ -1026,10 +976,6 @@ impl DeviceHandle {
             // Playback meters come from the OUT stream — not wired yet.
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => vec![0.0; n],
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => vec![0.0; n],
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => vec![0.0; n],
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d
                 .playback_meters()
@@ -1045,10 +991,6 @@ impl DeviceHandle {
                 Some(d.meters().playbacks.to_vec())
             }
             DeviceHandle::Mirror(_) => None,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(d) => d.device_playback_meters(),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(d) => d.device_playback_meters(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.playback_meters(),
             _ => None,
@@ -1133,20 +1075,9 @@ impl DeviceHandle {
         }
     }
 
-    /// Release/reopen the input capture meter at a new rate.  Needed
-    /// because capture and playback share the device clock.
+    /// Release/reopen the input capture meter at a new rate.  The hwdep
+    /// Fireface meters come from the driver and need no reopen.
     pub fn set_meter_rate(&mut self, rate: u32) {
-        #[cfg(feature = "alsa")]
-        match self {
-            DeviceHandle::Ucx(d) | DeviceHandle::Uc(d) => d.set_meter_rate(rate),
-            DeviceHandle::Fireface(d) => {
-                let _ = d;
-                // UCX meters come from the driver's 0x85 events; the UC
-                // capture fallback reopens on demand.
-            }
-            _ => {}
-        }
-        #[cfg(not(feature = "alsa"))]
         let _ = rate;
     }
 
@@ -1155,10 +1086,6 @@ impl DeviceHandle {
     pub fn has_device_playback_meters(&self) -> bool {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().device_playback_meters;
-        }
-        #[cfg(feature = "alsa")]
-        if matches!(self, DeviceHandle::Ucx(_) | DeviceHandle::Uc(_)) {
-            return true;
         }
         if matches!(self, DeviceHandle::Fireface(d) if d.model() == FirefaceModel::Ucx) {
             return true;
@@ -1189,10 +1116,6 @@ impl DeviceHandle {
             DeviceHandle::Usb(_) => idx < 4,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => idx < d.inputs().len() && d.meters_available(),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(d) => idx < d.inputs().len() && d.meters_available(),
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(d) => idx < d.inputs().len() && d.meters_available(),
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => idx < d.inputs().len(),
         }
@@ -1524,10 +1447,6 @@ impl DeviceHandle {
         if let DeviceHandle::Mirror(d) = self {
             return d.hardware_volume();
         }
-        #[cfg(feature = "alsa")]
-        if let DeviceHandle::Ucx(d) | DeviceHandle::Uc(d) = self {
-            return d.hardware_volume();
-        }
         if let DeviceHandle::Fireface(d) = self {
             return d.hardware_volume();
         }
@@ -1570,13 +1489,7 @@ impl DeviceHandle {
             return d.info().rate_follows;
         }
         #[cfg(feature = "alsa")]
-        if matches!(
-            self,
-            DeviceHandle::Real(_)
-                | DeviceHandle::Ucx(_)
-                | DeviceHandle::Uc(_)
-                | DeviceHandle::Fireface(_)
-        ) {
+        if matches!(self, DeviceHandle::Real(_) | DeviceHandle::Fireface(_)) {
             return true;
         }
         false
@@ -1594,10 +1507,6 @@ impl DeviceHandle {
             DeviceHandle::Mirror(d) => d.info().has_sensitivity,
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(_) => true,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => false,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => false,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => false,
         }
@@ -1620,10 +1529,6 @@ impl DeviceHandle {
             #[cfg(feature = "alsa")]
             DeviceHandle::Real(d) => d.panel_selection(),
             #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => None,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => None,
-            #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(_) => None,
         }
     }
@@ -1633,8 +1538,6 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => d.is_uc(),
             DeviceHandle::Mirror(d) => d.info().is_uc,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Uc,
             _ => false,
@@ -1646,8 +1549,6 @@ impl DeviceHandle {
         match self {
             DeviceHandle::Mock(d) => d.is_ucx(),
             DeviceHandle::Mirror(d) => d.info().is_ucx,
-            #[cfg(feature = "alsa")]
-            DeviceHandle::Ucx(_) => true,
             #[cfg(feature = "alsa")]
             DeviceHandle::Fireface(d) => d.model() == FirefaceModel::Ucx,
             _ => false,
@@ -1661,7 +1562,7 @@ impl DeviceHandle {
             DeviceHandle::Mock(d) => d.is_uc() || d.is_ucx(),
             DeviceHandle::Mirror(d) => d.info().is_uc_family,
             #[cfg(feature = "alsa")]
-            DeviceHandle::Uc(_) | DeviceHandle::Ucx(_) | DeviceHandle::Fireface(_) => true,
+            DeviceHandle::Fireface(_) => true,
             _ => false,
         }
     }
