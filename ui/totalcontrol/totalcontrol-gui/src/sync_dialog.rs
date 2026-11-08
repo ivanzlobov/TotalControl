@@ -25,7 +25,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
     let scale = state.ui_scale;
     // Match the Control Room Settings dialog, which uses 16 pt for its
     // labels, sections, pickers and values at the current UI scale.
-    let text_size = 16.0 * scale;
+    let text_size = theme::TEXT_DIALOG * scale;
     let Some(mismatch) = &state.startup_mismatch else {
         return Space::new().into();
     };

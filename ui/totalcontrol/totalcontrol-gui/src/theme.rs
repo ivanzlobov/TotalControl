@@ -94,6 +94,9 @@ pub const TEXT_SM: f32 = 11.0;
 /// sized a tier up for emphasis, but that read as too big for the
 /// sidebar's dense 210px column — dropped back down to this tier).
 pub const TEXT_MD: f32 = 13.0;
+/// One size for menu items and dialog text, matching the Control Room
+/// Settings dialog.
+pub const TEXT_DIALOG: f32 = 16.0;
 /// The "TotalControl" wordmark.
 pub const TEXT_XL: f32 = 22.0;
 

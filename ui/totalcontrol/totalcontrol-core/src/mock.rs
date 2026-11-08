@@ -218,6 +218,8 @@ impl MockBabyfacePro {
                 eq_for_record: false,
                 optical_out_spdif: false,
                 dim: false,
+                dim_amount_db: -20.0,
+                dim_saved: Vec::new(),
                 speaker_b: false,
                 main_out: None,
                 main_b_out: None,

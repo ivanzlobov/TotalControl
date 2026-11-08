@@ -21,16 +21,16 @@ pub const REPO_URL: &str = "https://github.com/jspx-projects/TotalControl";
 /// The card's width cap at `ui_scale == 1.0`: wide enough for the repo URL
 /// on one line, narrow enough to read as a dialog, and capped rather than
 /// fixed so a narrow window shrinks it instead of clipping it.
-const CARD_W: f32 = 420.0;
+const CARD_W: f32 = 560.0;
 
 fn header(scale: f32) -> Element<'static, Message> {
     row![
         text("About")
             .color(theme::TEXT_PRIMARY)
-            .size(theme::TEXT_MD * scale),
+            .size(theme::TEXT_DIALOG * scale),
         Space::new().width(Length::Fill),
         // Same title/Close pair as the device popover (`app::device_panel`).
-        button(text("Close").size(theme::TEXT_XS * scale))
+        button(text("Close").size(theme::TEXT_DIALOG * scale))
             .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
             .style(theme::ghost_button)
             .on_press(Message::ToggleAbout),
@@ -61,18 +61,18 @@ const SHORTCUTS: [(&str, &str); 12] = [
 fn shortcuts(scale: f32) -> Element<'static, Message> {
     let mut list = column![text("SHORTCUTS")
         .color(theme::TEXT_SEC)
-        .size(theme::TEXT_MICRO * scale)]
+        .size(theme::TEXT_DIALOG * scale)]
     .spacing(theme::SPACE_SM * scale);
     for (keys, action) in SHORTCUTS {
         list = list.push(
             row![
                 text(keys)
                     .color(theme::TEXT_PRIMARY)
-                    .size(theme::TEXT_XS * scale)
+                    .size(theme::TEXT_DIALOG * scale)
                     .width(Length::Fixed(150.0 * scale)),
                 text(action)
                     .color(theme::TEXT_SEC)
-                    .size(theme::TEXT_XS * scale),
+                    .size(theme::TEXT_DIALOG * scale),
             ]
             .spacing(theme::SPACE_MD * scale),
         );
@@ -116,23 +116,23 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
         row![
             text("TotalControl")
                 .color(theme::TEXT_PRIMARY)
-                .size(theme::TEXT_XL * scale),
+                .size(theme::TEXT_DIALOG * scale),
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
                 .color(theme::TEXT_SEC)
-                .size(theme::TEXT_MD * scale),
+                .size(theme::TEXT_DIALOG * scale),
         ]
         .spacing(theme::SPACE_LG)
         .align_y(Alignment::Center),
         text("Open-source TotalMix replacement for RME audio interfaces")
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * scale),
+            .size(theme::TEXT_DIALOG * scale),
         text(device)
             .color(theme::TEXT_SEC)
-            .size(theme::TEXT_XS * scale),
+            .size(theme::TEXT_DIALOG * scale),
         button(
             text(REPO_URL)
                 .color(theme::ACCENT)
-                .size(theme::TEXT_XS * scale)
+                .size(theme::TEXT_DIALOG * scale)
         )
         .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
         .style(theme::plain_button)

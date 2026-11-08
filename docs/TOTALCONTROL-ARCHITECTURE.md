@@ -224,7 +224,8 @@ the mixer's channel rows and send matrix. The address space is defined in
 
 ## 9. State, scenes and persistence
 
-The device model is the runtime state. It is captured as a `Scene` for:
+The device model is the runtime state. It is captured as a `Scene` — the
+internal name for one mixer state — for:
 
 - the auto-saved scene;
 - snapshot slots;
@@ -236,8 +237,18 @@ The GUI also persists interface state: window layout, sidebar state, channel
 names, Control Room preferences and device identity. The TUI and GUI share the
 mixer scene, so the last writer wins.
 
-Runtime monitoring state, such as the active Talkback press or a cue selection,
-is not part of the mixer scene.
+A named **workspace** bundles the current scene, the eight snapshots and their
+names, channel labels, the four groups, the six layouts, view state, Control
+Room state, virtual-surround settings and window size in one `.tcws` JSON
+file. It is the portable host-side configuration; `gui.json` remains the
+per-installation preference file, `auto.json` the crash-recovery scene, and
+the unit's six setups remain device state.  A workspace includes the sample
+rate, pitch/varispeed and active Dim and Speaker B states; the unit's six
+device setups and the device serial number remain outside it.
+
+Active Talkback, Listenback and cue selections are workspace state.  A
+snapshot stores the mixer scene; the workspace also stores the active
+monitoring controls.
 
 Startup sync compares the saved scene with the device where the backend can
 read state back.  Groups without readback are written from the saved scene.

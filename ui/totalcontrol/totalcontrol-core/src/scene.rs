@@ -162,6 +162,8 @@ impl Scene {
                 eq_for_record: false,
                 optical_out_spdif: false,
                 dim: false,
+                dim_amount_db: -20.0,
+                dim_saved: Vec::new(),
                 speaker_b: false,
                 main_out: None,
                 main_b_out: None,
@@ -274,8 +276,9 @@ impl Scene {
     /// GUI/OSC message.  Values a front-panel encoder changed earlier are
     /// present in both captures, so they do not appear as differences; only
     /// the fields the host actually changed are copied.  Device-owned fields
-    /// (preamp gain, switches, references, clock/rate/format) are never
-    /// copied, matching the Windows TotalMix state file.
+    /// (preamp gain, switches, references, clock/format) are never copied,
+    /// matching the Windows TotalMix state file; the sample rate is a host
+    /// choice and is copied when it changes.
     pub fn merge_host_changes(&mut self, before: &Scene, after: &Scene) {
         self.merge_host_changes_with_device(before, after, false);
     }
@@ -317,6 +320,15 @@ impl Scene {
                 if a.phase != b.phase {
                     host.phase = a.phase;
                 }
+                if a.phase_r != b.phase_r {
+                    host.phase_r = a.phase_r;
+                }
+                if a.fx_send_db != b.fx_send_db {
+                    host.fx_send_db = a.fx_send_db;
+                }
+                if a.ms_proc != b.ms_proc {
+                    host.ms_proc = a.ms_proc;
+                }
                 if a.eq != b.eq {
                     host.eq = a.eq;
                 }
@@ -329,6 +341,9 @@ impl Scene {
                 if include_device {
                     if a.gain != b.gain {
                         host.gain = a.gain;
+                    }
+                    if a.gain_right != b.gain_right {
+                        host.gain_right = a.gain_right;
                     }
                     if a.phantom != b.phantom {
                         host.phantom = a.phantom;
@@ -413,6 +428,9 @@ impl Scene {
                 if a.talkback != b.talkback {
                     host.talkback = a.talkback;
                 }
+                if a.cue != b.cue {
+                    host.cue = a.cue;
+                }
                 if a.name != b.name {
                     host.name = a.name.clone();
                 }
@@ -421,9 +439,10 @@ impl Scene {
             self.outputs = after.outputs.clone();
         }
 
-        // Host-owned global settings only.  Clock source, rate, references,
-        // digital formats and word-clock options are device-owned and stay
-        // as the unit reported them.
+        // Host-owned global settings.  Clock source, references, digital
+        // formats and word-clock options are device-owned and stay as the
+        // unit reported them; the sample rate is a host choice and follows
+        // the workspace.
         let (b, a) = (&before.settings, &after.settings);
         let h = &mut self.settings;
         if a.spdif_optical != b.spdif_optical {
@@ -444,8 +463,20 @@ impl Scene {
         if a.eq_for_record != b.eq_for_record {
             h.eq_for_record = a.eq_for_record;
         }
+        if a.pitch_percent != b.pitch_percent {
+            h.pitch_percent = a.pitch_percent;
+        }
+        if a.sample_rate != b.sample_rate {
+            h.sample_rate = a.sample_rate;
+        }
         if a.dim != b.dim {
             h.dim = a.dim;
+        }
+        if a.dim_amount_db != b.dim_amount_db {
+            h.dim_amount_db = a.dim_amount_db;
+        }
+        if a.dim_saved != b.dim_saved {
+            h.dim_saved = a.dim_saved.clone();
         }
         if a.speaker_b != b.speaker_b {
             h.speaker_b = a.speaker_b;
@@ -568,6 +599,35 @@ mod tests {
     }
 
     #[test]
+    fn merge_host_changes_copies_per_channel_host_fields() {
+        let mut host = Scene::new("auto");
+        let mut input = InputChannel::new(0, "AN1", ChannelType::Mic, 1);
+        input.fx_send_db = -65.0;
+        input.ms_proc = false;
+        input.phase_r = false;
+        input.gain_right = Some(10);
+        host.inputs = vec![input];
+
+        let before = host.clone();
+        let mut after = host.clone();
+        after.inputs[0].fx_send_db = -24.0;
+        after.inputs[0].ms_proc = true;
+        after.inputs[0].phase_r = true;
+        after.inputs[0].gain_right = Some(30);
+
+        host.merge_host_changes(&before, &after);
+
+        assert_eq!(host.inputs[0].fx_send_db, -24.0);
+        assert!(host.inputs[0].ms_proc);
+        assert!(host.inputs[0].phase_r);
+        assert_eq!(
+            host.inputs[0].gain_right,
+            Some(10),
+            "right gain is device-owned"
+        );
+    }
+
+    #[test]
     fn merge_host_changes_with_device_records_the_ucx_group() {
         // No UCX readback is mapped for these registers, so a host-originated
         // change is the only record and must reach the saved scene.
@@ -578,6 +638,7 @@ mod tests {
         let before = host.clone();
         let mut after = host.clone();
         after.inputs[0].gain = Some(30);
+        after.inputs[0].gain_right = Some(30);
         after.inputs[0].phantom = true;
         after.inputs[0].ref_level = 2;
         after.settings.clock_source = "Word Clock".into();
@@ -590,6 +651,7 @@ mod tests {
         host.merge_host_changes_with_device(&before, &after, true);
 
         assert_eq!(host.inputs[0].gain, Some(30));
+        assert_eq!(host.inputs[0].gain_right, Some(30));
         assert!(host.inputs[0].phantom);
         assert_eq!(host.settings.clock_source, "Word Clock");
         assert!(host.settings.optical_out_spdif);
@@ -600,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_host_changes_does_not_copy_device_clock_or_rate() {
+    fn merge_host_changes_copies_rate_but_not_device_clock() {
         let mut host = Scene::new("auto");
         let before = host.clone();
         let mut after = host.clone();
@@ -608,7 +670,7 @@ mod tests {
         after.settings.clock_source = "SPDIF Coaxial".into();
         after.settings.optical_out_spdif = true;
         host.merge_host_changes(&before, &after);
-        assert_eq!(host.settings.sample_rate, 48_000);
+        assert_eq!(host.settings.sample_rate, 44_100);
         assert_eq!(host.settings.clock_source, "Internal");
         assert!(!host.settings.optical_out_spdif);
     }

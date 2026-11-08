@@ -28,6 +28,7 @@ mod sidebar;
 mod sync_dialog;
 mod theme;
 mod tray;
+mod workspaces;
 mod widgets;
 
 use std::net::{IpAddr, Ipv4Addr};

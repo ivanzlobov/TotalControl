@@ -124,6 +124,9 @@ pub struct Prefs {
     pub engine_force_rate: Option<u32>,
     /// Logical size of the window at the last close.
     pub window_size: Option<(f32, f32)>,
+    /// Last folder used by the Workspace open/save dialogs.
+    #[serde(default)]
+    pub workspace_last_dir: Option<PathBuf>,
     /// Closing the window hides it in the tray instead of quitting.
     pub keep_in_tray: Option<bool>,
     pub engine_force_quantum: Option<u32>,

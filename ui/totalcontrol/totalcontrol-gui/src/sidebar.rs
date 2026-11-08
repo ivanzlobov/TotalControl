@@ -116,7 +116,7 @@ pub enum GroupLink {
 /// *existing* multi-select (`TotalControl::selected`) rather than a bespoke
 /// picker UI: enter edit mode, select strips the normal Ctrl/Shift-click
 /// way, click the group cell to assign.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Group {
     pub members: Vec<ChannelId>,
     pub mute_linked: bool,
@@ -126,7 +126,7 @@ pub struct Group {
 
 /// Which sidebar panels are expanded — every panel defaults open,
 /// matching the reference.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PanelsOpen {
     pub options: bool,
     pub snapshots: bool,
@@ -934,6 +934,7 @@ fn segment_track<'a>(
 fn slot_grid<'a>(
     count: u8,
     prefix: &'a str,
+    names: Option<&'a [String]>,
     active: Option<usize>,
     dirty: bool,
     stored: &[bool],
@@ -958,9 +959,14 @@ fn slot_grid<'a>(
             };
             // The selected slot, modified since it was recalled or stored,
             // carries an amber dot: TotalMix flashes the button instead.
+            let slot_name = names
+                .and_then(|names| names.get((n - 1) as usize))
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("{prefix} {n}"));
             let label: Element<'a, Message> = if is_active && dirty {
                 row![
-                    text(format!("{prefix} {n}"))
+                    text(slot_name.clone())
                         .size(theme::TEXT_XS * scale)
                         .color_maybe(name_color),
                     text("\u{25CF}")
@@ -971,13 +977,13 @@ fn slot_grid<'a>(
                 .align_y(iced::Alignment::Center)
                 .into()
             } else {
-                text(format!("{prefix} {n}"))
+                text(slot_name.clone())
                     .size(theme::TEXT_XS * scale)
                     .color_maybe(name_color)
                     .into()
             };
             let tip = if is_stored {
-                format!("Recall {prefix} {n}")
+                format!("Recall {slot_name}")
             } else {
                 "Empty: select it, then store".to_string()
             };
@@ -1006,11 +1012,17 @@ fn slot_grid<'a>(
 fn store_row(
     prefix: &str,
     active: Option<usize>,
+    name: Option<&str>,
     on_press: Message,
     scale: f32,
 ) -> Element<'static, Message> {
     let label = match active {
-        Some(n) => format!("store to {prefix} {n}"),
+        Some(n) => format!(
+            "store to {}",
+            name.filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{prefix} {n}"))
+        ),
         None => "select a slot to store".to_string(),
     };
     container(
@@ -1125,6 +1137,7 @@ fn snapshots_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     body = body.push(slot_grid(
         SNAPSHOT_COUNT,
         "Mix",
+        Some(&state.snapshot_names),
         state.active_snapshot,
         state.snapshot_dirty,
         &state.stored_snapshots,
@@ -1134,9 +1147,22 @@ fn snapshots_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     body = body.push(store_row(
         "Mix",
         state.active_snapshot,
+        state
+            .active_snapshot
+            .and_then(|n| state.snapshot_names.get(n - 1))
+            .map(String::as_str),
         Message::SnapshotStore,
         scale,
     ));
+    if let Some(n) = state.active_snapshot {
+        body = body.push(
+            iced::widget::text_input("snapshot name", &state.snapshot_names[n - 1])
+                .on_input(Message::SnapshotNameChanged)
+                .size(theme::TEXT_XS * scale)
+                .padding([theme::SPACE_TIGHT * scale, theme::SPACE_SM * scale])
+                .width(Length::Fill),
+        );
+    }
 
     column![header, body]
         .spacing(theme::SPACE_SM * scale)
@@ -1271,6 +1297,7 @@ fn layout_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     body = body.push(slot_grid(
         LAYOUT_COUNT,
         "Layout",
+        None,
         state.active_layout,
         false,
         &layouts_stored,
@@ -1280,6 +1307,7 @@ fn layout_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     body = body.push(store_row(
         "Layout",
         state.active_layout,
+        None,
         Message::LayoutStore,
         scale,
     ));

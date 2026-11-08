@@ -4234,6 +4234,8 @@ impl RmeDevice for Fireface {
                 "Dim is not decoded on the UC".into(),
             ));
         }
+        let amount_db = amount_db.clamp(-65.0, 0.0);
+        self.settings.dim_amount_db = amount_db;
         if on == self.settings.dim {
             if on {
                 let amount = amount_db.clamp(-65.0, 0.0);
@@ -4259,6 +4261,7 @@ impl RmeDevice for Fireface {
                             dim(right_level),
                         )?;
                     }
+                    self.settings.dim_saved = self.dim_saved.clone();
                 }
             }
             return Ok(());
@@ -4271,6 +4274,7 @@ impl RmeDevice for Fireface {
             }
             self.write_word(ucx::global::DIM, 0)?;
             self.settings.dim = false;
+            self.settings.dim_saved.clear();
             return Ok(());
         }
         let Some(pair) = self.settings.main_out else {
@@ -4298,6 +4302,7 @@ impl RmeDevice for Fireface {
             ));
         }
         self.dim_saved = saved;
+        self.settings.dim_saved = self.dim_saved.clone();
         self.dim_amount_db = amount_db.clamp(-65.0, 0.0);
         let amount = self.dim_amount_db;
         let dim = move |v: f32| {
@@ -5189,12 +5194,9 @@ impl RmeDevice for Fireface {
     }
 
     fn capture_scene(&self) -> Scene {
-        // Dim and Speaker B are runtime monitor states.  The fader values
-        // in the scene already include Dim's attenuation, so carrying the
-        // flag would make the next scene write dim the same pair again.
         let mut settings = self.settings.clone();
-        settings.dim = false;
-        settings.speaker_b = false;
+        settings.dim = self.settings.dim;
+        settings.dim_saved = self.dim_saved.clone();
         Scene {
             name: "Auto".into(),
             model: self.canonical_model().to_string(),
@@ -5267,7 +5269,6 @@ impl RmeDevice for Fireface {
         let device_clock_sources = self.settings.clock_sources.clone();
         let device_optical = self.settings.optical_out_spdif;
         let device_spdif_pro = self.settings.spdif_professional;
-        let device_rate = self.settings.sample_rate;
         let device_line_in = self.settings.line_in_ref;
         let device_line_out = self.settings.line_out_ref;
         let device_phones = self.settings.phones_ref;
@@ -5357,7 +5358,6 @@ impl RmeDevice for Fireface {
         self.settings = scene.settings.clone();
         self.settings.main_out = live_main_out;
         self.settings.main_b_out = live_main_b_out;
-        self.settings.speaker_b = live_speaker_b;
         self.matrix_overrides.clear();
         if self.is_uc() {
             for (idx, (input, saved)) in self.inputs.iter_mut().zip(device_inputs).enumerate() {
@@ -5405,7 +5405,6 @@ impl RmeDevice for Fireface {
         // word, not the options).  There the scene is the only record: keep
         // its values so a restart does not reset the visible settings.
         self.settings.clock_sources = device_clock_sources;
-        self.settings.sample_rate = device_rate;
         if !self
             .settings
             .clock_sources
@@ -5504,17 +5503,16 @@ impl RmeDevice for Fireface {
                     || self.outputs[pair * 2 + 1].loopback;
                 self.set_loopback(pair, loopback)?;
             }
-            // Output phase is a per-side register pair; only the inverted
-            // sides need a write (the unit defaults to normal).
+            // Output phase is a per-side register pair.  Write both normal
+            // and inverted values: a scene recall must clear a phase left
+            // inverted on the unit, not only engage one.
             for idx in 0..self.outputs.len() {
                 let inverted = if idx % 2 == 0 {
                     self.outputs[idx].phase_l
                 } else {
                     self.outputs[idx].phase_r
                 };
-                if inverted {
-                    self.set_output_phase(idx, true)?;
-                }
+                self.set_output_phase(idx, inverted)?;
             }
             for idx in 0..self.outputs.len() {
                 if self.outputs[idx].eq.is_some() {
@@ -5539,11 +5537,10 @@ impl RmeDevice for Fireface {
         }
         for idx in 0..self.inputs.len() {
             if !self.is_uc() {
-                // Right-side phase and preamp gain are separate registers
-                // from the left side; a split pair carries both.
-                if self.inputs[idx].phase_r {
-                    self.set_input_phase_right(idx, true)?;
-                }
+                // Phase is a register per side on the UCX.  Write both
+                // values so a recall clears an inversion left on the unit.
+                self.set_phase(idx, self.inputs[idx].phase)?;
+                self.set_input_phase_right(idx, self.inputs[idx].phase_r)?;
                 if idx < 4 {
                     if let Some(gain) = self.inputs[idx].gain_right {
                         self.set_input_gain_right(idx, gain)?;
@@ -5596,6 +5593,19 @@ impl RmeDevice for Fireface {
             self.set_mute(ChannelId::Playback(idx), self.playbacks[idx].mute)?;
         }
         if !self.is_uc() {
+            // FX sends are part of the per-channel scene.  They are separate
+            // registers from the matrix and were previously left at the
+            // unit's live value on recall.
+            for idx in 0..self.inputs.len() {
+                let fx = self.inputs[idx].fx_send_db;
+                self.set_channel_fx_send(ChannelId::Input(idx), fx)?;
+            }
+            for idx in 0..self.playbacks.len() {
+                let fx = self.playbacks[idx].fx_send_db;
+                self.set_channel_fx_send(ChannelId::Playback(idx), fx)?;
+            }
+        }
+        if !self.is_uc() {
             for cell in &scene.matrix_overrides {
                 let Some(channel) = Self::matrix_source_channel(cell.source) else {
                     continue;
@@ -5608,19 +5618,56 @@ impl RmeDevice for Fireface {
             if let Some(echo) = self.settings.echo {
                 self.ucx_write_echo(&echo)?;
             }
-            // Speaker B is a runtime monitor state and is kept across a
-            // scene load.  Dim is also runtime, but its attenuation is
-            // already in the output fader values; applying the flag again
-            // would dim the Main Out a second time.
-            self.settings.dim = false;
-            self.dim_saved.clear();
-            self.write_word(ucx::global::DIM, 0)?;
+            let scene_dim = self.settings.dim;
+            let scene_speaker_b = self.settings.speaker_b;
+            self.dim_saved = self.settings.dim_saved.clone();
+            if !scene_dim {
+                self.dim_saved.clear();
+                self.settings.dim_saved.clear();
+            }
+            self.settings.dim = scene_dim;
+            self.write_word(ucx::global::DIM, scene_dim as u16)?;
             self.set_mono(self.settings.mono)?;
             self.set_mute_fx(self.settings.mute_fx)?;
+            if (scene_speaker_b || live_speaker_b)
+                && self.settings.main_out.is_some()
+                && self.settings.main_b_out.is_some()
+            {
+                self.set_speaker_b(scene_speaker_b)?;
+            }
+        }
+        // Solo is part of the scene too.  Apply it after every send and
+        // matrix write, because set_solo rewrites the sends of the other
+        // channels; a scene with no solo channels leaves normal mode on.
+        let soloed: Vec<ChannelId> = self
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, channel)| channel.solo.then_some(ChannelId::Input(idx)))
+            .chain(
+                self.playbacks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, channel)| {
+                        channel.solo.then_some(ChannelId::Playback(idx))
+                    }),
+            )
+            .chain(
+                self.outputs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, channel)| channel.solo.then_some(ChannelId::Output(idx))),
+            )
+            .collect();
+        for channel in soloed {
+            self.set_solo(channel, true)?;
         }
         if !self.is_uc() {
             self.apply_ucx_preamp_state()?;
             self.apply_ucx_device_settings()?;
+        }
+        if self.settings.sample_rate > 0 {
+            self.set_sample_rate(self.settings.sample_rate)?;
         }
         let result = match batch {
             Some(batch) => batch.finish_wait(),
@@ -6435,21 +6482,23 @@ mod tests {
     }
 
     #[test]
-    fn ucx_control_room_scene_does_not_carry_runtime_speaker_b() {
+    fn ucx_control_room_scene_carries_speaker_b() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.settings.speaker_b = true;
         let scene = dev.capture_scene();
-        assert!(!scene.settings.speaker_b);
+        assert!(scene.settings.speaker_b);
     }
 
     #[test]
-    fn ucx_scene_apply_keeps_the_live_speaker_b_state() {
+    fn ucx_scene_apply_applies_the_saved_speaker_b_state() {
         let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_main_out_b(Some(2)).unwrap();
         dev.settings.speaker_b = true;
         let mut scene = dev.capture_scene();
         scene.settings.speaker_b = false;
         dev.apply_scene(&scene).unwrap();
-        assert!(dev.settings().speaker_b);
+        assert!(!dev.settings().speaker_b);
     }
 
     #[test]
@@ -6611,36 +6660,47 @@ mod tests {
     }
 
     #[test]
-    fn ucx_scene_apply_does_not_dim_the_main_out_twice() {
+    fn ucx_scene_apply_restores_dim_once() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.set_main_out(Some(3)).unwrap();
         let level = db_to_linear(-20.0);
         dev.outputs[6].volume = level;
         dev.outputs[7].volume = level;
+        dev.set_dim_with(true, -20.0).unwrap();
 
-        let mut scene = dev.capture_scene();
-        // A scene written while Dim was active used to carry the flag true.
-        scene.settings.dim = true;
-        dev.apply_scene(&scene).unwrap();
-        assert!(!dev.settings().dim);
-        assert!((dev.outputs()[6].volume - level).abs() < 1e-6);
-        assert!((dev.outputs()[7].volume - level).abs() < 1e-6);
+        let scene = dev.capture_scene();
+        let dimmed = db_to_linear(-40.0);
+        assert!(scene.settings.dim);
+        assert!((scene.outputs[6].volume - dimmed).abs() < 1e-6);
+        assert!((scene.outputs[7].volume - dimmed).abs() < 1e-6);
+        assert_eq!(scene.settings.dim_saved.len(), 1);
 
-        // A stream-start or rate-change reapply must leave the level alone.
         dev.apply_scene(&scene).unwrap();
-        assert!(!dev.settings().dim);
+        assert!(dev.settings().dim);
+        assert!((dev.outputs()[6].volume - dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - dimmed).abs() < 1e-6);
+
+        // A second apply must not apply the attenuation again.
+        dev.apply_scene(&scene).unwrap();
+        assert!(dev.settings().dim);
+        assert!((dev.outputs()[6].volume - dimmed).abs() < 1e-6);
+        assert!((dev.outputs()[7].volume - dimmed).abs() < 1e-6);
+
+        dev.set_dim(false).unwrap();
         assert!((dev.outputs()[6].volume - level).abs() < 1e-6);
         assert!((dev.outputs()[7].volume - level).abs() < 1e-6);
     }
 
     #[test]
-    fn ucx_captured_scene_does_not_persist_dim() {
+    fn ucx_captured_scene_keeps_dim_and_its_amount() {
         let (mut dev, _writes) = open(Model::Ucx);
         dev.set_main_out(Some(3)).unwrap();
-        dev.set_dim_with(true, -20.0).unwrap();
+        dev.set_dim_with(true, -30.0).unwrap();
 
         let scene = dev.capture_scene();
-        assert!(!scene.settings.dim);
+        assert!(scene.settings.dim);
+        assert!((scene.settings.dim_amount_db - -30.0).abs() < 1e-6);
+        assert!(!scene.settings.dim_saved.is_empty());
     }
 
     #[test]
@@ -7792,6 +7852,67 @@ mod tests {
             .unwrap()
             .iter()
             .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x00CE, 1487))));
+    }
+
+    #[test]
+    fn ucx_scene_applies_saved_sample_rate() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.settings.sample_rate = 44_100;
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene(&scene).unwrap();
+
+        assert_eq!(dev.settings().sample_rate, 44_100);
+        assert!(writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, Write::Vendor(protocol::req::SETTINGS, 0x0010, 48))));
+    }
+
+    #[test]
+    fn ucx_scene_applies_fx_sends_solo_and_phase() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.inputs[0].fx_send_db = -24.0;
+        scene.playbacks[0].fx_send_db = -18.0;
+        scene.inputs[0].phase = true;
+        scene.inputs[0].phase_r = true;
+        scene.outputs[0].phase_l = true;
+        scene.outputs[1].phase_r = true;
+        scene.inputs[0].solo = true;
+
+        dev.apply_scene(&scene).unwrap();
+
+        assert_eq!(dev.inputs()[0].fx_send_db, -24.0);
+        assert_eq!(dev.playbacks()[0].fx_send_db, -18.0);
+        assert!(dev.inputs()[0].phase);
+        assert!(dev.inputs()[0].phase_r);
+        assert!(dev.outputs()[0].phase_l);
+        assert!(dev.outputs()[1].phase_r);
+        assert!(dev.solo(ChannelId::Input(0)).unwrap());
+        assert!(dev.inputs()[0].solo);
+
+        let mut cleared = dev.capture_scene();
+        cleared.inputs[0].fx_send_db = -65.0;
+        cleared.playbacks[0].fx_send_db = -65.0;
+        cleared.inputs[0].phase = false;
+        cleared.inputs[0].phase_r = false;
+        cleared.outputs[0].phase_l = false;
+        cleared.outputs[1].phase_r = false;
+        cleared.inputs[0].solo = false;
+
+        dev.apply_scene(&cleared).unwrap();
+
+        assert_eq!(dev.inputs()[0].fx_send_db, -65.0);
+        assert_eq!(dev.playbacks()[0].fx_send_db, -65.0);
+        assert!(!dev.inputs()[0].phase);
+        assert!(!dev.inputs()[0].phase_r);
+        assert!(!dev.outputs()[0].phase_l);
+        assert!(!dev.outputs()[1].phase_r);
+        assert!(!dev.solo(ChannelId::Input(0)).unwrap());
+        assert!(!dev.inputs()[0].solo);
     }
 
     #[test]

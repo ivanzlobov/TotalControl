@@ -32,8 +32,8 @@ reduced control set.
 - [9. FX: sends, reverb and echo](#9-fx-sends-reverb-and-echo)
 - [10. Control Room](#10-control-room)
 - [11. Gestures](#11-gestures)
-- [12. Options menu](#12-options-menu)
-- [13. Snapshots, layouts, undo and redo](#13-snapshots-layouts-undo-and-redo)
+- [12. Workspace and Options menus](#12-workspace-and-options-menus)
+- [13. Workspaces, snapshots, layouts, undo and redo](#13-workspaces-snapshots-layouts-undo-and-redo)
 - [14. Latency](#14-latency)
 - [15. Where TotalControl keeps its data](#15-where-totalcontrol-keeps-its-data)
 - [16. Running in the background](#16-running-in-the-background)
@@ -420,7 +420,7 @@ every channel of one type shows the same panel shape:
 Notes:
 
 - **Gain** is the preamp gain of the four front inputs. At connect it is
-  written from the saved scene. It follows the stereo link and follows the
+  written from the saved mix. It follows the stereo link and follows the
   unit's physical encoder when one is turned on the hardware.
 - **Width** narrows or widens the pair: `1.00` full stereo, `0.00` mono,
   `-1.00` swapped channels.
@@ -543,13 +543,13 @@ The buttons are one channel wide, in TotalMix’s order:
 - **mono**, **talkback**, **ext. input**, **mute FX**;
 - **settings**, immediately above **assign**.
 
-| Button | Kind | Outputs affected | In the mixer scene |
+| Button | Kind | Outputs affected | In the current mix |
 |---|---|---|---|
-| `dim` | Latching | Main Out and Speaker B | No, runtime only |
+| `dim` | Latching | Main Out and Speaker B | Yes, snapshot and workspace |
 | `recall` | Momentary | Main Out; Speaker B if linked | No, momentary |
-| `speaker B` | Latching | Switches monitoring between Main and Speaker B | No, runtime only |
+| `speaker B` | Latching | Switches monitoring between Main and Speaker B | Yes, snapshot and workspace |
 | `mono` | Latching | Main Out and Speaker B | Yes |
-| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | No, runtime only |
+| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | Yes, workspace |
 | `ext. input` | Disabled | — | — |
 | `mute FX` | Latching | Reverb and Echo returns (see below) | Yes |
 | `settings` | Opens the dialog | — | No |
@@ -574,8 +574,9 @@ attenuate the Phones outputs; Talkback has its own Phones Dim amount.
 `Speaker B → Link to Main` additionally makes Speaker B follow the Main fader
 and Recall; Dim attenuates both speaker pairs whether or not they are linked.
 
-Dim is runtime only. It is not stored in a scene, and applying a scene or
-changing the sample rate leaves Dim off without lowering the level again.
+Dim is part of the current mix and is stored in a snapshot or workspace. The
+saved scene stores the active state, the pre-Dim speaker levels and the Dim
+amount, so loading it restores the same dimmed monitoring state.
 
 ### Recall
 
@@ -595,9 +596,10 @@ output assigned to Speaker B. Both the Main Out and Speaker B must be
 assigned first. The button lights while Speaker B is the active monitor
 path.
 
-Speaker B is runtime only and is not saved in a scene. Loading a scene or
-recalling a snapshot leaves the current monitor path unchanged, and clearing
-the Speaker B assignment also clears Speaker B and turns the button off.
+Speaker B is part of the current mix and is stored in a snapshot or
+workspace. Loading a workspace restores the saved monitor path after the
+saved assignments are installed. Clearing the Speaker B assignment also
+clears Speaker B and turns the button off.
 
 `Speaker B → Link to Main` in Control Room Settings ties the Speaker B level
 to Main. Linked, the Speaker B pair follows Main fader and Recall changes;
@@ -612,14 +614,15 @@ pair, which is useful for checking mono compatibility and phase problems.
 The Phones outputs are not mixed by this button; they keep their own stereo
 signal.
 
-Mono is part of the mixer scene, so it is saved and restored with the scene.
+Mono is part of the current mix, so it is saved in a snapshot and restored with it.
 
 ### Talkback and Listenback
 
 Talkback is the engineer’s communication path to the performers. Click
 **talkback** to switch it on; the button stays lit while it is active. Click
-it again to switch it off. It is a temporary monitoring state and is not
-stored in a scene.
+it again to switch it off. The active Talkback state is stored in a
+workspace and restored when that workspace is opened; it is not part of a
+snapshot.
 
 While Talkback is active:
 
@@ -643,14 +646,14 @@ the Talkback button and the receive switches.
 
 ### Mute FX
 
-**Mute FX** is a latching scene control. It silences the Reverb and Echo
+**Mute FX** is a latching control. It silences the Reverb and Echo
 returns on the monitored outputs without switching either effect off.
 Releasing it restores the previous return levels.
 
 In the current build Mute FX writes the FX-return levels of the AN1/2 and
 Phones output blocks. On the default assignment that covers Main Out; if
 Main Out or Speaker B is assigned to another pair, Mute FX does not follow
-that assignment. Mute FX is part of the mixer scene.
+that assignment. Mute FX is part of the current mix and a snapshot.
 
 ### External input
 
@@ -662,12 +665,12 @@ would replace the Main mix with the selected stereo input is not implemented.
 
 | State | Stored in |
 |---|---|
-| Main and Speaker B assignments | TotalControl preferences |
-| Phones 1–4 destinations | TotalControl preferences |
-| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences |
-| Dim and Speaker B active state | Runtime only |
-| Talkback and Listenback active state | Runtime only |
-| Mono, Mute FX and the mixer levels | Mixer scene |
+| Main and Speaker B assignments | TotalControl preferences; also saved in a workspace |
+| Phones 1–4 destinations | TotalControl preferences; also saved in a workspace |
+| Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences; also saved in a workspace |
+| Dim and Speaker B active state | Current mix (snapshot and workspace) |
+| Talkback and Listenback active state | Workspace |
+| Mono, Mute FX and the mixer levels | Current mix (snapshot and workspace) |
 
 ### Control Room Settings
 
@@ -685,7 +688,7 @@ The dialog has four sections:
 
 The source lists start with `None` and then use the hardware input names. The
 five level controls cover `-65.0` to `0.0 dB` in `0.5 dB` steps. The settings
-are saved per device in TotalControl's own preferences, not in the mixer scene.
+are saved per device in TotalControl's own preferences, not in the current mix.
 
 `OK` applies and saves the values; `Cancel` and `Escape` discard the edits.
 The settings in the dialog are not written while it is open. External Input
@@ -716,8 +719,8 @@ cannot be renamed. The hardware channel feeding each destination is listed
 by its own hardware name in the second menu level.
 
 The Main and Speaker B assignments are kept with your TotalControl
-preferences. They are restored at startup and are not changed by loading a
-scene or recalling a snapshot.
+preferences. They are restored at startup. A snapshot does not change them;
+loading a workspace restores the assignments saved in that workspace.
 
 Clicking a Control Room strip — including its name, fader or switches —
 selects it as the current submix, like any other output. Control Room
@@ -742,9 +745,12 @@ front-panel equivalent controls of the unit.
   it.
 - Ordinary buttons act once per click.
 
-## 12. Options menu
+## 12. Workspace and Options menus
 
-The `OPTIONS` menu in the top bar contains `Reset Mix` and `Settings`.
+The top bar has a `WORKSPACE` menu before `OPTIONS`. `WORKSPACE` opens and
+saves the complete host-side configuration described in section 13.
+
+The `OPTIONS` menu contains `Reset Mix` and `Settings`.
 
 `Reset Mix` lists the standard mixes:
 
@@ -762,29 +768,91 @@ The `OPTIONS` menu in the top bar contains `Reset Mix` and `Settings`.
 
 Choosing one rewrites the whole mixer in one go.
 
-`Settings` opens the TotalControl settings sheet: background behaviour,
-startup sync, and the virtual surround outputs described in Appendix B.
+`Settings` opens the centered TotalControl settings dialog: background
+behaviour, startup sync, and the virtual surround outputs described in
+Appendix B. Independent options are checkboxes; one-of-many choices such as
+the startup sync direction and OSC protocol are radio buttons.
 
-## 13. Snapshots, layouts, undo and redo
+## 13. Workspaces, snapshots, layouts, undo and redo
 
-TotalControl keeps your work in three layers:
+TotalControl keeps your work in four layers.  “Scene” is an internal code
+term for a mixer state; the interface uses the terms below.
 
-- **Snapshots** (eight slots) store a complete mix: routing, faders, names,
-  trims and the device settings TotalControl manages. They are mixer-plus files —
-  broader than the device's own snapshot. Recall applies them to the device
-  at once. The current mix is saved every few seconds and again when
-  TotalControl closes.
-- **Layouts** (six slots) store only which strips are collapsed.
-- **GUI state** (window, sidebar, view, zoom, names, open panels, selected
-  output and link groupings) is remembered automatically between sessions.
+| Term | Meaning |
+|---|---|
+| **Current mix** | The live mixer state: routing, faders, EQ, dynamics and FX. It is saved continuously for recovery. |
+| **Snapshot** | One named, saved current mix inside a workspace. |
+| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups, layouts, view state and Control Room state. |
+| **Device setup** | One of the unit's own six states, separate from host files. |
 
-Undo restores the scene as it was before your last mix-changing step; every
+| Layer | Contains | Stored |
+|---|---|---|
+| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
+| **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
+| **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
+
+### Workspaces
+
+`WORKSPACE` opens a menu:
+
+- `Open Workspace…`
+- `Save Workspace`
+- `Save Workspace As…`
+
+The file dialogs start in the last folder you used, or in your `Documents`
+folder when there is no remembered folder. A workspace is one JSON file with
+the `.tcws` extension. Save writes atomically; a failed save cannot destroy the
+previous file.
+
+A workspace contains:
+
+- the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
+- all eight snapshots and their names;
+- user channel labels;
+- the four mute/solo/fader groups;
+- the six layout slots and the current collapsed/expanded strips;
+- view, row mode, sidebar, zoom and selected-output state;
+- Control Room assignments and monitoring settings;
+- active Talkback and Cue states;
+- the virtual surround-output settings;
+- the window size.
+
+Undo/redo history, open dialogs and transient selections are not saved. The
+unit's six device setups and the device serial number are not part of a
+workspace. Sample rate, pitch/varispeed and the active Dim and Speaker B
+states are stored in the current mix.
+
+Opening a workspace replaces all of the above and applies its mixer to the
+device. If the current workspace has unsaved changes, TotalControl asks before
+discarding them. A workspace written for a different device model is refused.
+
+The `WORKSPACE` label shows `*` while the workspace has unsaved changes. Saving
+clears the marker. A workspace is separate from the auto-saved current mix and
+from the unit's device setups.
+
+Clicking `OPTIONS` while the Workspace menu is open switches to the Options
+menu immediately, and the reverse. Submenus open on the first click.
+
+### Snapshots
+
+**Snapshots** are eight numbered slots, each with a name. Select a slot and
+edit its name in the field below the Store action. They store a complete mixer
+state but not the GUI state, groups or layout. Recall applies the stored mix to
+the device at once. The current mix is also saved every few seconds and again
+when TotalControl closes.
+
+### Layouts
+
+**Layouts** are six slots for the collapsed/expanded strip set. They are part
+of the current workspace, not separate mixer states.
+
+Undo restores the mix as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
 you undid. Device settings and window layout are not part of undo.
 
-Groups (multi-select sets) exist only while TotalControl runs; they are not saved.
-There is no RME-style Workspace file — TotalControl keeps the same information in
-separate files instead.
+Groups are saved in a workspace. Loading a workspace replaces the current
+groups with the stored ones.
 
 ## 14. Latency
 
@@ -803,12 +871,16 @@ packets; reset only clears the display baseline.
 
 ## 15. Where TotalControl keeps its data
 
-- Snapshots: `Mix <n>.json` in the scene directory.
-- The continuously saved current mix: `auto.json` in the scene directory.
+- Workspaces: `.tcws` files in the folder you choose when saving.
+- Snapshots: `Mix <n>.json` in the mix data directory.
+- The continuously saved current mix: `auto.json` in the mix data directory.
 - Layouts: `Layout <n>.json` in the layout directory.
-- Window and GUI state: `gui.json` in the `~/.config/totalcontrol/` directory.
+- Window, GUI state and the last workspace folder: `gui.json` in the
+  `~/.config/totalcontrol/` directory.
 
-These are plain JSON files you can back up or copy between machines.
+The workspace file is the portable one: it contains the current mixer,
+snapshots, labels, groups, layouts and view state. The other files are the
+working state of the current session.
 
 ## 16. Running in the background
 
@@ -825,10 +897,10 @@ audio stack, building from source and project status.
 
 ## 17. Device settings at startup
 
-At connect TotalControl compares the device state with the saved scene and
+At connect TotalControl compares the device state with the saved mix and
 lets you choose, with a dialog:
 
-- **Use TotalControl settings** — write the saved scene to the device.
+- **Use TotalControl settings** — write the saved mix to the device.
 - **Use device settings** — adopt the decoded device values in TotalControl
   and keep them on the unit.
 - **Always use TotalControl settings** — as above and stop asking.
@@ -844,7 +916,7 @@ beyond the window.
 
 The dump does not include the options word (clock source, optical format,
 SPDIF professional, word-clock rate and termination, EQ+D for Record), channel
-names, trims or loopback. Those stay with the saved scene. On the UCX the
+names, trims or loopback. Those stay with the saved mix. On the UCX the
 `48 V`, Inst, Level and reference settings are in the dump and are compared.
 
 ## 18. The UCX front knob
@@ -938,7 +1010,7 @@ connected changes only the front-panel parameters — input gains and output
 volumes — not the routing. `CC` activates after a power cycle.
 
 The six slots are written from TotalMix FX, **Options → Store current State
-into Device → Setup 1–6**. The host does not upload a scene; the unit snapshots
+into Device → Setup 1–6**. The host does not upload a mix; the unit snapshots
 its current internal state, including routing, EQ, FX, references and options.
 TotalControl leaves the six device slots untouched. Its own **Mix 1–8**
 snapshots are host files, not the unit's setups.
@@ -946,7 +1018,7 @@ snapshots are host files, not the unit's setups.
 If the unit reports an error at power-up and every user slot still shows
 `n.o.` after TotalMix has stored it, the unit's setup memory has not passed
 its self-test. `FA` may still load because it comes from the firmware. In that
-case the six device slots are unavailable; keep using host scenes and Mix 1–8
+case the six device slots are unavailable; keep using host mixes and Mix 1–8
 and have the unit serviced.
 
 ## Appendix A — Device modes
@@ -998,9 +1070,12 @@ channels and can route it like any other playback source.
 ## Appendix C — OSC setup
 
 OSC is opt-in and binds to loopback. Open `Options > Settings`, enable
-`OSC control surface`, and choose `Classic` or `Global`; the receive and send
-ports are in the same section and are saved with the other settings. Disabling
-the switch stops the surface immediately.
+`Enable OSC control surface`, and choose `Classic` or `Global`; the receive
+and send ports are in the same section and are saved with the other settings.
+Disabling the switch stops the surface immediately.
+
+`Show OSC debug log` below it opens the traffic panel; it is greyed out until
+OSC is enabled and closes when OSC is switched off.
 
 `Classic` is the banked TotalMix FX 1.96–2.11 address space. `Global` is the
 absolute-channel TotalMix FX 2.1+ surface: channels are addressed by their

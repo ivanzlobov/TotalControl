@@ -505,9 +505,8 @@ pub struct OutputChannel {
     /// {pair+1}`) is exclusively monitored through the AN1/2 bus, every
     /// other playback pair muted there. See [`RmeDevice::set_cue`].
     /// Exclusive across every output (only one can be cued at a time,
-    /// same as solo), not persisted in scenes — a momentary monitoring
-    /// state, not a mix setting.
-    #[serde(default, skip_serializing)]
+    /// same as solo); the monitor state is part of the saved scene.
+    #[serde(default)]
     pub cue: bool,
 }
 

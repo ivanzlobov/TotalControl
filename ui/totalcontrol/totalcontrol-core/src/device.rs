@@ -95,9 +95,8 @@ pub struct DeviceSettings {
     /// still deserialize (same pattern as `Scene::model`).
     #[serde(default)]
     pub spdif_enabled: bool,
-    /// Pitch/varispeed in percent (-5..+5). 0 = nominal. Not persisted
-    /// (the pitch is a live clock setting; the auto-scene keeps 0).
-    #[serde(default, skip_serializing)]
+    /// Pitch/varispeed in percent (-5..+5). 0 = nominal.
+    #[serde(default)]
     pub pitch_percent: f32,
     /// MS-proc engaged (the AN2 "side" crosspoints are muted).
     #[serde(default)]
@@ -123,9 +122,19 @@ pub struct DeviceSettings {
     pub optical_out_spdif: bool,
     /// Control-room Dim engaged.  The attenuation is applied to the
     /// assigned Main Out and Speaker B pairs; the Phones outputs are not
-    /// dimmed by this flag.  Runtime only.  See [`RmeDevice::set_dim_with`].
+    /// dimmed by this flag.  Part of the scene and workspace.  See
+    /// [`RmeDevice::set_dim_with`].
     #[serde(default)]
     pub dim: bool,
+    /// Control-room Dim attenuation in dB, used when restoring an active
+    /// Dim state.
+    #[serde(default = "default_dim_amount_db")]
+    pub dim_amount_db: f32,
+    /// Speaker levels saved when Dim engaged, as `(pair, left, right)`.
+    /// Applying a Dim-active scene restores these levels for the next
+    /// undim without attenuating twice.
+    #[serde(default)]
+    pub dim_saved: Vec<(usize, f32, f32)>,
     /// Control-room Speaker B switch.
     #[serde(default)]
     pub speaker_b: bool,
@@ -214,6 +223,11 @@ pub struct DeviceSettings {
 /// Serde default for [`DeviceSettings::sample_rate`].
 fn default_sample_rate() -> u32 {
     48_000
+}
+
+/// Serde default for [`DeviceSettings::dim_amount_db`].
+fn default_dim_amount_db() -> f32 {
+    -20.0
 }
 
 /// Serde default for [`DeviceSettings::input_link`] (TotalMix's own

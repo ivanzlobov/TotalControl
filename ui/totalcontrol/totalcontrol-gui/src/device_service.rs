@@ -504,14 +504,10 @@ impl RmeDevice for Mirror {
     }
 
     fn capture_scene(&self) -> Scene {
-        // Dim and Speaker B are live monitoring states, not mixer scene
-        // state.  The service snapshot keeps them so the Control Room
-        // buttons can latch, but a saved scene must not carry them: the
-        // output fader values already include Dim's attenuation.
-        let mut scene = self.scene.clone();
-        scene.settings.dim = false;
-        scene.settings.speaker_b = false;
-        scene
+        // The service snapshot carries the active monitor flags and the
+        // saved pre-Dim levels, so the mirror can hand the complete scene
+        // to a workspace without losing Dim or Speaker B.
+        self.scene.clone()
     }
 
     fn apply_scene(&mut self, scene: &Scene) -> Result<(), Error> {
@@ -1205,9 +1201,9 @@ impl Drop for DeviceService {
     }
 }
 
-/// Capture the live model for the service snapshot.  `capture_scene`
-/// deliberately strips runtime monitor states for persistence; the UI
-/// needs those states to latch the Control Room buttons.
+/// Capture the live model for the service snapshot.  The scene carries
+/// the active monitor states and pre-Dim levels so the UI can latch the
+/// Control Room buttons and a workspace can save them.
 fn live_scene(device: &DeviceHandle) -> Scene {
     let mut scene = device.capture_scene();
     scene.settings.dim = device.settings().dim;
@@ -1549,7 +1545,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dim_latches_in_the_mirror_but_not_the_saved_scene() {
+    fn runtime_dim_latches_and_reaches_the_saved_scene() {
         let mut service = DeviceService::spawn(mock());
         let updates = service.take_updates().expect("the update receiver");
         let mut mirror = super::Mirror::new(
@@ -1570,8 +1566,8 @@ mod tests {
             "the live Dim flag reaches the mirror so the button can latch"
         );
         assert!(
-            !mirror.capture_scene().settings.dim,
-            "the saved scene must not carry the runtime Dim flag"
+            mirror.capture_scene().settings.dim,
+            "the saved scene carries the active Dim flag"
         );
 
         assert!(mirror.set_dim(false).is_ok());
