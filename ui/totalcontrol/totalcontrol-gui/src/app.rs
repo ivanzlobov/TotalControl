@@ -5,7 +5,7 @@ use iced::widget::{
     row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Background, Color, Element, Length, Subscription, Task};
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult};
+use rfd::FileDialog;
 use rosc::OscType;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -429,6 +429,20 @@ impl RmeDevice for DeviceHandle {
     }
     fn matrix_uses_display_order(&self) -> bool {
         delegate!(self, matrix_uses_display_order)
+    }
+    fn matrix_cells_supported(&self) -> bool {
+        delegate!(self, matrix_cells_supported)
+    }
+    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        delegate!(self, matrix_cell(channel, block))
+    }
+    fn set_matrix_cell(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        gain: f32,
+    ) -> Result<(), totalcontrol_core::Error> {
+        delegate!(self, set_matrix_cell(channel, block, gain))
     }
     fn open() -> Result<Self, totalcontrol_core::Error> {
         unreachable!()
@@ -1728,6 +1742,14 @@ pub enum WorkspaceMenu {
     #[default]
     Closed,
     Root,
+    Factory,
+}
+
+/// What to do after the in-app unsaved-workspace confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspacePending {
+    Open,
+    Factory(crate::workspaces::SurroundLayout),
 }
 
 /// The top-bar Options menu.  Reset Mix is a submenu; Settings opens the
@@ -2108,6 +2130,16 @@ pub enum Message {
     WorkspaceSave,
     /// Saves the current workspace under a new path.
     WorkspaceSaveAs,
+    /// Opens the built-in surround layouts.
+    WorkspaceFactory,
+    /// Returns from the surround list to the Workspace root.
+    WorkspaceBack,
+    /// Loads a built-in direct surround workspace.
+    LoadSurroundWorkspace(crate::workspaces::SurroundLayout),
+    /// Confirms the pending workspace replacement.
+    WorkspaceConfirm,
+    /// Cancels the pending workspace replacement.
+    WorkspaceCancel,
     /// Closes the Workspace menu.
     CloseWorkspace,
     /// Opens the top-bar Options menu, or closes it.
@@ -2312,6 +2344,8 @@ pub struct TotalControl {
     /// The card index is deliberately not part of this.
     pub device_target: Option<DeviceTarget>,
     pub sel_out: usize,
+    /// Selected side of a split output pair (0 = left, 1 = right).
+    pub sel_out_side: usize,
     /// Last front-panel OUT selection seen by `Message::Tick` — when it
     /// changes, `sel_out` follows (TotalMix highlights the panel's
     /// current submix). `None` = never seen (no panel / first tick).
@@ -2563,6 +2597,8 @@ pub struct TotalControl {
     pub workspace_path: Option<PathBuf>,
     /// Whether host-side workspace state has changed since the last save.
     pub workspace_dirty: bool,
+    /// Pending workspace replacement waiting for the in-app confirmation.
+    pub workspace_pending: Option<WorkspacePending>,
     /// Last folder used by the Workspace file dialogs.
     pub workspace_last_dir: Option<PathBuf>,
     /// Top-bar Options menu state.
@@ -3056,6 +3092,7 @@ pub fn new_with_device(
         device_target,
         connected,
         sel_out: 0,
+        sel_out_side: 0,
         last_panel_out: None,
         view: View::Quick,
         quick_channel: ChannelId::Input(0),
@@ -3137,6 +3174,7 @@ pub fn new_with_device(
         workspace_menu: WorkspaceMenu::Closed,
         workspace_path: None,
         workspace_dirty: false,
+        workspace_pending: None,
         workspace_last_dir: None,
         options_menu: OptionsMenu::Closed,
         surround_51: false,
@@ -3300,6 +3338,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         collapsed,
         flyouts,
         sel_out: Some(state.sel_out),
+        sel_out_side: Some(state.sel_out_side),
         sync_direction: Some(state.sync_direction),
         always_init_device: state.always_init_device,
         osc_enabled: state.osc_enabled,
@@ -3424,6 +3463,9 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         let pairs = state.device.output_pair_count().max(1);
         state.sel_out = out.min(pairs - 1);
     }
+    if let Some(side) = prefs.sel_out_side {
+        state.sel_out_side = side.min(1);
+    }
 
     // USB has no readback; it must always restore GUI -> device.  The UCX
     // honours the user's choice, defaulting to the safe Device -> GUI.
@@ -3493,6 +3535,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             fx_panel: state.show_fx_panel,
             ui_scale: state.ui_scale,
             sel_out: state.sel_out,
+            sel_out_side: state.sel_out_side,
             quick_channel: state.quick_channel,
             show_original_names: state.show_original_names,
             matrix_mono: state.matrix_mono,
@@ -3518,6 +3561,16 @@ fn apply_workspace(
     state: &mut TotalControl,
     workspace: &Workspace,
     path: PathBuf,
+) -> Result<(), String> {
+    apply_workspace_state(state, workspace, Some(path))
+}
+
+/// Shared apply path for file-backed and built-in workspaces.  A built-in
+/// workspace has no file and starts dirty, so Save opens Save As.
+fn apply_workspace_state(
+    state: &mut TotalControl,
+    workspace: &Workspace,
+    path: Option<PathBuf>,
 ) -> Result<(), String> {
     if workspace.schema > workspaces::SCHEMA {
         return Err(format!(
@@ -3579,7 +3632,11 @@ fn apply_workspace(
         .view
         .ui_scale
         .clamp(theme::SCALE_MIN, theme::SCALE_MAX);
-    state.sel_out = workspace.view.sel_out;
+    state.sel_out = workspace
+        .view
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    state.sel_out_side = workspace.view.sel_out_side.min(1);
     state.quick_channel = workspace.view.quick_channel;
     state.show_original_names = workspace.view.show_original_names;
     state.matrix_mono = workspace.view.matrix_mono;
@@ -3589,7 +3646,7 @@ fn apply_workspace(
     state.surround_51 = workspace.surround_51;
     state.surround_71 = workspace.surround_71;
     state.window_size = workspace.window_size;
-    state.workspace_path = Some(path);
+    state.workspace_path = path;
     state.workspace_dirty = false;
     state.workspace_menu = WorkspaceMenu::Closed;
     state.snapshot_dirty = false;
@@ -3616,6 +3673,37 @@ fn apply_workspace(
         state.talkback_on = on;
     }
     sync_surround_bridge(state);
+    Ok(())
+}
+
+/// Build a built-in direct surround workspace from the current one and
+/// apply it through the normal workspace scene path.
+fn load_surround_workspace(
+    state: &mut TotalControl,
+    layout: workspaces::SurroundLayout,
+) -> Result<(), String> {
+    let topology = workspaces::SurroundTopology {
+        output_order: state.device.output_display_order(),
+        matrix_uses_display_order: state.device.matrix_uses_display_order(),
+    };
+    let workspace = workspaces::factory_workspace(
+        &capture_workspace(state),
+        layout,
+        &topology,
+    )?;
+    // Rewriting the playback pairs at full width clears mono cells left by a
+    // previous width/MS setting.  Do this before the scene apply so the
+    // downmix's own cross-side cells are not wiped again.
+    if state.device.capabilities().channel_width {
+        for pair in 0..state.device.playbacks().len() / 2 {
+            state
+                .device
+                .set_channel_width(ChannelId::Playback(pair * 2), 1.0)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    apply_workspace_state(state, &workspace, None)?;
+    state.workspace_dirty = true;
     Ok(())
 }
 
@@ -3793,16 +3881,53 @@ fn save_workspace_to(state: &mut TotalControl, path: PathBuf) -> Result<(), Stri
     Ok(())
 }
 
-fn confirm_discard_workspace(state: &TotalControl) -> bool {
-    if !state.workspace_dirty {
-        return true;
+fn open_workspace_after_confirm(state: &mut TotalControl) -> Task<Message> {
+    let Some(path) = workspace_open_dialog(state) else {
+        return Task::none();
+    };
+    match workspaces::load(&path)
+        .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
+    {
+        Ok(()) => {
+            remember_workspace_dir(state, &path);
+            state.notice = Some((
+                format!("Opened workspace {}", path.display()),
+                Instant::now(),
+            ));
+            if let (Some(id), Some((w, h))) = (state.window_id, state.window_size) {
+                return window::resize(id, iced::Size::new(w, h));
+            }
+        }
+        Err(e) => {
+            log::warn!("Could not open workspace {}: {e}", path.display());
+            state.notice = Some((format!("Could not open workspace: {e}"), Instant::now()));
+        }
     }
-    MessageDialog::new()
-        .set_title("Unsaved workspace")
-        .set_description("The current workspace has unsaved changes. Open another one and discard them?")
-        .set_buttons(MessageButtons::YesNo)
-        .show()
-        == MessageDialogResult::Yes
+    Task::none()
+}
+
+fn load_factory_workspace_after_confirm(
+    state: &mut TotalControl,
+    layout: workspaces::SurroundLayout,
+) {
+    match load_surround_workspace(state, layout) {
+        Ok(()) => {
+            state.notice = Some((
+                format!("Loaded factory workspace {}", layout.name()),
+                Instant::now(),
+            ));
+        }
+        Err(e) => {
+            log::warn!(
+                "Could not load factory workspace {}: {e}",
+                layout.name()
+            );
+            state.notice = Some((
+                format!("Could not load factory workspace: {e}"),
+                Instant::now(),
+            ));
+        }
+    }
 }
 
 /// Push the Control Room Main and Speaker B assignments from the saved
@@ -4476,6 +4601,43 @@ pub(crate) fn user_label(state: &TotalControl, cid: ChannelId) -> Option<&str> {
     state.labels.get(&cid).map(String::as_str)
 }
 
+/// The linked-pair form of a user label: `Front L` + `Front R` → `Front`,
+/// matching the hardware `AN1` + `AN2` → `AN1/2` naming.
+pub(crate) fn user_pair_label(state: &TotalControl, cid: ChannelId) -> Option<String> {
+    let (left, right, linked) = match cid {
+        ChannelId::Input(i) if i % 2 == 0 => (
+            ChannelId::Input(i),
+            ChannelId::Input(i + 1),
+            state.device.input_pair_linked(i / 2),
+        ),
+        ChannelId::Playback(i) if i % 2 == 0 => (
+            ChannelId::Playback(i),
+            ChannelId::Playback(i + 1),
+            state.device.playback_linked(i / 2),
+        ),
+        ChannelId::Output(i) if i % 2 == 0 => (
+            ChannelId::Output(i),
+            ChannelId::Output(i + 1),
+            state.device.output_linked(i / 2),
+        ),
+        _ => return user_label(state, cid).map(str::to_string),
+    };
+    if !linked {
+        return user_label(state, left).map(str::to_string);
+    }
+    let left = user_label(state, left)?;
+    let right = user_label(state, right).unwrap_or(left);
+    if left == right {
+        return Some(left.to_string());
+    }
+    if let Some(prefix) = left.strip_suffix(" L") {
+        if right == format!("{prefix} R") {
+            return Some(prefix.to_string());
+        }
+    }
+    Some(format!("{left}/{right}"))
+}
+
 /// Whether `cid` is rendered by the Control Room. Its name is fixed by the
 /// destination; it may not be renamed and never takes a user label.
 fn is_control_room_cid(state: &TotalControl, cid: ChannelId) -> bool {
@@ -4505,8 +4667,13 @@ fn enforce_control_room_stereo(state: &mut TotalControl) {
 /// strip name ("AN1/2" -> "Vocals"), not one half of it.
 fn finish_params<'a>(state: &'a TotalControl, mut p: strip::StripParams<'a>) -> strip::StripParams<'a> {
     if !p.name_locked {
-        if let Some(label) = user_label(state, p.cid) {
-            p.name = label.to_string();
+        let label = if p.stereo_linked {
+            user_pair_label(state, p.cid)
+        } else {
+            user_label(state, p.cid).map(str::to_string)
+        };
+        if let Some(label) = label {
+            p.name = label;
             p.name_custom = true;
         }
     }
@@ -4664,6 +4831,12 @@ fn set_channel_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f
     // The caller passes the level shown next to the fader; the model
     // stores the send before trim.
     let send = effective_to_send(state, cid, v);
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_)) && out == state.sel_out {
+        if let Some(block) = selected_output_block(state) {
+            let _ = state.device.set_matrix_cell(cid, block, send);
+            return;
+        }
+    }
     let _ = match cid {
         ChannelId::Input(ch) => state.device.set_input_volume(ch / 2, ch % 2, out, send),
         ChannelId::Playback(ch) => state.device.set_playback_volume(ch / 2, ch % 2, out, send),
@@ -4726,6 +4899,12 @@ fn channel_pan(state: &TotalControl, cid: ChannelId, out: usize) -> i8 {
 /// parameter: its balance is the difference between the two channel
 /// volumes, so the knob sets the quieter side's level.
 fn set_channel_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8) {
+    if matches!(cid, ChannelId::Input(_) | ChannelId::Playback(_))
+        && out == state.sel_out
+        && selected_output_block(state).is_some()
+    {
+        return;
+    }
     let result = match cid {
         ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
             state.device.set_input_balance(i / 2, out, pan)
@@ -6950,6 +7129,10 @@ fn is_undoable(message: &Message) -> bool {
             | Message::WorkspaceOpen
             | Message::WorkspaceSave
             | Message::WorkspaceSaveAs
+            | Message::WorkspaceFactory
+            | Message::WorkspaceBack
+            | Message::WorkspaceConfirm
+            | Message::WorkspaceCancel
             | Message::CloseWorkspace
             | Message::ToggleOptions
             | Message::OptionsReset
@@ -7209,6 +7392,44 @@ fn needs_protocol_features(message: &Message) -> bool {
     )
 }
 
+/// The exact mono output block currently selected, when the selected
+/// output pair is split.  Linked pairs keep the pair-level behaviour.
+fn output_block_for_pair(output_order: &[usize], pair: usize, side: usize) -> Option<usize> {
+    output_order
+        .iter()
+        .position(|&p| p == pair)
+        .map(|display| display * 2 + side.min(1))
+}
+
+fn selected_output_block(state: &TotalControl) -> Option<usize> {
+    let pair = state
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    if state.device.outputs_one_per_pair() || state.device.output_linked(pair) {
+        None
+    } else {
+        output_block_for_pair(
+            &state.device.output_display_order(),
+            pair,
+            state.sel_out_side,
+        )
+    }
+}
+
+/// The output channel id used by the Quick view and split selection.
+fn selected_output_channel(state: &TotalControl) -> usize {
+    let pair = state
+        .sel_out
+        .min(state.device.output_pair_count().saturating_sub(1));
+    if state.device.outputs_one_per_pair() {
+        pair
+    } else if state.device.output_linked(pair) {
+        pair * 2
+    } else {
+        pair * 2 + state.sel_out_side.min(1)
+    }
+}
+
 /// Select a strip the way a plain click does.  The strip's own controls
 /// (mute, solo, the flyout buttons, the fader, the knobs) call this too, so
 /// a click anywhere on a channel selects it; on a hardware output it also
@@ -7222,11 +7443,17 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     }
     state.select_anchor = Some(cid);
     if let ChannelId::Output(i) = cid {
-        state.sel_out = if state.device.outputs_one_per_pair() {
-            i
+        if state.device.outputs_one_per_pair() {
+            state.sel_out = i;
+            state.sel_out_side = 0;
         } else {
-            i / 2
-        };
+            state.sel_out = i / 2;
+            state.sel_out_side = if state.device.output_linked(i / 2) {
+                0
+            } else {
+                i % 2
+            };
+        }
     }
 }
 
@@ -7250,6 +7477,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::WorkspaceOpen
                 | Message::WorkspaceSave
                 | Message::WorkspaceSaveAs
+                | Message::LoadSurroundWorkspace(_)
                 | Message::CloseWorkspace
         )
     {
@@ -7614,6 +7842,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 if state.last_panel_out != Some(out_sel) {
                     state.last_panel_out = Some(out_sel);
                     state.sel_out = state.device.display_pair_index(out);
+                    state.sel_out_side = 0;
                 }
             }
             let input_trims: Vec<f32> =
@@ -7930,6 +8159,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             // Quick view derives an output channel from it.
             let sel_out = i.min(state.device.output_pair_count().saturating_sub(1));
             state.sel_out = sel_out;
+            state.sel_out_side = 0;
             // Selecting a bus dismisses the Route flyout — it did its
             // job. Doesn't touch any other (Settings/Eq/Trim) flyout
             // that happens to be open elsewhere.
@@ -7958,7 +8188,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::EscapePressed => {
             // Topmost thing first: the modal outranks an in-place edit.
-            if state.show_about {
+            if state.workspace_pending.is_some() {
+                state.workspace_pending = None;
+            } else if state.show_about {
                 state.show_about = false;
             } else if state.workspace_menu != WorkspaceMenu::Closed {
                 state.workspace_menu = WorkspaceMenu::Closed;
@@ -8701,7 +8933,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             apply_grouped_volume(state, cid, out, v);
         }
         Message::MatrixCellChanged(cid, block, v) => {
-            if state.matrix_mono {
+            let split_playback = match cid {
+                ChannelId::Playback(i) => state
+                    .device
+                    .playbacks()
+                    .get(i)
+                    .is_some_and(|ch| ch.split),
+                _ => false,
+            };
+            if state.matrix_mono || split_playback {
                 let send = effective_to_send(state, cid, v);
                 if let Err(e) = state.device.set_matrix_cell(cid, block, send) {
                     fail(state, "set_matrix_cell", &e);
@@ -9069,36 +9309,33 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.assign_menu = AssignMenu::Closed;
             state.workspace_menu = match state.workspace_menu {
                 WorkspaceMenu::Closed => WorkspaceMenu::Root,
-                WorkspaceMenu::Root => WorkspaceMenu::Closed,
+                WorkspaceMenu::Root | WorkspaceMenu::Factory => WorkspaceMenu::Closed,
             };
         }
+        Message::WorkspaceFactory => state.workspace_menu = WorkspaceMenu::Factory,
+        Message::WorkspaceBack => state.workspace_menu = WorkspaceMenu::Root,
+        Message::LoadSurroundWorkspace(layout) => {
+            state.workspace_menu = WorkspaceMenu::Closed;
+            state.workspace_pending = Some(WorkspacePending::Factory(layout));
+            return Task::none();
+        }
+        Message::WorkspaceConfirm => {
+            let Some(pending) = state.workspace_pending.take() else {
+                return Task::none();
+            };
+            match pending {
+                WorkspacePending::Open => return open_workspace_after_confirm(state),
+                WorkspacePending::Factory(layout) => {
+                    load_factory_workspace_after_confirm(state, layout)
+                }
+            }
+        }
+        Message::WorkspaceCancel => state.workspace_pending = None,
         Message::CloseWorkspace => state.workspace_menu = WorkspaceMenu::Closed,
         Message::WorkspaceOpen => {
             state.workspace_menu = WorkspaceMenu::Closed;
-            if !confirm_discard_workspace(state) {
-                return Task::none();
-            }
-            let Some(path) = workspace_open_dialog(state) else {
-                return Task::none();
-            };
-            match workspaces::load(&path)
-                .and_then(|workspace| apply_workspace(state, &workspace, path.clone()))
-            {
-                Ok(()) => {
-                    remember_workspace_dir(state, &path);
-                    state.notice = Some((
-                        format!("Opened workspace {}", path.display()),
-                        Instant::now(),
-                    ));
-                    if let (Some(id), Some((w, h))) = (state.window_id, state.window_size) {
-                        return window::resize(id, iced::Size::new(w, h));
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Could not open workspace {}: {e}", path.display());
-                    state.notice = Some((format!("Could not open workspace: {e}"), Instant::now()));
-                }
-            }
+            state.workspace_pending = Some(WorkspacePending::Open);
+            return Task::none();
         }
         Message::WorkspaceSave => {
             state.workspace_menu = WorkspaceMenu::Closed;
@@ -9882,6 +10119,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     };
     state.playback_tap_channels = 0;
     state.sel_out = 0;
+    state.sel_out_side = 0;
     state.quick_channel = ChannelId::Input(0);
     state.last_panel_out = None;
     state.renaming = None;
@@ -9898,6 +10136,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
+    state.sel_out_side = state.sel_out_side.min(1);
     if state.device.needs_scene_restore() {
         if let Some(scene) = load_scene_for_current(state) {
             state.host_scene = Some(scene.clone());
@@ -10273,6 +10512,12 @@ pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
         // it is a modal now, not one more docked panel (see
         // `about::about_modal`).
         base = stack(vec![base, about::about_modal(state)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    }
+    if state.workspace_pending.is_some() {
+        base = stack(vec![base, workspace_confirm_modal(state)])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -10742,6 +10987,39 @@ fn menu_below_top_bar<'a>(
     .into()
 }
 
+/// Unsaved-workspace confirmation.  It is an in-app modal, not a native
+/// dialog, so it cannot open behind the main window.
+fn workspace_confirm_modal(state: &TotalControl) -> Element<'_, Message> {
+    let scale = state.ui_scale;
+    let (title, action) = match state.workspace_pending {
+        Some(WorkspacePending::Open) => ("Open workspace", "Open"),
+        Some(WorkspacePending::Factory(_)) => ("Load factory workspace", "Load"),
+        None => ("Workspace", "Continue"),
+    };
+    let body = column![
+        text(title)
+            .size(theme::TEXT_XL * scale)
+            .color(theme::TEXT_PRIMARY),
+        text("Loading a workspace will overwrite the current workspace.")
+            .size(theme::TEXT_DIALOG * scale)
+            .color(theme::TEXT_SEC),
+        row![
+            iced::widget::button(text("Cancel").size(theme::TEXT_DIALOG * scale))
+                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::WorkspaceCancel),
+            iced::widget::button(text(action).size(theme::TEXT_DIALOG * scale))
+                .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
+                .style(theme::ghost_button)
+                .on_press(Message::WorkspaceConfirm),
+        ]
+        .spacing(theme::SPACE_MD * scale),
+    ]
+    .spacing(theme::SPACE_LG * scale)
+    .width(Length::Fill);
+    centered_dialog(state, body.into(), Message::WorkspaceCancel, 460.0)
+}
+
 /// The top-bar Workspace menu.  The file dialogs use the remembered
 /// workspace folder, defaulting to the user's Documents directory.
 fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
@@ -10754,13 +11032,26 @@ fn workspace_menu_layer(state: &TotalControl) -> Element<'_, Message> {
             .style(theme::ghost_button)
             .on_press(message)
     };
-    let card = column![
-        item("Open Workspace…", Message::WorkspaceOpen),
-        item("Save Workspace", Message::WorkspaceSave),
-        item("Save Workspace As…", Message::WorkspaceSaveAs),
-    ]
-    .spacing(0.0)
-    .width(Length::Fixed(224.0 * scale));
+    let mut card = column![].spacing(0.0).width(Length::Fixed(224.0 * scale));
+    match state.workspace_menu {
+        WorkspaceMenu::Root => {
+            card = card
+                .push(item("Open Workspace…", Message::WorkspaceOpen))
+                .push(item("Save Workspace", Message::WorkspaceSave))
+                .push(item(
+                    "Factory Workspaces  ▸",
+                    Message::WorkspaceFactory,
+                ))
+                .push(item("Save Workspace As…", Message::WorkspaceSaveAs));
+        }
+        WorkspaceMenu::Factory => {
+            card = card.push(item("‹  Factory Workspaces", Message::WorkspaceBack));
+            for layout in workspaces::SurroundLayout::ALL {
+                card = card.push(item(layout.menu_label(), Message::LoadSurroundWorkspace(layout)));
+            }
+        }
+        WorkspaceMenu::Closed => {}
+    }
     let card = opaque(
         container(card)
             .style(theme::dialog)
@@ -12226,7 +12517,13 @@ fn strip_params<'a>(
                     None
                 }
             });
-            let (volume, pan) = if linked {
+            let (volume, pan) = if let Some(block) =
+                selected_output_block(state).filter(|_| output_idx == state.sel_out)
+            {
+                let trim = trim_factor(ch.trim);
+                let cell = state.device.matrix_cell(cid, block).unwrap_or(0.0);
+                (if trim > 0.0 { cell / trim } else { 0.0 }, 0)
+            } else if linked {
                 let left = i & !1;
                 let right = left + 1;
                 let left_volume = state
@@ -12309,7 +12606,13 @@ fn strip_params<'a>(
         ChannelId::Playback(i) => {
             let ch = &state.device.playbacks()[i];
             let linked = state.device.playback_linked(i / 2);
-            let (volume, pan) = if linked {
+            let (volume, pan) = if let Some(block) =
+                selected_output_block(state).filter(|_| output_idx == state.sel_out)
+            {
+                let trim = trim_factor(ch.trim);
+                let cell = state.device.matrix_cell(cid, block).unwrap_or(0.0);
+                (if trim > 0.0 { cell / trim } else { 0.0 }, 0)
+            } else if linked {
                 let left = i & !1;
                 let right = left + 1;
                 let left_volume = state
@@ -12427,11 +12730,7 @@ fn strip_params<'a>(
 
                 cue: ch.cue,
                 default_vol: 1.0,
-                active_surface: if state.device.outputs_one_per_pair() {
-                    i == state.sel_out
-                } else {
-                    i / 2 == state.sel_out
-                },
+                active_surface: i == selected_output_channel(state),
                 ..base
             }
         }
@@ -16816,7 +17115,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
     let sel_out = state
         .sel_out
         .min(state.device.output_pair_count().saturating_sub(1));
-    let dest_cid = ChannelId::Output(sel_out * 2);
+    let dest_cid = ChannelId::Output(selected_output_channel(state));
 
     // Rebuilt on every layout pass: the content sits behind a `responsive`
     // (the centered form needs the available size, which a `Length::Fill`
@@ -19901,6 +20200,134 @@ mod tests {
         assert_eq!(target.device.settings().pitch_percent, 1.5);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));
         assert!(!target.workspace_dirty);
+    }
+
+    #[test]
+    fn factory_workspace_load_waits_for_the_in_app_confirmation() {
+        let mut state = new(true, None, None);
+        let layout = crate::workspaces::SurroundLayout::Direct51;
+        let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+        assert_eq!(
+            state.workspace_pending,
+            Some(super::WorkspacePending::Factory(layout))
+        );
+        assert!(!state.labels.contains_key(&ChannelId::Playback(0)));
+
+        let _ = update(&mut state, Message::WorkspaceCancel);
+        assert_eq!(state.workspace_pending, None);
+        assert!(!state.labels.contains_key(&ChannelId::Playback(0)));
+
+        let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+        let _ = update(&mut state, Message::WorkspaceConfirm);
+        assert_eq!(state.workspace_pending, None);
+        assert_eq!(
+            state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+            Some("Front L")
+        );
+    }
+
+    #[test]
+    fn factory_surround_workspaces_apply_through_the_workspace_path() {
+        for (layout, seven_one, downmix) in [
+            (crate::workspaces::SurroundLayout::Direct51, false, false),
+            (crate::workspaces::SurroundLayout::Direct71, true, false),
+            (crate::workspaces::SurroundLayout::Downmix51To40, false, true),
+            (crate::workspaces::SurroundLayout::Downmix71To40, true, true),
+        ] {
+            let mut state = new(true, None, None);
+            state.workspace_dirty = false;
+            state.show_original_names = true;
+            state.labels.insert(ChannelId::Input(0), "Old".into());
+            let _ = update(&mut state, Message::LoadSurroundWorkspace(layout));
+            let _ = update(&mut state, Message::WorkspaceConfirm);
+
+            assert_eq!(state.workspace_path, None);
+            assert!(state.workspace_dirty);
+            assert_eq!(state.surround_71, seven_one);
+            assert_eq!(state.surround_51, !seven_one);
+            assert!(!state.show_original_names);
+            assert!(!state.labels.contains_key(&ChannelId::Input(0)));
+            assert_eq!(
+                state.labels.get(&ChannelId::Playback(0)).map(String::as_str),
+                Some("Front L")
+            );
+            assert_eq!(
+                state.labels.get(&ChannelId::Playback(2)).map(String::as_str),
+                Some("Center")
+            );
+            assert!(!state.groups[0].members.is_empty());
+            assert!(state.view == View::Mixer);
+            assert!(!state.show_fx_panel);
+            assert!(!state.device.settings().mute_fx);
+            let first_pair = if state.device.matrix_uses_display_order() {
+                0
+            } else {
+                state.device.output_display_order()[0]
+            };
+            assert_eq!(state.device.playbacks()[0].volumes[first_pair], 1.0);
+            assert!(state.device.playbacks()[2].split);
+            assert_eq!(
+                state
+                    .host_scene
+                    .as_ref()
+                    .unwrap()
+                    .matrix_overrides
+                    .len(),
+                if downmix { 2 } else { 0 }
+            );
+        }
+    }
+
+    #[test]
+    fn split_output_matrix_blocks_use_display_order() {
+        let order = [1usize, 2, 3, 0, 4, 5, 6, 7, 8];
+        // AN3/4 is internal pair 2 but display pair 1.
+        assert_eq!(super::output_block_for_pair(&order, 2, 0), Some(2));
+        assert_eq!(super::output_block_for_pair(&order, 2, 1), Some(3));
+        // AN5/6 is internal pair 3 but display pair 2.
+        assert_eq!(super::output_block_for_pair(&order, 3, 0), Some(4));
+        assert_eq!(super::output_block_for_pair(&order, 3, 1), Some(5));
+    }
+
+    #[test]
+    fn split_output_channels_are_selected_individually() {
+        let mut state = new(true, None, None);
+        state.device.set_output_linked(1, false).unwrap();
+        let left = ChannelId::Output(2);
+        let right = ChannelId::Output(3);
+
+        let _ = update(&mut state, Message::StripClicked(left));
+        assert_eq!(state.sel_out, 1);
+        assert_eq!(state.sel_out_side, 0);
+        assert!(state.selected.contains(&left));
+        assert!(!state.selected.contains(&right));
+        assert!(strip_params(&state, left, state.sel_out).active_surface);
+        assert!(!strip_params(&state, right, state.sel_out).active_surface);
+
+        let _ = update(&mut state, Message::StripClicked(right));
+        assert_eq!(state.sel_out, 1);
+        assert_eq!(state.sel_out_side, 1);
+        assert!(state.selected.contains(&right));
+        assert!(!state.selected.contains(&left));
+        assert!(!strip_params(&state, left, state.sel_out).active_surface);
+        assert!(strip_params(&state, right, state.sel_out).active_surface);
+    }
+
+    #[test]
+    fn linked_pair_labels_drop_the_l_r_suffix() {
+        let mut state = new(true, None, None);
+        state.labels.insert(ChannelId::Playback(0), "Front L".into());
+        state.labels.insert(ChannelId::Playback(1), "Front R".into());
+        state.device.set_playback_linked(0, true).unwrap();
+        assert_eq!(
+            super::user_pair_label(&state, ChannelId::Playback(0)),
+            Some("Front".into())
+        );
+        state.device.set_playback_linked(0, false).unwrap();
+        assert_eq!(
+            super::user_pair_label(&state, ChannelId::Playback(0)),
+            Some("Front L".into())
+        );
     }
 
     #[test]

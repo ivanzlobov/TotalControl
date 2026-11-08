@@ -1388,6 +1388,42 @@ impl Fireface {
         }
     }
 
+    /// Gain the per-pair channel model implies for one UCX mono cell.
+    /// UCX per-pair volume arrays are in internal (Phones-first) order;
+    /// `block` is the display/DSP matrix block order.
+    fn matrix_default_ucx(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        if block >= BLOCKS {
+            return None;
+        }
+        let pair = self.output_order().get(block / 2).copied()?;
+        let side = block % 2;
+        match channel {
+            ChannelId::Input(i) => {
+                let ch = self.inputs.get(i)?;
+                let volume = *ch.volumes.get(pair)?;
+                if i < 4 {
+                    let (left, right) =
+                        pan_split(volume, ch.pans.get(pair).copied().unwrap_or(0));
+                    Some(if side == 0 { left } else { right })
+                } else if side == i % 2 {
+                    Some(volume)
+                } else {
+                    Some(0.0)
+                }
+            }
+            ChannelId::Playback(i) => {
+                let ch = self.playbacks.get(i)?;
+                let volume = *ch.volumes.get(pair)?;
+                if side == i % 2 {
+                    Some(volume)
+                } else {
+                    Some(0.0)
+                }
+            }
+            ChannelId::Output(_) => None,
+        }
+    }
+
     /// A natural cell is the one the stereo-pair model already writes:
     /// a playback or stereo input channel into its own side of the output
     /// pair.  The four mono analog inputs are pan-derived instead, so a
@@ -1407,6 +1443,26 @@ impl Fireface {
             self.matrix_overrides
                 .retain(|(source, _), _| *source != idx);
         }
+    }
+
+    /// Drop per-cell overrides for one source into one output pair.  A
+    /// pair-level fader, pan or width edit replaces the custom cell
+    /// routing for that source/pair.
+    fn clear_pair_overrides(&mut self, channel: ChannelId, pair: usize) {
+        let Some(source) = Self::matrix_source_index(channel) else {
+            return;
+        };
+        let blocks = if self.is_uc() {
+            [pair * 2, pair * 2 + 1]
+        } else {
+            let Some(dsp) = ucx::output_pair_dsp(pair) else {
+                return;
+            };
+            [dsp, dsp + 1]
+        };
+        self.matrix_overrides.retain(|&(src, block), _| {
+            !(src == source && blocks.contains(&block))
+        });
     }
 
     /// Phase is a per-source property on the UC: TotalMix writes the
@@ -2586,7 +2642,10 @@ impl Fireface {
             // address uses the DSP output's side.  Keep those two mappings
             // distinct (pair 2 -> DSP 2, but model block 4).
             for side in 0..2 {
-                let model_block = pair * 2 + side;
+                // `matrix_cell` addresses the display/DSP matrix block;
+                // the UC's own per-pair arrays are already in that order,
+                // while the UCX pair index is Phones-first.
+                let model_block = if this.is_uc() { pair * 2 + side } else { dsp + side };
                 let dsp_side = dsp + side;
                 for (idx, ch) in this.inputs.iter().enumerate() {
                     let gain = this
@@ -3209,6 +3268,7 @@ impl Fireface {
         let volume = volume.clamp(0.0, 1.0);
         self.inputs[idx].volumes[output] = volume;
         self.clear_mono_input_cells(idx);
+        self.clear_pair_overrides(ChannelId::Input(idx), output);
         if self.muted.contains(&ChannelId::Input(idx)) {
             if let Some((volumes, _)) = self.mute_saved.get_mut(&ChannelId::Input(idx)) {
                 if let Some(slot) = volumes.get_mut(output) {
@@ -3231,6 +3291,7 @@ impl Fireface {
         }
         let volume = volume.clamp(0.0, 1.0);
         self.playbacks[idx].volumes[output] = volume;
+        self.clear_pair_overrides(ChannelId::Playback(idx), output);
         if self.muted.contains(&ChannelId::Playback(idx)) {
             if let Some((volumes, _)) = self.mute_saved.get_mut(&ChannelId::Playback(idx)) {
                 if let Some(slot) = volumes.get_mut(output) {
@@ -3625,7 +3686,7 @@ impl RmeDevice for Fireface {
     }
 
     fn matrix_cells_supported(&self) -> bool {
-        self.spec.capabilities.matrix_cells
+        true
     }
 
     fn begin_metering(&mut self) {
@@ -3640,14 +3701,15 @@ impl RmeDevice for Fireface {
     }
 
     fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
-        if !self.is_uc() {
-            return self.volume(channel, block / 2).ok();
-        }
         let source = Self::matrix_source_index(channel)?;
         if let Some(gain) = self.matrix_overrides.get(&(source, block)) {
             return Some(*gain);
         }
-        self.matrix_default(channel, block)
+        if self.is_uc() {
+            self.matrix_default(channel, block)
+        } else {
+            self.matrix_default_ucx(channel, block)
+        }
     }
 
     fn set_matrix_cell(
@@ -3663,7 +3725,52 @@ impl RmeDevice for Fireface {
         let source = Self::matrix_source_index(channel)
             .ok_or_else(|| Error::InvalidChannel("output is not a matrix source".into()))?;
         if !self.is_uc() {
-            return self.set_volume(channel, block / 2, gain);
+            let pair = self
+                .output_order()
+                .get(block / 2)
+                .copied()
+                .ok_or_else(|| Error::InvalidChannel(format!("output block {block}")))?;
+            if Self::matrix_natural(channel, block) {
+                match channel {
+                    ChannelId::Input(i) => {
+                        if let Some(slot) =
+                            self.inputs.get_mut(i).and_then(|c| c.volumes.get_mut(pair))
+                        {
+                            *slot = gain;
+                        }
+                    }
+                    ChannelId::Playback(i) => {
+                        if let Some(slot) = self
+                            .playbacks
+                            .get_mut(i)
+                            .and_then(|c| c.volumes.get_mut(pair))
+                        {
+                            *slot = gain;
+                        }
+                    }
+                    ChannelId::Output(_) => {}
+                }
+            }
+            let default = self.matrix_default_ucx(channel, block).unwrap_or(0.0);
+            if (default - gain).abs() < 1e-6 {
+                self.matrix_overrides.remove(&(source, block));
+            } else {
+                self.matrix_overrides.insert((source, block), gain);
+            }
+            let source_kind = match channel {
+                ChannelId::Input(i) => Source::Input(i),
+                ChannelId::Playback(i) => Source::Playback(self.playbacks[i].id),
+                ChannelId::Output(_) => {
+                    return Err(Error::InvalidChannel(
+                        "output is not a matrix source".into(),
+                    ))
+                }
+            };
+            return self.ucx_write_matrix(
+                block as u8,
+                source_kind,
+                (gain * self.trim_gain(channel)) as f64,
+            );
         }
         self.uc_write_matrix(block, source, gain * self.trim_gain(channel))?;
         if Self::matrix_natural(channel, block) {
@@ -3709,6 +3816,7 @@ impl RmeDevice for Fireface {
                 }
                 self.inputs[idx].pans[output] = pan;
                 self.clear_mono_input_cells(idx);
+                self.clear_pair_overrides(ChannelId::Input(idx), output);
                 if idx >= 4 {
                     self.inputs[idx ^ 1].pans[output] = pan;
                 }
@@ -3732,6 +3840,7 @@ impl RmeDevice for Fireface {
                     return Err(Error::InvalidChannel(format!("playback {idx}/{output}")));
                 }
                 self.playbacks[idx].pans[output] = pan;
+                self.clear_pair_overrides(ChannelId::Playback(idx), output);
                 let linked = self.playback_linked(idx / 2);
                 if linked {
                     self.playbacks[idx ^ 1].pans[output] = pan;
@@ -5206,6 +5315,8 @@ impl RmeDevice for Fireface {
                 self.inputs[base].width = width;
                 self.inputs[other].width = width;
                 for pair in 0..PAIRS {
+                    self.clear_pair_overrides(ChannelId::Input(base), pair);
+                    self.clear_pair_overrides(ChannelId::Input(other), pair);
                     self.ucx_write_input_pair(base, pair)?;
                 }
             }
@@ -5218,6 +5329,8 @@ impl RmeDevice for Fireface {
                 self.playbacks[base].width = width;
                 self.playbacks[other].width = width;
                 for pair in 0..PAIRS {
+                    self.clear_pair_overrides(ChannelId::Playback(base), pair);
+                    self.clear_pair_overrides(ChannelId::Playback(other), pair);
                     self.ucx_write_playback_pair(base, pair)?;
                 }
             }
@@ -7621,6 +7734,62 @@ mod tests {
             .unwrap();
         assert_eq!(dev.volume(ChannelId::Playback(0), 1).unwrap(), 0.25);
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 2), Some(0.25));
+    }
+
+    #[test]
+    fn ucx_matrix_cell_writes_one_mono_side() {
+        let (mut dev, writes) = open(Model::Ucx);
+        // Playback 1 into AN4: the side its stereo pair does not normally
+        // reach.  Block 3 is AN4 in the UCX DSP/output order.
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
+            .unwrap();
+        let reg = ucx::matrix_reg(3, Source::Playback(0));
+        let value = ucx::matrix_gain(0.5);
+        assert!(writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, Write::Words(words) if words.contains(&(reg, value)))));
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
+        // The pair model is untouched for the off-side cell.
+        assert_eq!(dev.volume(ChannelId::Playback(0), 1).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn ucx_matrix_natural_cell_updates_the_pair_model() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_matrix_cell(ChannelId::Playback(0), 2, 0.25)
+            .unwrap();
+        // Block 2 is AN3, display pair 1; the UCX model stores it as
+        // internal pair 2.
+        assert_eq!(dev.volume(ChannelId::Playback(0), 2).unwrap(), 0.25);
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 2), Some(0.25));
+    }
+
+    #[test]
+    fn ucx_scene_carries_and_applies_off_side_matrix_cells() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
+            .unwrap();
+        let scene = dev.capture_scene();
+        assert_eq!(scene.matrix_overrides.len(), 1);
+        let cell = scene.matrix_overrides[0];
+        assert_eq!((cell.source, cell.block), (18, 3));
+        assert!((cell.gain - 0.5).abs() < 1e-6);
+
+        let (mut fresh, _writes) = open(Model::Ucx);
+        fresh.apply_scene(&scene).unwrap();
+        assert_eq!(fresh.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
+    }
+
+    #[test]
+    fn ucx_pair_fader_clears_off_side_matrix_cells() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 0.5)
+            .unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.5));
+        dev.set_volume(ChannelId::Playback(0), 2, 0.25).unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(0.0));
     }
 
     #[test]

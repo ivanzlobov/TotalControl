@@ -309,6 +309,69 @@ impl Mirror {
     }
 }
 
+/// The pair-model default for one mono matrix cell, read from the mirror's
+/// snapshot.  UC per-pair arrays are in display order; UCX arrays are in
+/// internal Phones-first order.
+fn scene_matrix_default(
+    scene: &Scene,
+    info: &DeviceInfo,
+    channel: ChannelId,
+    block: usize,
+) -> Option<f32> {
+    if block >= info.output_pair_count * 2 {
+        return None;
+    }
+    let pair = if info.matrix_uses_display_order {
+        block / 2
+    } else {
+        info.output_display_order.get(block / 2).copied()?
+    };
+    let side = block % 2;
+    match channel {
+        ChannelId::Input(i) => {
+            let ch = scene.inputs.get(i)?;
+            let volume = *ch.volumes.get(pair)?;
+            if i < 4 {
+                let pan = ch.pans.get(pair).copied().unwrap_or(0);
+                let (left, right) = (volume, volume);
+                let p = pan.clamp(-100, 100) as f32 / 100.0;
+                Some(if side == 0 {
+                    left * if p > 0.0 { 1.0 - p } else { 1.0 }
+                } else {
+                    right * if p < 0.0 { 1.0 + p } else { 1.0 }
+                })
+            } else if side == i % 2 {
+                Some(volume)
+            } else {
+                Some(0.0)
+            }
+        }
+        ChannelId::Playback(i) => {
+            let ch = scene.playbacks.get(i)?;
+            let volume = *ch.volumes.get(pair)?;
+            if info.is_uc {
+                let pan = ch.pans.get(pair).copied().unwrap_or(0);
+                let p = pan.clamp(-100, 100) as f32 / 100.0;
+                let (left, right) = (volume, volume);
+                Some(if side == i % 2 {
+                    if i % 2 == 0 {
+                        left * if p > 0.0 { 1.0 - p } else { 1.0 }
+                    } else {
+                        right * if p < 0.0 { 1.0 + p } else { 1.0 }
+                    }
+                } else {
+                    0.0
+                })
+            } else if side == i % 2 {
+                Some(volume)
+            } else {
+                Some(0.0)
+            }
+        }
+        ChannelId::Output(_) => None,
+    }
+}
+
 impl RmeDevice for Mirror {
     fn open() -> Result<Self, Error> {
         unreachable!("the mirror is constructed from a snapshot")
@@ -352,6 +415,39 @@ impl RmeDevice for Mirror {
 
     fn matrix_uses_display_order(&self) -> bool {
         self.info.matrix_uses_display_order
+    }
+
+    fn matrix_cells_supported(&self) -> bool {
+        self.info.capabilities.matrix_cells
+    }
+
+    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        let source = match channel {
+            ChannelId::Input(i) => i,
+            ChannelId::Playback(i) => 18 + i,
+            ChannelId::Output(_) => return None,
+        };
+        if let Some(cell) = self
+            .scene
+            .matrix_overrides
+            .iter()
+            .find(|cell| cell.source == source && cell.block == block)
+        {
+            return Some(cell.gain);
+        }
+        scene_matrix_default(&self.scene, &self.info, channel, block)
+    }
+
+    fn set_matrix_cell(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        gain: f32,
+    ) -> Result<(), Error> {
+        self.run(move |d| {
+            let _ = d.set_matrix_cell(channel, block, gain);
+        });
+        Ok(())
     }
 
     fn output_display_order(&self) -> Vec<usize> {

@@ -70,7 +70,7 @@ pub const UCX: ModelSpec = ModelSpec {
         output_phase: true,
         output_balance: true,
         stereo_split: true,
-        matrix_cells: false,
+        matrix_cells: true,
         class_compliant: false,
         // The UCX phantom register is measured on inputs 1/2 (`NN08`).
         // There is no PAD; Level is the pad-equivalent.
@@ -127,13 +127,14 @@ mod tests {
         assert!(caps.loopback);
         assert!(!caps.phase_without_eq);
         assert!(caps.output_balance);
-        assert!(!caps.matrix_cells);
+        assert!(caps.matrix_cells);
         assert!(caps.input_phantom);
         assert!(!caps.input_pad);
         assert!(caps.input_level);
         assert!(caps.input_autoset);
         assert!(caps.dynamics);
         assert!(caps.fx);
+        assert!(caps.matrix_cells);
         assert!(!caps.pitch);
         assert!(!caps.width);
         assert!(!caps.ms_proc);

@@ -152,9 +152,12 @@ fn input_row_groups(state: &TotalControl) -> Vec<RowGroup> {
         } else {
             (inputs[i].name.clone(), 1)
         };
-        let label = crate::app::user_label(state, ChannelId::Input(i))
-            .map(str::to_string)
-            .unwrap_or(label);
+        let label = if count == 2 {
+            crate::app::user_pair_label(state, ChannelId::Input(i))
+        } else {
+            crate::app::user_label(state, ChannelId::Input(i)).map(str::to_string)
+        }
+        .unwrap_or(label);
         groups.push(RowGroup {
             label,
             color: crate::app::type_tag(ty).1,
@@ -175,8 +178,7 @@ fn playback_row_groups(state: &TotalControl) -> Vec<RowGroup> {
     let n = state.device.playbacks().len();
     (0..n / 2)
         .map(|pair| RowGroup {
-            label: crate::app::user_label(state, ChannelId::Playback(pair * 2))
-                .map(str::to_string)
+            label: crate::app::user_pair_label(state, ChannelId::Playback(pair * 2))
                 .or_else(|| state.pair_labels().get(pair).cloned())
                 .unwrap_or_default(),
             color: crate::app::PB_TAG,
@@ -295,14 +297,14 @@ fn push_channel_rows<'a>(
             for col in 0..src.volumes.len() * 2 {
                 let pair = col / 2;
                 let stored = src.volumes[pair] * trim_gain;
-                let mono_source = match cid {
-                    ChannelId::Input(i) => i < 4,
+                let mono_input = matches!(cid, ChannelId::Input(i) if i < 4);
+                let split_playback = match cid {
                     ChannelId::Playback(i) => state
                         .device
                         .playbacks()
                         .get(i)
                         .is_some_and(|ch| ch.split),
-                    ChannelId::Output(_) => false,
+                    _ => false,
                 };
                 let natural = match cid {
                     ChannelId::Input(i) => i >= 4 && col % 2 == i % 2,
@@ -311,11 +313,17 @@ fn push_channel_rows<'a>(
                 };
                 let (shown, interactive) = if state.device.matrix_cells_supported() {
                     let shown = state.device.matrix_cell(cid, col).unwrap_or(0.0) * trim_gain;
-                    // Linked pair: a mono signal can only be routed to the
-                    // left channel.  Mono Mode unlinks the pair and makes
-                    // every cell an independent mono crosspoint.
+                    // A split playback channel is already a mono source and
+                    // can address either side.  A mono hardware input keeps
+                    // its pan-derived pair routing unless Mono Mode is on.
                     let interactive = state.matrix_mono
-                        || if mono_source { col % 2 == 0 } else { natural };
+                        || if split_playback {
+                            true
+                        } else if mono_input {
+                            col % 2 == 0
+                        } else {
+                            natural
+                        };
                     (shown, interactive)
                 } else {
                     match shown_gain(&src, idx, col) {
@@ -393,9 +401,12 @@ fn hairline(width: f32) -> Element<'static, Message> {
 pub fn hover_readout(state: &TotalControl) -> Option<String> {
     let (cid, col) = state.matrix_hover?;
     let pair = col / 2;
-    let bus = crate::app::user_label(state, ChannelId::Output(pair * 2))
-        .map(str::to_string)
-        .unwrap_or_else(|| state.pair_labels().get(pair).cloned().unwrap_or_default());
+    let bus = if state.device.output_linked(pair) {
+        crate::app::user_pair_label(state, ChannelId::Output(pair * 2))
+    } else {
+        crate::app::user_label(state, ChannelId::Output(col)).map(str::to_string)
+    }
+    .unwrap_or_else(|| state.pair_labels().get(pair).cloned().unwrap_or_default());
     let side = if col % 2 == 0 { "L" } else { "R" };
     let (source, gain) = match cid {
         ChannelId::Output(i) => {
@@ -542,8 +553,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
     ]
     .spacing(theme::SPACE_HAIRLINE);
     for pair in 0..(n_outputs / 2) {
-        let label = crate::app::user_label(state, ChannelId::Output(pair * 2))
-            .map(str::to_string)
+        let label = crate::app::user_pair_label(state, ChannelId::Output(pair * 2))
             .unwrap_or_else(|| state.pair_labels().get(pair).cloned().unwrap_or_default());
         footer = footer.push(header_cell(
             label,

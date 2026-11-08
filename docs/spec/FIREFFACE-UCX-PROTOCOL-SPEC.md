@@ -1035,7 +1035,7 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Feature | UCX |
 |---|---|
 | Matrix pair routing | yes |
-| Per-cell mono matrix | no |
+| Per-cell mono matrix | yes |
 | Input/output faders, mute, solo | yes |
 | Input phase | yes |
 | Loopback | yes, pair-level |

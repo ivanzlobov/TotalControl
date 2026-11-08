@@ -246,6 +246,22 @@ the unit's six setups remain device state.  A workspace includes the sample
 rate, pitch/varispeed and active Dim and Speaker B states; the unit's six
 device setups and the device serial number remain outside it.
 
+Factory surround Workspaces are `Workspace` values built in memory and
+applied through the same `apply_workspace` scene path as a `.tcws` file.  They
+start from a clean mixer (no sends, FX returns, Reverb/Echo, EQ, dynamics,
+mutes, solos, labels, groups, layouts or snapshots) while retaining the
+device topology and device-owned clock, rate, references and preamps.  They
+have no file path, so the next Save opens Save As.  The layout code only
+writes the mixer scene, labels and group; it does not add a second
+persistence format or a device setup.
+
+The direct 5.1/7.1 layouts use pair sends.  The 5.1/7.1 → 4.0 layouts also
+use mono matrix overrides for Center and LFE into both front channels.  The
+UC and UCX both apply these cells: the UCX writes `0x4000 +
+dsp_output*0x40 + source`, while the UC uses its existing matrix path.  A
+selected split output channel is stored with its pair and side, so the UI can
+address and display the mono bus rather than both sides of the pair.
+
 Active Talkback, Listenback, External Input, PFL and cue selections are
 workspace state.  A snapshot stores the mixer scene; the workspace also
 stores the active monitoring controls.

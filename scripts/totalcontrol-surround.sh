@@ -2,10 +2,10 @@
 # Create the TotalControl 5.1 and 7.1 PipeWire sinks.
 #
 # The Fireface/MR18 Pro Audio nodes expose 18 playback channels as AUX0..17.
-# Desktop players send a 5.1/7.1 stream, which WirePlumber cannot map onto
+# Desktop players send a surround stream, which WirePlumber cannot map onto
 # those AUX ports, so only FL/FR reach the device.  These loopback sinks give
 # the players real surround layouts and forward the channels to the first
-# six/eight SW playback pairs.
+# surround SW playback channels.
 set -euo pipefail
 
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/totalcontrol-surround"

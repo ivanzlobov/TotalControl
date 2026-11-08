@@ -137,6 +137,9 @@ pub struct Prefs {
     pub flyouts: Vec<(ChannelId, FlyoutKind)>,
     /// Last selected hardware-output submix (output-pair index).
     pub sel_out: Option<usize>,
+    /// Selected side of a split output pair (0 = left, 1 = right).
+    #[serde(default)]
+    pub sel_out_side: Option<usize>,
     /// First-connect direction.  Missing = DeviceToGui (safe, no writes).
     pub sync_direction: Option<SyncDirection>,
     /// RME's "Always init DSP devices with TotalMix FX settings": suppress
