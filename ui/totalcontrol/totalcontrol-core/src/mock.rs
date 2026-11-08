@@ -77,6 +77,8 @@ fn babyface_capabilities() -> DeviceCapabilities {
         eq: true,
         low_cut: true,
         loopback: true,
+        no_trim: false,
+        talkback: false,
         phase: true,
         phase_without_eq: false,
         output_phase: false,

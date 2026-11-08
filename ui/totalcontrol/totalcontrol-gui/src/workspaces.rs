@@ -48,7 +48,8 @@ pub struct WorkspaceView {
     pub active_snapshot: Option<usize>,
     pub active_layout: Option<usize>,
     pub collapsed: HashSet<ChannelId>,
-    /// The Talkback button is latched on in this workspace.
+    /// Legacy field kept for schema compatibility. Active Talkback is a
+    /// momentary performance state and is never restored from a workspace.
     pub talkback_on: bool,
     /// External Input is latched on in this workspace.
     pub external_input_on: bool,

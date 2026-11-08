@@ -588,24 +588,26 @@ Talkback is a host-driven rewrite of the monitored sends. The source route
 uses a four-word block per side. For a hardware input at zero-based index
 `i`, the Talkback block is:
 
-For a receiving output pair whose DSP output is `D`, and hardware input
-index `i`:
+For a receiving DSP output `D` and hardware input index `i`:
 
 | Field | Address |
 |---|---|
 | source level | `((0x12 + D) << 8) \| (0xE0 + i)` |
 | source pan | the same address, second word |
 | source send | `0x4000 + D * 0x40 + i` |
-| right-side level | `((0x13 + D) << 8) \| (0xE0 + i)` |
-| right-side pan | the same address, second word |
-| right-side send | `0x4000 + (D + 1) * 0x40 + i` |
+
+Each receiving side has its own block. A linked output pair writes the block
+for both DSP outputs and takes the pair value from the left side. A split
+output pair writes only the receiving side; changing a receive flag while
+Talkback is active writes or clears that side's block immediately. A split
+AN 1/2 pair with only AN 1 receiving therefore wrote `0x12e0` and `0x4000`,
+not `0x13e0` or `0x4040`.
 
 The measured Phones 1 receiver had DSP output 2, so its 18 inputs occupied
-`0x14e0..0x14f1`, `0x15e0..0x15f1`, `0x4080..0x4091` and
-`0x40c0..0x40d1`. The addresses move with the receiving output; they are not
-fixed to Phones 1. Level and pan are written as two consecutive words at the
-same address; pan is `(pan << 4) | 0x8`, with `0x0008` at centre, `0xF9C8`
-hard left and `0x0648` hard right.
+`0x14e0..0x14f1` and `0x4080..0x4091`. The addresses move with the receiving
+output; they are not fixed to Phones 1. Level and pan are written as two
+consecutive words at the same address; pan is `(pan << 4) | 0x8`, with
+`0x0008` at centre, `0xF9C8` hard left and `0x0648` hard right.
 
 The source send is a matrix coefficient. At source fader `0 dB` and pan
 centre it is `0x8B33`; `-6 dB` is `0x2CE8`, `-20 dB` is `0x08F5`, and
@@ -722,7 +724,10 @@ value = 1 on, 0 off
 index = DSP output channel 0..17
 ```
 
-A pair writes both indices. The whole 30-entry bank is available.
+The flag is per DSP output channel. A split output pair writes one index; a
+linked pair writes both indices and uses the left side as the pair value. The
+whole 30-entry bank is available; TotalMix refreshes all 30 entries when it
+changes a loopback state.
 
 ### 7.4 Cue
 
@@ -1061,7 +1066,7 @@ Scenes are keyed by unit serial. Each unit keeps its own scene file.
 | Per-cell mono matrix | yes |
 | Input/output faders, mute, solo | yes |
 | Input phase | yes |
-| Loopback | yes, pair-level |
+| Loopback | yes, per output side; linked pairs mirror |
 | Input/output stereo split | yes |
 | EQ, low cut, dynamics, AutoLevel | yes |
 | 48 V | inputs 1/2 |

@@ -577,6 +577,7 @@ pub struct Fireface {
     /// order.  Restored when Talkback is released.
     talkback_saved: Option<Vec<(u16, u16)>>,
     talkback_active: bool,
+    talkback_config: TalkbackConfig,
     /// UCX per-channel processing (inputs and outputs).  Output settings are
     /// kept for the protocol-complete scene model; the current RmeDevice
     /// trait only exposes input EQ.
@@ -1095,6 +1096,7 @@ impl Fireface {
             speaker_b_linked: false,
             talkback_saved: None,
             talkback_active: false,
+            talkback_config: TalkbackConfig::default(),
             input_settings,
             output_settings,
             playback_phase,
@@ -2632,10 +2634,29 @@ impl Fireface {
     /// host-side; it only changes which outputs [`Self::set_talkback_with`]
     /// rewrites.
     pub fn set_talkback_receive(&mut self, output: usize, on: bool) -> Result<(), Error> {
-        let Some(out) = self.outputs.get_mut(output) else {
+        if output >= BLOCKS {
             return Err(Error::InvalidChannel(format!("output {output}")));
+        }
+        let pair = output / 2;
+        let linked = self.output_linked(pair);
+        let left = pair * 2;
+        let right = left + 1;
+        let value = if linked && output == right {
+            self.outputs[left].talkback
+        } else {
+            on
         };
-        out.talkback = on;
+        if linked {
+            self.outputs[left].talkback = value;
+            self.outputs[right].talkback = value;
+        } else {
+            self.outputs[output].talkback = value;
+        }
+        if self.talkback_active {
+            let config = self.talkback_config;
+            self.set_talkback_with(false, &config)?;
+            self.set_talkback_with(true, &config)?;
+        }
         Ok(())
     }
 
@@ -2645,11 +2666,7 @@ impl Fireface {
     /// receiving outputs use Talkback Dim, active sends into Main use
     /// Listenback Dim, and the affected FX returns are muted.  Every word
     /// replaced by the activation is saved and written back on release.
-    pub fn set_talkback_with(
-        &mut self,
-        on: bool,
-        config: &TalkbackConfig,
-    ) -> Result<(), Error> {
+    pub fn set_talkback_with(&mut self, on: bool, config: &TalkbackConfig) -> Result<(), Error> {
         if self.is_uc() {
             return Err(Error::InvalidChannel(
                 "Talkback is not mapped on the UC".into(),
@@ -2665,6 +2682,7 @@ impl Fireface {
             self.talkback_active = false;
             return Ok(());
         }
+        self.talkback_config = *config;
 
         // Source None is the reference app's "no activation burst" case.
         if config.source.is_none() {
@@ -2678,17 +2696,12 @@ impl Fireface {
             return Err(Error::InvalidChannel(format!("talkback input {source}")));
         }
         let main_pair = self.settings.main_out;
-        let receivers: Vec<usize> = (0..self.output_pair_count())
-            .filter(|pair| {
-                self.outputs
-                    .get(pair * 2)
-                    .is_some_and(|out| out.talkback)
-                    || self
-                        .outputs
-                        .get(pair * 2 + 1)
-                        .is_some_and(|out| out.talkback)
-            })
+        let receivers: Vec<usize> = (0..BLOCKS)
+            .filter(|&output| self.outputs.get(output).is_some_and(|out| out.talkback))
             .collect();
+        let main_outputs: Vec<usize> = main_pair
+            .map(|pair| vec![pair * 2, pair * 2 + 1])
+            .unwrap_or_default();
 
         // (address, previous value, activation value), de-duplicated by
         // address in case a source route and a normal send share a cell.
@@ -2703,12 +2716,14 @@ impl Fireface {
         fn source_block(
             this: &Fireface,
             edits: &mut Vec<(u16, u16, u16)>,
-            pair: usize,
+            output: usize,
             input: usize,
         ) {
+            let pair = output / 2;
             let Some(dsp) = ucx::output_pair_dsp(pair) else {
                 return;
             };
+            let dsp = dsp + output % 2;
             let volume = this
                 .inputs
                 .get(input)
@@ -2729,74 +2744,67 @@ impl Fireface {
             // TotalMix's measured source split is 0.700 per side at
             // centre, not the 0.7071 used by the width matrix.
             let matrix = ucx::matrix_gain(volume as f64 * 0.7);
-            for dsp_side in [dsp, dsp + 1] {
-                let level_addr = ucx::fader_table_reg(dsp_side as u8, input);
-                push_edit(edits, level_addr, level, level);
-                push_edit(edits, level_addr, pan_word, pan_word);
-                let matrix_addr =
-                    ucx::matrix_reg(dsp_side as u8, Source::Input(input));
-                push_edit(edits, matrix_addr, 0, matrix);
-            }
+            let level_addr = ucx::fader_table_reg(dsp as u8, input);
+            push_edit(edits, level_addr, level, level);
+            push_edit(edits, level_addr, pan_word, pan_word);
+            let matrix_addr = ucx::matrix_reg(dsp as u8, Source::Input(input));
+            push_edit(edits, matrix_addr, 0, matrix);
         }
 
         fn add_sends(
             this: &Fireface,
             edits: &mut Vec<(u16, u16, u16)>,
-            pair: usize,
+            output: usize,
             dim_db: f32,
         ) {
+            let pair = output / 2;
             let Some(dsp) = ucx::output_pair_dsp(pair) else {
                 return;
             };
+            let dsp = dsp + output % 2;
             let factor = 10f64.powf((dim_db as f64) / 20.0).clamp(0.0, 1.0);
             if factor >= 0.999 {
                 return;
             }
-            // The per-pair model indexes volumes by output pair; the wire
-            // address uses the DSP output's side.  Keep those two mappings
-            // distinct (pair 2 -> DSP 2, but model block 4).
-            for side in 0..2 {
-                // `matrix_cell` addresses the display/DSP matrix block;
-                // the UC's own per-pair arrays are already in that order,
-                // while the UCX pair index is Phones-first.
-                let model_block = if this.is_uc() { pair * 2 + side } else { dsp + side };
-                let dsp_side = dsp + side;
-                for (idx, ch) in this.inputs.iter().enumerate() {
-                    let gain = this
-                        .matrix_cell(ChannelId::Input(idx), model_block)
-                        .unwrap_or(0.0);
-                    if gain != 0.0 {
-                        let addr = ucx::matrix_reg(dsp_side as u8, Source::Input(ch.id));
-                        push_edit(
-                            edits,
-                            addr,
-                            ucx::matrix_gain(gain as f64),
-                            ucx::matrix_gain(gain as f64 * factor),
-                        );
-                    }
+            // `matrix_cell` addresses the display/DSP matrix block.  The
+            // source volume is still indexed by output pair because that is
+            // how the per-pair channel model stores it.
+            let model_block = dsp;
+            for (idx, ch) in this.inputs.iter().enumerate() {
+                let gain = this
+                    .matrix_cell(ChannelId::Input(idx), model_block)
+                    .unwrap_or(0.0);
+                if gain != 0.0 {
+                    let addr = ucx::matrix_reg(dsp as u8, Source::Input(ch.id));
+                    push_edit(
+                        edits,
+                        addr,
+                        ucx::matrix_gain(gain as f64),
+                        ucx::matrix_gain(gain as f64 * factor),
+                    );
                 }
-                for (idx, ch) in this.playbacks.iter().enumerate() {
-                    let gain = this
-                        .matrix_cell(ChannelId::Playback(idx), model_block)
-                        .unwrap_or(0.0);
-                    if gain != 0.0 {
-                        let addr = ucx::matrix_reg(dsp_side as u8, Source::Playback(ch.id));
-                        push_edit(
-                            edits,
-                            addr,
-                            ucx::matrix_gain(gain as f64),
-                            ucx::matrix_gain(gain as f64 * factor),
-                        );
-                    }
+            }
+            for (idx, ch) in this.playbacks.iter().enumerate() {
+                let gain = this
+                    .matrix_cell(ChannelId::Playback(idx), model_block)
+                    .unwrap_or(0.0);
+                if gain != 0.0 {
+                    let addr = ucx::matrix_reg(dsp as u8, Source::Playback(ch.id));
+                    push_edit(
+                        edits,
+                        addr,
+                        ucx::matrix_gain(gain as f64),
+                        ucx::matrix_gain(gain as f64 * factor),
+                    );
                 }
             }
         }
 
-        for &pair in &receivers {
-            add_sends(self, &mut edits, pair, config.dim_db);
+        for &output in &receivers {
+            add_sends(self, &mut edits, output, config.dim_db);
         }
-        if let Some(pair) = main_pair {
-            add_sends(self, &mut edits, pair, config.listenback_dim_db);
+        for &output in &main_outputs {
+            add_sends(self, &mut edits, output, config.listenback_dim_db);
         }
 
         // Source routes are written after the attenuated normal sends so a
@@ -2805,42 +2813,39 @@ impl Fireface {
         // block when Listenback uses the same input: the captured form is
         // the short 36-byte burst.
         if config.listenback != Some(source) {
-            for &pair in &receivers {
-                source_block(self, &mut edits, pair, source);
+            for &output in &receivers {
+                source_block(self, &mut edits, output, source);
             }
         }
         if let Some(listen) = config.listenback {
-            if let Some(pair) = main_pair {
-                if listen != source {
-                    source_block(self, &mut edits, pair, listen);
+            if listen != source {
+                for &output in &main_outputs {
+                    source_block(self, &mut edits, output, listen);
                 }
             }
         }
 
-        let fx_pairs: Vec<usize> = receivers
-            .iter()
-            .copied()
-            .chain(main_pair.into_iter())
-            .collect();
-        for pair in fx_pairs {
-            for output in [pair * 2, pair * 2 + 1] {
-                let Some(out) = self.outputs.get(output) else {
-                    continue;
-                };
-                let old = (out.fx_return_db.clamp(-65.0, 6.0) * 10.0).round() as i16 as u16;
-                let pair = output / 2;
-                let dsp = ucx::output_pair_dsp(pair)
-                    .ok_or_else(|| Error::InvalidChannel(format!("output {output}")))?;
-                let addr = ucx::channel_reg(
-                    ucx::output_channel(dsp + output % 2),
-                    ucx::offset::FX_RETURN,
-                );
-                push_edit(&mut edits, addr, old, 0xfd76);
-            }
+        let mut fx_outputs = receivers.clone();
+        fx_outputs.extend(main_outputs);
+        fx_outputs.sort_unstable();
+        fx_outputs.dedup();
+        for output in fx_outputs {
+            let Some(out) = self.outputs.get(output) else {
+                continue;
+            };
+            let old = (out.fx_return_db.clamp(-65.0, 6.0) * 10.0).round() as i16 as u16;
+            let pair = output / 2;
+            let dsp = ucx::output_pair_dsp(pair)
+                .ok_or_else(|| Error::InvalidChannel(format!("output {output}")))?;
+            let addr = ucx::channel_reg(
+                ucx::output_channel(dsp + output % 2),
+                ucx::offset::FX_RETURN,
+            );
+            push_edit(&mut edits, addr, old, 0xfd76);
         }
 
-        let old_flag = (self.settings.mono as u16) << 1
-            | ((self.settings.external_input as u16) << 5);
+        let old_flag =
+            (self.settings.mono as u16) << 1 | ((self.settings.external_input as u16) << 5);
         let flag_addr = 0x3f9e;
         push_edit(&mut edits, flag_addr, old_flag, old_flag | 1);
 
@@ -4252,6 +4257,21 @@ impl RmeDevice for Fireface {
             v[pair] = linked;
         }
         if linked {
+            // Loopback, Talkback receive and No Trim are pair controls in
+            // the linked view.  TotalMix copies the left side over the right
+            // when the pair is linked.
+            let loopback = self.outputs[left].loopback;
+            let talkback = self.outputs[left].talkback;
+            let no_trim = self.outputs[left].no_trim;
+            if self.outputs[right].loopback != loopback {
+                self.set_loopback(pair, loopback)?;
+            }
+            if self.outputs[right].talkback != talkback {
+                self.set_talkback_receive(right, talkback)?;
+            }
+            if self.outputs[right].no_trim != no_trim {
+                self.set_no_trim(right, no_trim)?;
+            }
             if let Some(mute) = saved_mute {
                 self.set_mute(ChannelId::Output(right), mute)?;
             }
@@ -4647,18 +4667,35 @@ impl RmeDevice for Fireface {
         if channel >= BLOCKS {
             return Err(Error::InvalidChannel(format!("output {channel}")));
         }
-        if !self.is_uc() {
-            return self.set_loopback(channel / 2, on);
+        let pair = channel / 2;
+        if self.is_uc() {
+            // The UC loops a stereo hardware output as a unit; a linked
+            // pair moves both sides and only a split pair can loop one side.
+            if self.output_linked(pair) {
+                return self.set_loopback(pair, on);
+            }
+            let block = uc::matrix_block(channel, self.output_order());
+            self.vendor_out(protocol::req::LOOPBACK, on as u16, block as u16)?;
+            self.outputs[channel].loopback = on;
+            return Ok(());
         }
-        // TotalMix loops a stereo hardware output as a unit.  A linked
-        // AN3/4 pair therefore loops both sides, which is the documented
-        // behavior, not a bug.  Only a split (unlinked) pair can loop one
-        // side on its own.
-        if self.output_linked(channel / 2) {
-            return self.set_loopback(channel / 2, on);
+        // UCX loopback is per DSP output.  A linked pair has one
+        // authoritative value taken from its left side.
+        if self.output_linked(pair) {
+            let value = if channel % 2 == 1 {
+                self.outputs[pair * 2].loopback
+            } else {
+                on
+            };
+            return self.set_loopback(pair, value);
         }
-        let block = uc::matrix_block(channel, self.output_order());
-        self.vendor_out(protocol::req::LOOPBACK, on as u16, block as u16)?;
+        let dsp = ucx::output_pair_dsp(pair)
+            .ok_or_else(|| Error::InvalidChannel(format!("output pair {pair}")))?;
+        self.vendor_out(
+            protocol::req::LOOPBACK,
+            on as u16,
+            (dsp + channel % 2) as u16,
+        )?;
         self.outputs[channel].loopback = on;
         Ok(())
     }
@@ -5460,18 +5497,24 @@ impl RmeDevice for Fireface {
         if idx >= self.outputs.len() {
             return Err(Error::InvalidChannel(format!("output {idx}")));
         }
-        self.outputs[idx].no_trim = on;
-        // A linked pair is one monitor destination: both sides carry the
-        // flag.  A split pair keeps the two mono channels independent.
-        if self.output_linked(idx / 2) {
-            let other = idx ^ 1;
-            if let Some(out) = self.outputs.get_mut(other) {
-                out.no_trim = on;
-            }
+        let pair = idx / 2;
+        let linked = self.output_linked(pair);
+        let on = if linked && idx % 2 == 1 {
+            self.outputs[pair * 2].no_trim
+        } else {
+            on
+        };
+        if linked {
+            // A linked pair is one monitor destination: both sides carry the
+            // left side's flag.  A split pair keeps the two channels
+            // independent.
+            self.outputs[pair * 2].no_trim = on;
+            self.outputs[pair * 2 + 1].no_trim = on;
+        } else {
+            self.outputs[idx].no_trim = on;
         }
         // Re-write the sends into this output so the exclusion applies to
         // what is already playing, not only to the next fader move.
-        let pair = idx / 2;
         let sends: Vec<(ChannelId, f32)> = self
             .inputs
             .iter()
@@ -6083,6 +6126,17 @@ impl RmeDevice for Fireface {
         self.settings = scene.settings.clone();
         self.settings.main_out = live_main_out;
         self.settings.main_b_out = live_main_b_out;
+        // A linked pair is one control: the left side is authoritative for
+        // the host-side flags and for loopback, as measured on TotalMix.
+        for pair in 0..PAIRS {
+            if self.output_linked(pair) {
+                let left = pair * 2;
+                let right = left + 1;
+                self.outputs[right].loopback = self.outputs[left].loopback;
+                self.outputs[right].talkback = self.outputs[left].talkback;
+                self.outputs[right].no_trim = self.outputs[left].no_trim;
+            }
+        }
         self.matrix_overrides.clear();
         if self.is_uc() {
             for (idx, (input, saved)) in self.inputs.iter_mut().zip(device_inputs).enumerate() {
@@ -6187,8 +6241,7 @@ impl RmeDevice for Fireface {
             // the matrix, not before it.
             for pair in 0..PAIRS {
                 if self.output_linked(pair) {
-                    let loopback = self.outputs[pair * 2].loopback
-                        || self.outputs[pair * 2 + 1].loopback;
+                    let loopback = self.outputs[pair * 2].loopback;
                     // The 30-entry reset above already cleared every
                     // loopback, so only write the enabled ones.
                     if loopback {
@@ -6348,9 +6401,14 @@ impl RmeDevice for Fireface {
                 }
             }
             for pair in 0..PAIRS {
-                let loopback = self.outputs[pair * 2].loopback
-                    || self.outputs[pair * 2 + 1].loopback;
-                self.set_loopback(pair, loopback)?;
+                if self.output_linked(pair) {
+                    self.set_loopback(pair, self.outputs[pair * 2].loopback)?;
+                } else {
+                    for side in 0..2 {
+                        let idx = pair * 2 + side;
+                        self.set_loopback_channel(idx, self.outputs[idx].loopback)?;
+                    }
+                }
             }
             // Output phase is a per-side register pair.  Write both normal
             // and inverted values: a scene recall must clear a phase left
@@ -7299,6 +7357,152 @@ mod tests {
             assert!(w.contains(&(0x4000, trimmed)));
         }
         assert!(!dev.outputs()[2].no_trim);
+    }
+
+    #[test]
+    fn ucx_loopback_is_per_side_when_split_and_left_wins_when_linked() {
+        let (mut dev, writes) = open(Model::Ucx);
+        // Internal pair 1 is AN 1/2, DSP outputs 0 and 1.
+        dev.settings.output_link.resize(2, true);
+        dev.settings.output_link[1] = false;
+
+        writes.lock().unwrap().clear();
+        dev.set_loopback_channel(2, true).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 0)));
+        assert!(!w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 1)));
+        drop(w);
+        assert!(dev.outputs()[2].loopback);
+        assert!(!dev.outputs()[3].loopback);
+
+        writes.lock().unwrap().clear();
+        dev.set_loopback_channel(3, true).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 1)));
+        drop(w);
+        assert!(dev.outputs()[2].loopback);
+        assert!(dev.outputs()[3].loopback);
+
+        // Linking copies the left side over the right.  Asking for the
+        // right side to turn off while linked therefore leaves both on.
+        dev.settings.output_link[1] = true;
+        writes.lock().unwrap().clear();
+        dev.set_loopback_channel(3, false).unwrap();
+        assert!(dev.outputs()[2].loopback);
+        assert!(dev.outputs()[3].loopback);
+
+        // The reverse mismatch links to the left's off state.
+        dev.settings.output_link[1] = false;
+        dev.outputs[2].loopback = false;
+        dev.outputs[3].loopback = true;
+        writes.lock().unwrap().clear();
+        dev.set_output_linked(1, true).unwrap();
+        assert!(!dev.outputs()[2].loopback);
+        assert!(!dev.outputs()[3].loopback);
+    }
+
+    #[test]
+    fn ucx_talkback_receives_on_one_split_side_and_rebuilds_while_active() {
+        let (mut dev, writes) = open(Model::Ucx);
+        // Pair 1 is AN 1/2 (DSP 0/1); pair 2 is Main so Listenback can be
+        // left out of the observation.
+        dev.settings.output_link.resize(2, true);
+        dev.settings.output_link[1] = false;
+        dev.settings.main_out = None;
+        for input in &mut dev.inputs {
+            input.volumes.fill(0.0);
+        }
+        for playback in &mut dev.playbacks {
+            playback.volumes.fill(0.0);
+        }
+        dev.inputs[0].volumes[1] = 1.0;
+        dev.outputs[2].talkback = true;
+        dev.outputs[3].talkback = false;
+        let config = TalkbackConfig {
+            source: Some(0),
+            dim_db: -20.0,
+            listenback: None,
+            listenback_dim_db: -20.0,
+        };
+
+        writes.lock().unwrap().clear();
+        dev.set_talkback_with(true, &config).unwrap();
+        let words = written_words(&writes);
+        assert!(words.iter().any(|(addr, _)| *addr == 0x12e0));
+        assert!(words.iter().any(|(addr, _)| *addr == 0x4000));
+        assert!(!words.iter().any(|(addr, _)| *addr == 0x13e0));
+
+        // Turning the right receiver on while active adds only the right
+        // side; the left route remains in the rebuilt activation.
+        writes.lock().unwrap().clear();
+        dev.set_talkback_receive(3, true).unwrap();
+        let words = written_words(&writes);
+        assert!(words.iter().any(|(addr, _)| *addr == 0x13e0));
+
+        // Turning the left receiver off removes only that side.
+        writes.lock().unwrap().clear();
+        dev.set_talkback_receive(2, false).unwrap();
+        assert!(!dev.outputs()[2].talkback);
+        assert!(dev.outputs()[3].talkback);
+        let words = written_words(&writes);
+        assert!(words.iter().any(|(addr, _)| *addr == 0x13e0));
+    }
+
+    #[test]
+    fn ucx_no_trim_uses_the_left_side_when_a_split_pair_is_linked() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.settings.output_link.resize(2, true);
+        dev.settings.output_link[1] = false;
+        dev.set_no_trim(2, true).unwrap();
+        dev.set_no_trim(3, false).unwrap();
+        dev.set_output_linked(1, true).unwrap();
+        assert!(dev.outputs()[2].no_trim);
+        assert!(dev.outputs()[3].no_trim);
+
+        dev.settings.output_link[1] = false;
+        dev.set_no_trim(2, false).unwrap();
+        dev.set_no_trim(3, true).unwrap();
+        dev.set_output_linked(1, true).unwrap();
+        assert!(!dev.outputs()[2].no_trim);
+        assert!(!dev.outputs()[3].no_trim);
+    }
+
+    #[test]
+    fn ucx_scene_restores_split_loopback_per_side() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.settings.output_link.resize(2, true);
+        dev.settings.output_link[1] = false;
+        let mut scene = dev.capture_scene();
+        scene.outputs[2].loopback = true;
+        scene.outputs[3].loopback = false;
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let w = writes.lock().unwrap();
+        assert!(w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 0)));
+        assert!(!w.contains(&Write::Vendor(protocol::req::LOOPBACK, 1, 1)));
+    }
+
+    #[test]
+    fn ucx_scene_round_trips_split_output_host_flags() {
+        let (mut dev, _writes) = open(Model::Ucx);
+        dev.settings.output_link.resize(2, true);
+        dev.settings.output_link[1] = false;
+        dev.outputs[2].loopback = true;
+        dev.outputs[2].talkback = true;
+        dev.outputs[2].no_trim = true;
+        dev.outputs[3].loopback = false;
+        dev.outputs[3].talkback = false;
+        dev.outputs[3].no_trim = false;
+        let scene = dev.capture_scene();
+
+        let (mut restored, _writes) = open(Model::Ucx);
+        restored.apply_scene(&scene).unwrap();
+        assert!(restored.outputs()[2].loopback);
+        assert!(restored.outputs()[2].talkback);
+        assert!(restored.outputs()[2].no_trim);
+        assert!(!restored.outputs()[3].loopback);
+        assert!(!restored.outputs()[3].talkback);
+        assert!(!restored.outputs()[3].no_trim);
     }
 
     #[test]

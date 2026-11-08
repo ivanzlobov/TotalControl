@@ -300,6 +300,10 @@ independent right-side address. On an unlinked pair each side moves alone.
 `alevEnable`, `loopback`, `cue` and `talkbackSel` are toggles. Send `1.0` to
 change the state. `0.0` is not an off command.
 
+`loopback` and `talkbackSel` are per output channel. A linked pair writes
+both sides and uses the left side as the pair value; a split pair addresses
+each side independently.
+
 `phantom` also accepts `0.0` as a direct off command on the UCX.
 
 ### 7.2 EQ band types

@@ -3508,7 +3508,10 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
             active_snapshot: state.active_snapshot,
             active_layout: state.active_layout,
             collapsed: state.collapsed.clone(),
-            talkback_on: state.talkback_on,
+            // Active Talkback is a momentary performance state; the
+            // workspace never restores it.  The field stays for schema
+            // compatibility with older files.
+            talkback_on: false,
             external_input_on: state.device.settings().external_input,
             pfl_inputs,
         },
@@ -3556,6 +3559,16 @@ fn apply_workspace_state(
     scene
         .check_compatible(state.device.canonical_model())
         .map_err(|e| e.to_string())?;
+    // Talkback is a momentary performance state, not workspace state.
+    // Release it before the scene rewrite, then start the loaded workspace
+    // with Talkback inactive.
+    if state.talkback_on {
+        state
+            .device
+            .set_talkback_with(false, &talkback_config(state))
+            .map_err(|e| e.to_string())?;
+        state.talkback_on = false;
+    }
     state
         .device
         .apply_scene(&scene)
@@ -3635,14 +3648,7 @@ fn apply_workspace_state(
             .set_pitch(scene.settings.pitch_percent)
             .map_err(|e| e.to_string())?;
     }
-    if workspace.view.talkback_on != state.talkback_on {
-        let on = workspace.view.talkback_on;
-        state
-            .device
-            .set_talkback_with(on, &talkback_config(state))
-            .map_err(|e| e.to_string())?;
-        state.talkback_on = on;
-    }
+    state.talkback_on = false;
     sync_surround_bridge(state);
     Ok(())
 }
@@ -3921,6 +3927,15 @@ fn control_room_cue_pair(state: &TotalControl) -> Option<usize> {
 /// Input) into the device.  Safe to call after connects, scene loads and
 /// settings changes.
 fn sync_control_room_runtime(state: &mut TotalControl) {
+    // Cue is an output-strip latch.  `set_cue_target` releases an active
+    // Cue, so remember the cued pair and re-engage it after the target is
+    // in place.
+    let cued = state
+        .device
+        .outputs()
+        .iter()
+        .position(|output| output.cue)
+        .map(|idx| idx / 2);
     if let Err(e) = state.device.set_cue_target(control_room_cue_pair(state)) {
         log::warn!("Could not set the Cue/PFL target: {e}");
     }
@@ -3943,6 +3958,11 @@ fn sync_control_room_runtime(state: &mut TotalControl) {
             ) {
                 log::warn!("Could not re-engage External Input: {e}");
             }
+        }
+    }
+    if let Some(pair) = cued {
+        if let Err(e) = state.device.set_cue(pair, true) {
+            log::warn!("Could not restore active Cue: {e}");
         }
     }
 }
@@ -7510,7 +7530,6 @@ fn needs_protocol_features(message: &Message) -> bool {
             | Message::ResetMix(_)
             | Message::PhaseChanged(..)
             | Message::OutputPhaseChanged(..)
-            | Message::NoTrimChanged(..)
             | Message::PitchChanged(_)
             | Message::WidthChanged(_)
             | Message::ChannelWidthChanged(..)
@@ -14082,7 +14101,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             .get(out)
             .is_some_and(|o| o.no_trim)
     };
-    let no_trim = caps.fx.then(|| {
+    let no_trim = caps.no_trim.then(|| {
         hint(
             button(strip::centered_label("no trim", theme::TEXT_SM * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -14113,7 +14132,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             .get(out)
             .is_some_and(|o| o.talkback)
     };
-    let talkback = caps.fx.then(|| {
+    let talkback = caps.talkback.then(|| {
         hint(
             button(strip::centered_label("talkback", theme::TEXT_SM * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
@@ -17583,7 +17602,8 @@ mod tests {
         input_gain_knob_label, TotalControl,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
-        apply_startup_sync, apply_control_room_assignments, attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
+        apply_startup_sync, apply_control_room_assignments, sync_control_room_runtime,
+        attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
         apply_workspace, capture_workspace, save_workspace_to,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -18769,6 +18789,20 @@ mod tests {
         assert_eq!(eq.bands[0].freq_hz, 1_000);
         assert!(eq.bands[0].gain_db.abs() < 0.01);
         assert!((eq.bands[0].q - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn sync_control_room_runtime_reengages_a_latched_cue() {
+        let mut state = new(true, None, None);
+        state.assign[CUE_DEST] = Some(0);
+        let _ = update(&mut state, Message::CueChanged(ChannelId::Output(2), true));
+        assert!(state.device.outputs()[2].cue);
+
+        // Setting the Cue target releases the active Cue; the runtime sync
+        // must put the latched source back.
+        sync_control_room_runtime(&mut state);
+        assert!(state.device.outputs()[2].cue);
+        assert!(state.device.outputs()[3].cue);
     }
 
     #[test]
@@ -20467,7 +20501,7 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_captures_rate_pitch_dim_and_talkback() {
+    fn a_workspace_captures_rate_pitch_dim_and_not_active_talkback() {
         let mut state = new(true, None, None);
         state.engine_rate_mode = EngineRateMode::Fixed;
         state.device.settings_mut().sample_rate = 44_100;
@@ -20481,7 +20515,7 @@ mod tests {
         assert_eq!(workspace.scene.settings.pitch_percent, 1.5);
         assert!(workspace.scene.settings.dim);
         assert_eq!(workspace.scene.settings.dim_amount_db, -12.0);
-        assert!(workspace.view.talkback_on);
+        assert!(!workspace.view.talkback_on);
     }
 
     #[test]
@@ -20627,7 +20661,7 @@ mod tests {
         assert!(target.collapsed.contains(&ChannelId::Playback(0)));
         assert_eq!(target.snapshot_names[2], "Stereo");
         assert!(target.snapshots[2].is_some());
-        assert!(target.talkback_on);
+        assert!(!target.talkback_on);
         assert_eq!(target.device.settings().sample_rate, 44_100);
         assert_eq!(target.device.settings().pitch_percent, 1.5);
         assert_eq!(target.workspace_path, Some(PathBuf::from("/tmp/test.tcws")));

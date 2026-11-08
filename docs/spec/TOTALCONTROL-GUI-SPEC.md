@@ -148,10 +148,12 @@ A workspace contains the current mixer, the eight named snapshots, labels,
 groups, six layout slots, collapsed/expanded strips, view and sidebar state,
 Control Room settings and assignments, virtual-surround settings and window
 size. It stores the sample rate, pitch/varispeed and active Dim, Speaker B,
-Talkback, Cue, External Input and PFL states. It excludes undo/redo, open
-dialogs, transient selections, app preferences, the unit's six device setups
-and the device serial number. Selecting a snapshot slot exposes a name field
-below its Store action.
+Cue, External Input and PFL states, plus each output's Talkback receive flag
+in the mixer scene. Active Talkback is momentary and is not stored; a
+workspace opens with Talkback off. It excludes undo/redo, open dialogs,
+transient selections, app preferences, the unit's six device setups and the
+device serial number. Selecting a snapshot slot exposes a name field below
+its Store action.
 
 `WORKSPACE` shows `*` while the host state differs from the saved file.
 Menus start below the top bar, so clicking the other top-bar menu switches to
@@ -1062,11 +1064,12 @@ one-decimal value display.
 `OK` stores the settings in `gui.json` for the selected device. The settings
 are not part of the mixer scene, snapshot, undo stack or OSC scene state.
 `Dim`, `Speaker B`, `Mono`, `Mute FX`, `Cue` and the sample rate are mixer
-scene and workspace state. Active Talkback, External Input and the PFL
-listening set are workspace state. The unit's six setups and device serial
-number remain outside the workspace. External Input source/gain and the
-Solo/PFL modes are stored as settings and applied to the running device on
-`OK`.
+scene and workspace state. Active Talkback is momentary and starts off when a
+workspace opens; the per-output Talkback receive flags live in the mixer
+scene. External Input and the PFL listening set are workspace state. The
+unit's six setups and device serial number remain outside the workspace.
+External Input source/gain and the Solo/PFL modes are stored as settings and
+applied to the running device on `OK`.
 
 ## 13. Latency display
 

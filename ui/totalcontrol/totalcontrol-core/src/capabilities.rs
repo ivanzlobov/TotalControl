@@ -14,6 +14,11 @@ pub struct DeviceCapabilities {
     /// The backend can toggle the low cut independently of the main EQ.
     pub low_cut: bool,
     pub loopback: bool,
+    /// The backend stores the per-output No Trim flag.  Host-side: it
+    /// excludes the destination from Trim Gain changes and writes no register.
+    pub no_trim: bool,
+    /// The backend can inject the Talkback source into receiving outputs.
+    pub talkback: bool,
     pub phase: bool,
     /// Input phase works without an EQ section (the UC stores it in the
     /// matrix sign; the UCX has a channel register).

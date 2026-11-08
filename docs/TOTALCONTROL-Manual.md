@@ -566,7 +566,7 @@ The buttons are one channel wide, in TotalMix’s order:
 | `recall` | Momentary | Main Out; Speaker B if linked | No, momentary |
 | `speaker B` | Latching | Switches monitoring between Main and Speaker B | Yes, snapshot and workspace |
 | `mono` | Latching | Main Out and Speaker B | Yes |
-| `talkback` | Toggle | Phones with Talkback receive, plus Main for Listenback | Yes, workspace |
+| `talkback` | Toggle | Every output with Talkback receive, plus Main for Listenback | No, momentary; receive flags are in the current mix |
 | `ext. input` | Latching | Main Out and Speaker B | Yes, workspace |
 | `mute FX` | Latching | Reverb and Echo returns on Main Out and Speaker B | Yes |
 | `settings` | Opens the dialog | — | No |
@@ -637,9 +637,9 @@ Mono is part of the current mix, so it is saved in a snapshot and restored with 
 
 Talkback is the engineer’s communication path to the performers. Click
 **talkback** to switch it on; the button stays lit while it is active. Click
-it again to switch it off. The active Talkback state is stored in a
-workspace and restored when that workspace is opened; it is not part of a
-snapshot.
+it again to switch it off. Talkback is momentary: opening a workspace or
+restarting TotalControl starts with Talkback off. The per-output receive
+switches are part of the current mix and are restored with it.
 
 While Talkback is active:
 
@@ -707,7 +707,7 @@ are stored in a workspace and restored when that workspace is opened.
 | Phones 1–4 destinations | TotalControl preferences; also saved in a workspace |
 | Main Dim amount, Recall level, Talkback/Listenback settings, Speaker B link | TotalControl preferences; also saved in a workspace |
 | Dim and Speaker B active state | Current mix (snapshot and workspace) |
-| Talkback and Listenback active state | Workspace |
+| Talkback and Listenback active state | Not stored; starts off |
 | External Input and PFL active state | Workspace |
 | Mono, Mute FX and the mixer levels | Current mix (snapshot and workspace) |
 
@@ -905,7 +905,8 @@ A workspace contains:
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
 - Control Room assignments and monitoring settings;
-- active Talkback, Cue, External Input and PFL states;
+- active Cue, External Input and PFL states;
+- each output's Talkback receive flag, as part of the current mix;
 - the virtual surround-output settings;
 - the window size.
 

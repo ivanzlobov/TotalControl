@@ -327,6 +327,8 @@ pub trait RmeDevice {
             eq: self.protocol_features(),
             low_cut: self.low_cut_supported(),
             loopback: self.loopback_supported(),
+            no_trim: false,
+            talkback: false,
             phase: self.phase_supported(),
             phase_without_eq: false,
             output_phase: false,
