@@ -49,6 +49,10 @@ pub struct WorkspaceView {
     pub collapsed: HashSet<ChannelId>,
     /// The Talkback button is latched on in this workspace.
     pub talkback_on: bool,
+    /// External Input is latched on in this workspace.
+    pub external_input_on: bool,
+    /// Input channels listening through PFL when the workspace was saved.
+    pub pfl_inputs: Vec<ChannelId>,
 }
 
 impl Default for WorkspaceView {
@@ -69,6 +73,8 @@ impl Default for WorkspaceView {
             active_layout: None,
             collapsed: HashSet::new(),
             talkback_on: false,
+            external_input_on: false,
+            pfl_inputs: Vec::new(),
         }
     }
 }

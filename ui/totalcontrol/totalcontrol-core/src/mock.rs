@@ -225,6 +225,7 @@ impl MockBabyfacePro {
                 main_b_out: None,
                 mono: false,
                 mute_fx: false,
+                external_input: false,
                 fx_send_db: None,
                 // A unit with an FX bus starts with both effects in the
                 // block's default state, the way the real one does.
@@ -736,6 +737,17 @@ impl RmeDevice for MockBabyfacePro {
 
     fn set_mute_fx(&mut self, on: bool) -> Result<(), Error> {
         self.settings.mute_fx = on;
+        Ok(())
+    }
+
+    fn set_external_input(
+        &mut self,
+        on: bool,
+        source: Option<usize>,
+        gain_db: f32,
+    ) -> Result<(), Error> {
+        let _ = (source, gain_db);
+        self.settings.external_input = on;
         Ok(())
     }
 

@@ -246,9 +246,9 @@ the unit's six setups remain device state.  A workspace includes the sample
 rate, pitch/varispeed and active Dim and Speaker B states; the unit's six
 device setups and the device serial number remain outside it.
 
-Active Talkback, Listenback and cue selections are workspace state.  A
-snapshot stores the mixer scene; the workspace also stores the active
-monitoring controls.
+Active Talkback, Listenback, External Input, PFL and cue selections are
+workspace state.  A snapshot stores the mixer scene; the workspace also
+stores the active monitoring controls.
 
 Startup sync compares the saved scene with the device where the backend can
 read state back.  Groups without readback are written from the saved scene.
