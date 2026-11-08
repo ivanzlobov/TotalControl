@@ -154,6 +154,10 @@ const RULER_LANE_W: f32 = 12.0;
 const METER_RULER_W: f32 = METER_W + LANE_GAP + RULER_LANE_W;
 const GAP: f32 = 4.0;
 const TRACK_W: f32 = 26.0;
+/// Width a strip fader canvas needs to show the full meter/track group.
+/// `strip::STRIP_W` and the compact tab column are sized against this.
+#[cfg(test)]
+pub(crate) const FADER_GROUP_W: f32 = METER_RULER_W + GAP + TRACK_W;
 pub(crate) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Gap after the last `WheelScrolled` event that means "this is a new
 /// gesture" rather than a continuation — wheel scrolling has no

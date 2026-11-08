@@ -32,15 +32,22 @@ pub(crate) const STRIP_H: f32 = 350.0;
 /// Size of the Settings/Trim/EQ tab buttons on the strip's right flank.
 /// Bigger than the T/phase icon buttons so the open-tab rectangle reads as a
 /// tab attached to the slideout, not a tiny status dot.
-const TAB_BTN_W: f32 = 24.0;
+const TAB_BTN_W: f32 = 20.0;
 const TAB_BTN_H: f32 = 22.0;
-/// The Settings gear is the most-used tab, so it gets a larger hit box and
-/// glyph than the T/EQ tabs.  The fader's reserved right edge tracks this.
-const SETTINGS_TAB_W: f32 = 28.0;
+/// The Settings gear keeps the same compact width as the T/EQ tabs.  The
+/// fader's reserved right edge tracks this.  The column must leave the
+/// fader canvas room for `[meter+ruler][gap][track]` after the 13 px VU
+/// meter was widened; otherwise the cap is clipped at the strip's edge.
+const SETTINGS_TAB_W: f32 = 20.0;
 const SETTINGS_TAB_H: f32 = 26.0;
-const SETTINGS_GLYPH: f32 = 19.0;
+const SETTINGS_GLYPH: f32 = 14.0;
 /// Width of a full channel strip: track, ruler, meter, and the side icon
 /// column at `scale == 1.0`.
+///
+/// Budget: `90 - 2 * SPACE_MD` content = 78.  The compact icon column is
+/// `20 + SPACE_TIGHT` = 22, leaving 56 for the fader canvas.  The fader
+/// group is `METER_RULER_W (26) + GAP (4) + TRACK_W (26)` = 56, so the
+/// track keeps its original position and sits at the icon column's edge.
 pub(crate) const STRIP_W: f32 = 90.0;
 
 /// The message a Control Room strip's FX fader sends: FX Return on an
@@ -448,7 +455,7 @@ fn tab_button<'a>(
         scale,
         TAB_BTN_W,
         TAB_BTN_H,
-        theme::TEXT_MD + 2.0,
+        theme::TEXT_MD,
     )
 }
 
@@ -956,7 +963,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         // — like several other spacings in this file — doesn't scale;
         // matching that exactly (not just approximately) is the point,
         // since this value feeds a pixel-level centering fix.
-        reserved_right: SETTINGS_TAB_W * scale + theme::SPACE_TIGHT,
+        reserved_right: SETTINGS_TAB_W * scale + 2.0 * theme::SPACE_HAIRLINE * scale,
         modifiers: p.modifiers,
         scale,
         show_track: true,
@@ -1137,10 +1144,14 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     .spacing(theme::SPACE_TIGHT)
     .align_x(iced::Alignment::Center);
     rows = rows.push(
-        row![fader_widget, icon_col]
-            .spacing(theme::SPACE_TIGHT)
-            .align_y(iced::Alignment::Start)
-            .width(Length::Fill),
+        row![
+            fader_widget,
+            icon_col,
+            iced::widget::Space::new().width(Length::Fixed(theme::SPACE_HAIRLINE * scale)),
+        ]
+        .spacing(theme::SPACE_HAIRLINE * scale)
+        .align_y(iced::Alignment::Start)
+        .width(Length::Fill),
     );
 
     let db_display: Element<'a, Message> = if p.editing {
@@ -1339,6 +1350,17 @@ mod tests {
     fn collapsed_strip_fills_the_standard_strip_height() {
         assert!((COLLAPSED_METER_H + COLLAPSED_CHROME_H - STRIP_H).abs() < f32::EPSILON);
         assert!(COLLAPSED_METER_H > 0.0);
+    }
+
+    #[test]
+    fn compact_icon_column_leaves_room_for_the_fader_group() {
+        let content_w = STRIP_W - 2.0 * theme::SPACE_MD;
+        let fader_w = content_w - SETTINGS_TAB_W - theme::SPACE_TIGHT;
+        assert!(
+            fader_w >= crate::widgets::fader::FADER_GROUP_W,
+            "fader canvas {fader_w} cannot hold the {} px meter/track group",
+            crate::widgets::fader::FADER_GROUP_W
+        );
     }
 
     #[test]
