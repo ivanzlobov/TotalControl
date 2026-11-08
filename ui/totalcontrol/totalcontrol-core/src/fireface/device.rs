@@ -600,6 +600,11 @@ pub struct Fireface {
     state_words: HashMap<u16, u16>,
     /// Pre-connect snapshot once the startup dump completes.
     pre_connect_words: HashMap<u16, u16>,
+    /// At connect, leave an output state word untouched when the
+    /// pre-connect dump already holds the scene value.  TotalMix writes
+    /// only changed levels and routing during its restore; the mode words
+    /// are the exception and are always written.
+    skip_unchanged_output_state: bool,
     startup_dump_pending: bool,
     startup_dump_started: Instant,
     startup_dump_timeout: Duration,
@@ -1097,6 +1102,7 @@ impl Fireface {
             device_output_volume: HashMap::new(),
             state_words: HashMap::new(),
             pre_connect_words: HashMap::new(),
+            skip_unchanged_output_state: false,
             startup_dump_pending: false,
             startup_dump_started: Instant::now(),
             startup_dump_timeout: Duration::from_millis(2500),
@@ -1834,12 +1840,20 @@ impl Fireface {
                 self.ucx_write_matrix(dsp as u8, source, l as f64)?;
                 self.ucx_write_matrix(dsp as u8 + 1, source, r as f64)?;
             }
-            let table = ucx::fader_table_reg(dsp as u8, idx);
             let level = ucx::linear_to_tenths(
                 volume * self.dest_trim(ChannelId::Input(idx), pair * 2),
             ) as i16;
-            self.write_word(table, ucx::fader_level(level))?;
-            return self.write_word(table, ucx::fader_pan(pan as i16));
+            let pan_word = ucx::fader_pan(pan as i16);
+            // The fader table is per output side.  Writing only the left
+            // output leaves the right channel's table at its power-on
+            // value, so AN2/AN4 have no post-fader signal until an output
+            // volume change forces a refresh.
+            for dsp_side in [dsp, dsp + 1] {
+                let table = ucx::fader_table_reg(dsp_side as u8, idx);
+                self.write_word(table, ucx::fader_level(level))?;
+                self.write_word(table, pan_word)?;
+            }
+            return Ok(());
         }
         // Stereo strip: source `base` on the left, `base^1` on the right.
         let other = base ^ 1;
@@ -1850,12 +1864,15 @@ impl Fireface {
             self.ucx_write_matrix(dsp as u8, Source::Input(base), gl as f64)?;
             self.ucx_write_matrix(dsp as u8 + 1, Source::Input(other), gr as f64)?;
         }
-        let t0 = ucx::fader_table_reg(dsp as u8, base);
-        let t1 = ucx::fader_table_reg(dsp as u8, other);
-        self.write_word(t0, ucx::fader_level(ucx::linear_to_tenths(gl) as i16))?;
-        self.write_word(t0, ucx::fader_pan(0))?;
-        self.write_word(t1, ucx::fader_level(ucx::linear_to_tenths(gr) as i16))?;
-        self.write_word(t1, ucx::fader_pan(0))
+        for dsp_side in [dsp, dsp + 1] {
+            let t0 = ucx::fader_table_reg(dsp_side as u8, base);
+            let t1 = ucx::fader_table_reg(dsp_side as u8, other);
+            self.write_word(t0, ucx::fader_level(ucx::linear_to_tenths(gl) as i16))?;
+            self.write_word(t0, ucx::fader_pan(0))?;
+            self.write_word(t1, ucx::fader_level(ucx::linear_to_tenths(gr) as i16))?;
+            self.write_word(t1, ucx::fader_pan(0))?;
+        }
+        Ok(())
     }
 
     /// Rewrite one routing's 2x2 matrix for a playback pair.
@@ -1930,6 +1947,66 @@ impl Fireface {
             ucx::channel_reg(channel, ucx::offset::MUTE_OR_FADER),
             value,
         )
+    }
+
+    fn ucx_input_word_matches_pre_connect(&self, idx: usize, offset: u8, value: u16) -> bool {
+        let reg = ucx::channel_reg(ucx::input_channel(idx), offset);
+        self.pre_connect_words.get(&reg).copied() == Some(value)
+    }
+
+    fn ucx_output_reg(idx: usize, offset: u8) -> Option<u16> {
+        let dsp = ucx::output_pair_dsp(idx / 2)?;
+        Some(ucx::channel_reg(
+            ucx::output_channel(dsp + idx % 2),
+            offset,
+        ))
+    }
+
+    fn ucx_output_word_matches_pre_connect(&self, idx: usize, offset: u8, value: u16) -> bool {
+        let Some(reg) = Self::ucx_output_reg(idx, offset) else {
+            return false;
+        };
+        self.pre_connect_words.get(&reg).copied() == Some(value)
+    }
+
+    /// Whether the pre-connect dump already holds this output's scene
+    /// level.  Compare the raw tenths value, not the converted f32, so the
+    /// decision matches the word that would be written.
+    fn ucx_output_volume_matches_pre_connect(&self, idx: usize, volume: f32) -> bool {
+        self.ucx_output_word_matches_pre_connect(
+            idx,
+            ucx::offset::MUTE_OR_FADER,
+            ucx::linear_to_tenths(volume.clamp(0.0, 2.0)),
+        )
+    }
+
+    /// Whether both sides of this output pair already have the requested
+    /// stereo/mono mode.
+    fn ucx_output_stereo_matches_pre_connect(&self, idx: usize, linked: bool) -> bool {
+        let pair = idx / 2;
+        [pair * 2, pair * 2 + 1]
+            .into_iter()
+            .all(|i| {
+                self.ucx_output_word_matches_pre_connect(
+                    i,
+                    ucx::offset::OUTPUT_STEREO,
+                    linked as u16,
+                )
+            })
+    }
+
+    /// Whether both sides already hold this balance value.
+    fn ucx_output_balance_matches_pre_connect(&self, idx: usize, balance: i8) -> bool {
+        let pair = idx / 2;
+        [pair * 2, pair * 2 + 1]
+            .into_iter()
+            .all(|i| {
+                self.ucx_output_word_matches_pre_connect(
+                    i,
+                    ucx::offset::FX_SEND_OR_BALANCE,
+                    balance as i16 as u16,
+                )
+            })
     }
 
     /// The output mode word: bit 0 = mute, bit 1 = monitor-muted.
@@ -2198,6 +2275,15 @@ impl Fireface {
             .registers()
             .into_iter()
             .map(|(off, value)| (ucx::channel_reg(channel, off), value))
+            .filter(|(reg, value)| {
+                // At connect/restore TotalMix does not rewrite an output
+                // EQ, dynamics or Auto Level block that the unit already
+                // holds.  A same-value write here can leave the right
+                // post-fader meter stale.  Changed values are still sent.
+                !self.skip_unchanged_output_state
+                    || !is_output
+                    || self.pre_connect_words.get(reg).copied() != Some(*value)
+            })
             .collect();
         self.write_words(&words)
     }
@@ -2307,6 +2393,18 @@ impl Fireface {
         self.dry_run = true;
         let result = self.apply_scene(scene);
         self.dry_run = false;
+        result
+    }
+
+    /// Apply a startup, reconnect or restore scene the way TotalMix does:
+    /// output volume words that already match the pre-connect dump are
+    /// left untouched.  Output mode words and every other register are
+    /// still written normally.
+    pub fn apply_scene_at_connect(&mut self, scene: &Scene) -> Result<(), Error> {
+        let previous = self.skip_unchanged_output_state;
+        self.skip_unchanged_output_state = true;
+        let result = self.apply_scene(scene);
+        self.skip_unchanged_output_state = previous;
         result
     }
 
@@ -2453,6 +2551,11 @@ impl Fireface {
         // UCX: one control, three output pairs (0 = −10 dBV, 1 = +4 dBu,
         // 2 = Hi Gain).
         for reg in [0x1208, 0x1308, 0x1408, 0x1508, 0x1608, 0x1708] {
+            if self.skip_unchanged_output_state
+                && self.pre_connect_words.get(&reg).copied() == Some(code)
+            {
+                continue;
+            }
             self.write_word(reg, code)?;
         }
         self.settings.line_out_ref = code;
@@ -2465,8 +2568,14 @@ impl Fireface {
             return self.write_uc_reference(10, code);
         }
         // UCX: the Phones/Main pair has its own reference (`0x1808`).
-        self.write_word(0x1808, code)?;
-        self.write_word(0x1908, code)?;
+        for reg in [0x1808, 0x1908] {
+            if self.skip_unchanged_output_state
+                && self.pre_connect_words.get(&reg).copied() == Some(code)
+            {
+                continue;
+            }
+            self.write_word(reg, code)?;
+        }
         self.settings.phones_ref = code;
         Ok(())
     }
@@ -5006,7 +5115,19 @@ impl RmeDevice for Fireface {
                         let idx = main * 2 + side;
                         if idx < self.outputs.len() {
                             let volume = self.outputs[idx].volume;
-                            self.set_volume(ChannelId::Output(b * 2 + side), 0, volume)?;
+                            let target = b * 2 + side;
+                            // Do not rewrite a Speaker B level that already
+                            // matches Main.  A same-value output-volume
+                            // write can leave the UCX right post-fader
+                            // meter stale; only a changed value refreshes
+                            // it.
+                            let unchanged = target < self.outputs.len()
+                                && ucx::linear_to_tenths(
+                                    self.outputs[target].volume.clamp(0.0, 2.0),
+                                ) == ucx::linear_to_tenths(volume.clamp(0.0, 2.0));
+                            if !unchanged {
+                                self.set_volume(ChannelId::Output(target), 0, volume)?;
+                            }
                         }
                     }
                     // If the link is engaged while Dim is active, the B
@@ -5264,7 +5385,8 @@ impl RmeDevice for Fireface {
                 }
                 // Playback send is the `0x47A0` family: one consecutive
                 // address per channel, mirrored 0x40 higher.  -65 dB is the
-                // off position and writes 0, not a tiny non-zero amplitude.
+                // off position and must write 0, not the tiny non-zero
+                // amplitude of a -65 dB exponential.
                 let linear = if db <= -65.0 {
                     0.0
                 } else {
@@ -5941,75 +6063,35 @@ impl RmeDevice for Fireface {
                     }
                 }
             }
-        } else {
-            for idx in 0..self.outputs.len() {
-                let volume = self.outputs[idx].volume;
-                let mute = self.outputs[idx].mute;
-                self.set_volume(ChannelId::Output(idx), 0, volume)?;
-                // Scene recall must also clear a mute left on the unit.
-                self.set_mute(ChannelId::Output(idx), mute)?;
-            }
-            // TotalMix enables the output mute bits in its connect write.
-            // Without this the NN02 mute bits are stored but ignored.
-            self.write_word(ucx::global::MUTE_ENABLE, 1)?;
-            // Refresh the monitor flags too; this clears a stale Main Out
-            // mute bit left by an earlier session.
-            self.write_word(0x3f9e, self.monitor_flags())?;
-            // Balance and stereo mode are separate registers from volume.
-            for pair in 0..PAIRS {
-                let linked = self.output_linked(pair);
-                let left = pair * 2;
-                let right = left + 1;
-                self.ucx_write_output_stereo(left, linked)?;
-                self.ucx_write_output_stereo(right, linked)?;
-                if linked {
-                    let balance = self.outputs[left].balance;
-                    self.set_pan(ChannelId::Output(left), 0, balance)?;
-                }
-            }
-            for pair in 0..PAIRS {
-                let loopback = self.outputs[pair * 2].loopback
-                    || self.outputs[pair * 2 + 1].loopback;
-                self.set_loopback(pair, loopback)?;
-            }
-            // Output phase is a per-side register pair.  Write both normal
-            // and inverted values: a scene recall must clear a phase left
-            // inverted on the unit, not only engage one.
-            for idx in 0..self.outputs.len() {
-                let inverted = if idx % 2 == 0 {
-                    self.outputs[idx].phase_l
-                } else {
-                    self.outputs[idx].phase_r
-                };
-                self.set_output_phase(idx, inverted)?;
-            }
-            for idx in 0..self.outputs.len() {
-                if self.outputs[idx].eq.is_some() {
-                    self.sync_output_eq(idx);
-                    // `channel_settings` already includes the dynamics and
-                    // Auto Level block; fold them in instead of writing
-                    // those 12 registers a second time.
-                    if let Some(dynamics) = self.outputs[idx].dynamics {
-                        self.ucx_update_dynamics_settings(
-                            ChannelId::Output(idx),
-                            &dynamics,
-                        )?;
-                    }
-                    let s = self.output_settings[idx];
-                    self.ucx_write_channel_settings(idx, true, &s)?;
-                } else if let Some(dynamics) = self.outputs[idx].dynamics {
-                    self.ucx_write_dynamics(ChannelId::Output(idx), &dynamics)?;
-                }
-                let fx = self.outputs[idx].fx_return_db;
-                self.set_fx_return(idx, fx)?;
-            }
         }
         for idx in 0..self.inputs.len() {
             if !self.is_uc() {
                 // Phase is a register per side on the UCX.  Write both
                 // values so a recall clears an inversion left on the unit.
-                self.set_phase(idx, self.inputs[idx].phase)?;
-                self.set_input_phase_right(idx, self.inputs[idx].phase_r)?;
+                // The right-side register sits one channel block higher;
+                // an unchanged write for the last input lands in the first
+                // output block, so skip it when the dump already matches.
+                let phase = self.inputs[idx].phase;
+                if !self.skip_unchanged_output_state
+                    || !self.ucx_input_word_matches_pre_connect(
+                        idx,
+                        ucx::offset::INPUT_PHASE,
+                        phase as u16,
+                    )
+                {
+                    self.set_phase(idx, phase)?;
+                }
+                let phase_r = self.inputs[idx].phase_r;
+                let phase_r_reg = ucx::channel_reg(
+                    ucx::input_channel(idx),
+                    ucx::offset::INPUT_PHASE,
+                ) + 0x100;
+                if !self.skip_unchanged_output_state
+                    || self.pre_connect_words.get(&phase_r_reg).copied()
+                        != Some(phase_r as u16)
+                {
+                    self.set_input_phase_right(idx, phase_r)?;
+                }
                 if idx < 4 {
                     if let Some(gain) = self.inputs[idx].gain_right {
                         self.set_input_gain_right(idx, gain)?;
@@ -6080,6 +6162,103 @@ impl RmeDevice for Fireface {
                     continue;
                 };
                 self.set_matrix_cell(channel, cell.block, cell.gain)?;
+            }
+            for idx in 0..self.outputs.len() {
+                let volume = self.outputs[idx].volume;
+                let mute = self.outputs[idx].mute;
+                // TotalMix's connect restore leaves an output level alone
+                // when the unit already holds it.  Rewriting that same
+                // value is what left the UCX right post-fader meter stale
+                // after a power cycle.  Mode words are still written.
+                if !self.skip_unchanged_output_state
+                    || !self.ucx_output_volume_matches_pre_connect(idx, volume)
+                {
+                    self.set_volume(ChannelId::Output(idx), 0, volume)?;
+                }
+                // Scene recall must also clear a mute left on the unit.
+                self.set_mute(ChannelId::Output(idx), mute)?;
+            }
+            // TotalMix enables the output mute bits in its connect write.
+            // Without this the NN02 mute bits are stored but ignored.
+            self.write_word(ucx::global::MUTE_ENABLE, 1)?;
+            // Refresh the monitor flags too; this clears a stale Main Out
+            // mute bit left by an earlier session.
+            self.write_word(0x3f9e, self.monitor_flags())?;
+            // Balance and stereo mode are separate registers from volume.
+            for pair in 0..PAIRS {
+                let linked = self.output_linked(pair);
+                let left = pair * 2;
+                let right = left + 1;
+                // TotalMix does not rewrite an unchanged stereo/mono mode
+                // at connect.  A same-value write here is what leaves the
+                // right post-fader meter stale on AN1/2 and AN3/4.
+                if !self.skip_unchanged_output_state
+                    || !self.ucx_output_stereo_matches_pre_connect(left, linked)
+                {
+                    self.ucx_write_output_stereo(left, linked)?;
+                    self.ucx_write_output_stereo(right, linked)?;
+                }
+                if linked {
+                    let balance = self.outputs[left].balance;
+                    if !self.skip_unchanged_output_state
+                        || !self.ucx_output_balance_matches_pre_connect(left, balance)
+                    {
+                        self.set_pan(ChannelId::Output(left), 0, balance)?;
+                    }
+                }
+            }
+            for pair in 0..PAIRS {
+                let loopback = self.outputs[pair * 2].loopback
+                    || self.outputs[pair * 2 + 1].loopback;
+                self.set_loopback(pair, loopback)?;
+            }
+            // Output phase is a per-side register pair.  Write both normal
+            // and inverted values: a scene recall must clear a phase left
+            // inverted on the unit, not only engage one.
+            for idx in 0..self.outputs.len() {
+                let inverted = if idx % 2 == 0 {
+                    self.outputs[idx].phase_l
+                } else {
+                    self.outputs[idx].phase_r
+                };
+                if !self.skip_unchanged_output_state
+                    || !self.ucx_output_word_matches_pre_connect(
+                        idx,
+                        ucx::offset::GAIN_REFLEVEL_OR_PHASE,
+                        inverted as u16,
+                    )
+                {
+                    self.set_output_phase(idx, inverted)?;
+                }
+            }
+            for idx in 0..self.outputs.len() {
+                if self.outputs[idx].eq.is_some() {
+                    self.sync_output_eq(idx);
+                    // `channel_settings` already includes the dynamics and
+                    // Auto Level block; fold them in instead of writing
+                    // those 12 registers a second time.
+                    if let Some(dynamics) = self.outputs[idx].dynamics {
+                        self.ucx_update_dynamics_settings(
+                            ChannelId::Output(idx),
+                            &dynamics,
+                        )?;
+                    }
+                    let s = self.output_settings[idx];
+                    self.ucx_write_channel_settings(idx, true, &s)?;
+                } else if let Some(dynamics) = self.outputs[idx].dynamics {
+                    self.ucx_write_dynamics(ChannelId::Output(idx), &dynamics)?;
+                }
+                let fx = self.outputs[idx].fx_return_db;
+                let fx_word = (fx * 10.0).round() as i16 as u16;
+                if !self.skip_unchanged_output_state
+                    || !self.ucx_output_word_matches_pre_connect(
+                        idx,
+                        ucx::offset::FX_RETURN,
+                        fx_word,
+                    )
+                {
+                    self.set_fx_return(idx, fx)?;
+                }
             }
             if let Some(reverb) = self.settings.reverb {
                 self.ucx_write_reverb(&reverb)?;
@@ -6448,6 +6627,168 @@ mod tests {
     }
 
     #[test]
+    fn ucx_scene_apply_writes_matrix_before_output_modes() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_volume(ChannelId::Input(0), 1, 1.0).unwrap();
+        let scene = dev.capture_scene();
+        writes.lock().unwrap().clear();
+        dev.apply_scene(&scene).unwrap();
+        let words = written_words(&writes);
+        let matrix = words
+            .iter()
+            .position(|(addr, _)| (0x4000..0x5000).contains(addr))
+            .expect("matrix write");
+        let mode = words
+            .iter()
+            .position(|(addr, _)| *addr == 0x1202)
+            .expect("output mode write");
+        assert!(
+            matrix < mode,
+            "RME writes matrix/fader records before output mode words"
+        );
+    }
+
+    fn seed_pre_connect_output_state(dev: &mut Fireface, scene: &Scene) {
+        // Populate the cached EQ/dynamics settings the scene will use, so
+        // the seeded words match what apply_scene generates.
+        let _ = dev.load_scene_model(scene);
+        for (idx, output) in scene.outputs.iter().enumerate() {
+            let pair = idx / 2;
+            let linked = scene
+                .settings
+                .output_link
+                .get(pair)
+                .copied()
+                .unwrap_or(true);
+            let words = [
+                (
+                    ucx::offset::MUTE_OR_FADER,
+                    ucx::linear_to_tenths(output.volume.clamp(0.0, 2.0)),
+                ),
+                (ucx::offset::OUTPUT_STEREO, linked as u16),
+                (
+                    ucx::offset::FX_SEND_OR_BALANCE,
+                    scene.outputs[pair * 2].balance as i16 as u16,
+                ),
+                (
+                    ucx::offset::GAIN_REFLEVEL_OR_PHASE,
+                    if idx % 2 == 0 {
+                        output.phase_l
+                    } else {
+                        output.phase_r
+                    } as u16,
+                ),
+                (
+                    ucx::offset::FX_RETURN,
+                    (output.fx_return_db * 10.0).round() as i16 as u16,
+                ),
+            ];
+            for (offset, value) in words {
+                if let Some(reg) = Fireface::ucx_output_reg(idx, offset) {
+                    dev.pre_connect_words.insert(reg, value);
+                }
+            }
+            for (offset, value) in dev.output_settings[idx].registers() {
+                if let Some(reg) = Fireface::ucx_output_reg(idx, offset) {
+                    dev.pre_connect_words.insert(reg, value);
+                }
+            }
+            if pair <= 3 {
+                let ref_code = if pair == 0 {
+                    scene.settings.phones_ref
+                } else {
+                    scene.settings.line_out_ref
+                };
+                if let Some(reg) = Fireface::ucx_output_reg(idx, ucx::offset::OUTPUT_REF_LEVEL) {
+                    dev.pre_connect_words.insert(reg, ref_code);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ucx_connect_restore_leaves_matching_output_volumes_untouched() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let scene = dev.capture_scene();
+        seed_pre_connect_output_state(&mut dev, &scene);
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene_at_connect(&scene).unwrap();
+
+        let words = written_words(&writes);
+        for addr in [0x1200, 0x1300, 0x1400, 0x1500] {
+            assert!(
+                !words.iter().any(|(reg, _)| *reg == addr),
+                "connect restore rewrote the unchanged output volume {addr:#06x}"
+            );
+        }
+        assert!(
+            words.iter().any(|(reg, _)| *reg == 0x1202),
+            "connect restore must still write the output mode word"
+        );
+    }
+
+    #[test]
+    fn ucx_connect_restore_leaves_matching_output_state_untouched() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let scene = dev.capture_scene();
+        seed_pre_connect_output_state(&mut dev, &scene);
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene_at_connect(&scene).unwrap();
+
+        let words = written_words(&writes);
+        for &(reg, value) in &words {
+            let offset = (reg & 0xff) as u8;
+            let scalar = [0, 1, 3, 4, 7, 8].contains(&offset);
+            let settings = (0x20..=0x8f).contains(&offset);
+            if (0x1200..=0x1bff).contains(&reg) && (scalar || settings) {
+                panic!(
+                    "connect restore rewrote unchanged output register {reg:#06x}={value:#06x}"
+                );
+            }
+        }
+        assert!(
+            words.iter().any(|(reg, _)| *reg == 0x1202),
+            "connect restore must still write the output mode word"
+        );
+    }
+
+    #[test]
+    fn ucx_connect_restore_writes_a_changed_output_volume() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut scene = dev.capture_scene();
+        scene.outputs[2].volume = ucx::tenths_to_linear(0xff59);
+        // The unit still holds a different raw value for Main/AN1.
+        dev.pre_connect_words.insert(0x1200, 0xff38);
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene_at_connect(&scene).unwrap();
+
+        let words = written_words(&writes);
+        assert!(
+            words.iter().any(|(reg, value)| *reg == 0x1200 && *value == 0xff59),
+            "a changed output level must still be written at connect"
+        );
+    }
+
+    #[test]
+    fn ucx_scene_recall_still_writes_every_output_volume() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let scene = dev.capture_scene();
+        seed_pre_connect_output_state(&mut dev, &scene);
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene(&scene).unwrap();
+
+        let words = written_words(&writes);
+        assert!(
+            words.iter().any(|(reg, _)| *reg == 0x1200),
+            "an explicit scene recall remains authoritative"
+        );
+    }
+
+    #[test]
     fn ucx_connect_enables_output_mute_and_clears_a_stale_main_mute_flag() {
         let (mut dev, writes) = open(Model::Ucx);
         dev.set_main_out(Some(1)).unwrap();
@@ -6545,6 +6886,8 @@ mod tests {
         assert!(words.contains(&(0x4045, ucx::matrix_gain(1.0))));
         assert!(words.iter().any(|(a, _)| *a == 0x12e4));
         assert!(words.iter().any(|(a, _)| *a == 0x12e5));
+        assert!(words.iter().any(|(a, _)| *a == 0x13e4));
+        assert!(words.iter().any(|(a, _)| *a == 0x13e5));
     }
 
     #[test]

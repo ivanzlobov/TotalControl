@@ -1310,6 +1310,23 @@ impl DeviceHandle {
         self.apply_scene(scene)
     }
 
+    /// Apply a connect or restore scene without rewriting output levels
+    /// the unit already holds.  TotalMix leaves those words untouched
+    /// during its restore and its post-start reapplies.
+    pub fn apply_scene_at_connect(
+        &mut self,
+        scene: &Scene,
+    ) -> Result<(), totalcontrol_core::Error> {
+        if let DeviceHandle::Mirror(d) = self {
+            return d.apply_scene_at_connect(scene);
+        }
+        #[cfg(feature = "alsa")]
+        if let DeviceHandle::Fireface(d) = self {
+            return d.apply_scene_at_connect(scene);
+        }
+        self.apply_scene(scene)
+    }
+
     pub fn firmware(&self) -> Option<u32> {
         if let DeviceHandle::Mirror(d) = self {
             return d.info().firmware;
@@ -4382,7 +4399,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                 }
             }
         }
-        match state.device.apply_scene(&scene) {
+        match state.device.apply_scene_at_connect(&scene) {
             Ok(()) => {
                 // `apply_scene` normalizes old scenes into the live channel
                 // topology.  Keep that normalized view as the host scene so
@@ -4470,7 +4487,7 @@ fn finish_startup_setup(state: &mut TotalControl) {
 }
 
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
-    match state.device.apply_scene(scene) {
+    match state.device.apply_scene_at_connect(scene) {
         Ok(()) => {
             enforce_control_room_stereo(state);
             state.host_scene = Some(state.device.capture_scene());
@@ -4515,6 +4532,10 @@ fn poll_startup_compare(state: &mut TotalControl) {
 }
 
 fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &str) {
+    if state.startup_compare_pending {
+        log::debug!("{reason}: the UCX startup restore is still waiting for its state dump");
+        return;
+    }
     if state.startup_scene.is_some() {
         log::debug!("{reason}: a startup scene reapply is already pending");
         return;
@@ -7802,12 +7823,21 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     if let Some(due) = state.startup_scene_due {
         if Instant::now() >= due {
             state.startup_scene_due = None;
-            // Reapply the scene that was loaded from disk, not the current
-            // model.  The UC may have delivered a stale front-panel event
-            // after the first write; capturing the model here would make
-            // the device value permanent.
-            if let Some(scene) = state.startup_scene.take() {
-                if let Err(e) = state.device.apply_scene(&scene) {
+            if state.startup_compare_pending {
+                // The UCX dump is still in flight.  Writing now would
+                // interleave a same-value restore with the dump and can
+                // leave the right post-fader meter stale.  The deferred
+                // connectivity scene write covers this reapply.
+                state.startup_scene = None;
+                log::debug!(
+                    "discarding a mixer reapply scheduled before the UCX startup restore"
+                );
+            } else if let Some(scene) = state.startup_scene.take() {
+                // Reapply the scene that was loaded from disk, not the current
+                // model.  The UC may have delivered a stale front-panel event
+                // after the first write; capturing the model here would make
+                // the device value permanent.
+                if let Err(e) = state.device.apply_scene_at_connect(&scene) {
                     log::warn!("scene reapply failed: {e:?}");
                 } else {
                     log::info!("reapplied the Fireface mixer scene");
@@ -7985,22 +8015,51 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     if let Some(fresh) = fresh {
                         log::info!("Device connected: {}", fresh.target().label());
                         state.prefs_dirty = true;
-                        replace_device_handle(state, fresh);
+                        replace_device_handle_direct(state, fresh);
                         clear_meters(state);
                         state.device_target = Some(state.device.target());
                         state.connected = state.device.is_connected();
                         state.show_device_panel = false;
+                        let mut deferred_ucx_restore = false;
                         if state.device.needs_scene_restore()
                             || state.sync_direction == SyncDirection::GuiToDevice
                         {
                             let scene = load_scene_for_current(state);
                             if let Some(scene) = scene {
                                 state.host_scene = Some(scene.clone());
-                                if let Err(e) = state.device.apply_scene(&scene) {
-                                    fail(state, "apply_scene", &e);
-                                } else {
-                                    enforce_control_room_stereo(state);
-                                    state.host_scene = Some(state.device.capture_scene());
+                                if state.device.is_ucx_model() && !state.always_init_device {
+                                    // RME requests the full state dump before
+                                    // its connect write.  Do the same on a
+                                    // reconnect so the scene is not mixed
+                                    // into the dump stream.
+                                    if let Err(e) = state
+                                        .device
+                                        .begin_startup_state_dump(Duration::from_millis(3000))
+                                    {
+                                        log::warn!(
+                                            "UCX reconnect state dump request failed: {e:?}"
+                                        );
+                                    }
+                                    if state.device.startup_dump_pending() {
+                                        if let Err(e) = state.device.load_scene_model(&scene) {
+                                            log::warn!(
+                                                "could not load the UCX reconnect scene model: {e:?}"
+                                            );
+                                        }
+                                        state.host_scene =
+                                            Some(state.device.capture_scene());
+                                        state.startup_compare_scene = Some(scene.clone());
+                                        state.startup_compare_pending = true;
+                                        deferred_ucx_restore = true;
+                                    }
+                                }
+                                if !deferred_ucx_restore {
+                                    if let Err(e) = state.device.apply_scene_at_connect(&scene) {
+                                        fail(state, "apply_scene", &e);
+                                    } else {
+                                        enforce_control_room_stereo(state);
+                                        state.host_scene = Some(state.device.capture_scene());
+                                    }
                                 }
                                 if state.device.is_uc_model() {
                                     // The reconnect scene is written while
@@ -8019,8 +8078,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                         if state.host_scene.is_none() {
                             state.host_scene = Some(state.device.capture_scene());
                         }
-                        if let Err(e) = apply_control_room_assignments(state) {
-                            log::debug!("Control Room assignments not restored: {e}");
+                        if !deferred_ucx_restore {
+                            if let Err(e) = apply_control_room_assignments(state) {
+                                log::debug!("Control Room assignments not restored: {e}");
+                            }
+                            maybe_attach_device_service(state);
                         }
                         restart_surround_bridge(state);
                         restore_engine(state);
@@ -10246,13 +10308,20 @@ fn clear_meters(state: &mut TotalControl) {
 
 fn replace_device_handle(state: &mut TotalControl, new: DeviceHandle) {
     let use_service = state.device_service.is_some() || crate::device_service::requested();
+    replace_device_handle_direct(state, new);
+    if use_service {
+        attach_device_service(state);
+    }
+}
+
+/// Replace the backend but keep the handle direct.  A reconnect uses this
+/// so the UCX state dump and the scene restore run on the real device
+/// before the handle moves to the service thread.
+fn replace_device_handle_direct(state: &mut TotalControl, new: DeviceHandle) {
     state.device_service = None;
     state.device_updates = None;
     state.meter_bus = None;
     state.device = new;
-    if use_service {
-        attach_device_service(state);
-    }
 }
 
 /// How long a failure stays on screen.

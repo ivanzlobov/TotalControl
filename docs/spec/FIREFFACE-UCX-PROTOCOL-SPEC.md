@@ -366,7 +366,9 @@ pan   = (pan << 4) | 0x8      (-100 .. +100)
 ```
 
 The fader base is submix-dependent: the selected hardware output chooses the
-`0x12e0` / `0x22e0` family.
+`0x12e0` / `0x22e0` family.  Both sides of a stereo output have their own
+record; a left-only write leaves the right post-fader level at its power-on
+value.
 
 ### 4.4 Global registers
 

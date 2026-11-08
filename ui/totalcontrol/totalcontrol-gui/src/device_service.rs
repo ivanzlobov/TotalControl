@@ -227,6 +227,17 @@ impl Mirror {
         let _ = self.commands.send(Command::Run(Box::new(command)));
     }
 
+    /// Apply a connect or restore scene on the service thread without
+    /// rewriting output levels the unit already holds.
+    pub fn apply_scene_at_connect(&mut self, scene: &Scene) -> Result<(), Error> {
+        self.scene = scene.clone();
+        let scene = scene.clone();
+        self.run(move |d| {
+            let _ = d.apply_scene_at_connect(&scene);
+        });
+        Ok(())
+    }
+
     pub fn set_line_in_ref(&self, code: u16) {
         self.run(move |d| {
             let _ = d.set_line_in_ref(code);
