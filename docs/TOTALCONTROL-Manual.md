@@ -194,6 +194,43 @@ totalcontrol
 The window opens on the Quick view. The Mixer and Matrix views are in the top
 bar.
 
+### Desktop menu entry
+
+The `totalcontrol` RPM installs the desktop entry and icons into the system
+paths.  If you are running a source build instead, install the entry for the
+current user after building:
+
+```sh
+cd <checkout>
+install -Dm644 ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.desktop \
+  ~/.local/share/applications/totalcontrol.desktop
+install -Dm644 ui/totalcontrol/totalcontrol-gui/assets/totalcontrol.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/totalcontrol.svg
+install -Dm644 ui/totalcontrol/totalcontrol-gui/assets/totalcontrol-256.png \
+  ~/.local/share/icons/hicolor/256x256/apps/totalcontrol.png
+```
+
+The entry runs `totalcontrol` from `PATH`. If your binary is somewhere else,
+edit the `Exec=` line to its full path, for example:
+
+```sh
+sed -i "s|^Exec=totalcontrol|Exec=$HOME/.local/bin/totalcontrol|" \
+  ~/.local/share/applications/totalcontrol.desktop
+```
+
+Refresh the desktop caches:
+
+```sh
+update-desktop-database ~/.local/share/applications
+kbuildsycoca6                 # KDE
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor   # GNOME/GTK
+```
+
+The menu entry appears in the KDE application launcher and the GNOME
+Activities overview. The tray icon is separate from the menu entry: KDE
+shows it through StatusNotifierItem, while GNOME needs a StatusNotifierItem
+or AppIndicator extension.
+
 ### Check the device
 
 1. Open the device card in the sidebar.

@@ -15,7 +15,7 @@ use crate::app::{Message, TotalControl};
 use crate::theme;
 
 /// Where the source and the releases live: the same URL `totalcontrol.desktop`
-/// carries as its homepage, and the one the AUR package points at.
+/// carries as its homepage.
 pub const REPO_URL: &str = "https://github.com/jspx-projects/TotalControl";
 
 /// The card's width cap at `ui_scale == 1.0`: wide enough for the repo URL

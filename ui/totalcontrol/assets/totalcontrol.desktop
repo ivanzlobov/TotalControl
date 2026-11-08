@@ -7,5 +7,6 @@ Exec=totalcontrol
 Icon=totalcontrol
 Terminal=false
 StartupNotify=true
+StartupWMClass=totalcontrol
 Categories=AudioVideo;Audio;Mixer;
 Keywords=RME;TotalMix;Babyface;Fireface;mixer;audio interface;

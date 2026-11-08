@@ -98,13 +98,15 @@ cargo test                     # protocol laws, panel state machine, GUI state, 
 cargo build -p totalcontrol-core --no-default-features --features usb
 ```
 
-The binaries land in `target/release/`: `totalcontrol-gui` (installed as `totalcontrol`
-by the AUR package) and `totalcontrol-tui`.
+The binaries land in `target/release/`: `totalcontrol-gui` and
+`totalcontrol-tui`. The RPM installs the GUI as `totalcontrol`; rename or
+symlink `totalcontrol-gui` if a source build should start from the shipped
+desktop entry.
 
 ## License
 
 `totalcontrol-core` is MIT. `totalcontrol-gui` and `totalcontrol-tui` are GPL-3.0-only.
 `totalcontrol-usb` is GPL-3.0-or-later and `totalcontrol-sys` is GPL-3.0. The built
-binaries link the GPL crates, so as a whole they are GPL-3.0, which is the
-license the AUR package declares. See [`LICENSE`](../LICENSE) and
+binaries link the GPL crates, so as a whole they are GPL-3.0. See
+[`LICENSE`](../LICENSE) and
 [`COPYING`](../COPYING).
