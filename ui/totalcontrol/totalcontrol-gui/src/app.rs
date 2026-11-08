@@ -397,6 +397,9 @@ impl RmeDevice for DeviceHandle {
     fn model_name(&self) -> &str {
         delegate!(self, model_name)
     }
+    fn sample_rates(&self) -> &'static [u32] {
+        delegate!(self, sample_rates)
+    }
     fn capabilities(&self) -> totalcontrol_core::DeviceCapabilities {
         delegate!(self, capabilities)
     }
@@ -2274,6 +2277,13 @@ pub enum Message {
     /// Force PipeWire's graph rate (Hz), `0` = back to its default. See
     /// `totalcontrol_core::pw_clock`: system-wide, until PipeWire restarts.
     EngineRate(u32),
+    /// Select how the graph rate is chosen: `Auto`, `Follow`, or a fixed
+    /// rate (which arrives through [`Message::EngineRate`]).
+    EngineRateMode(EngineRateMode),
+    /// Read the PipeWire graph while Follow is active.
+    FollowPoll,
+    /// The graph read from `FollowPoll`.
+    FollowRead(Option<totalcontrol_core::pw_follow::GraphSnapshot>),
     /// Force PipeWire's quantum (buffer size in samples), `0` = default.
     EngineQuantum(u32),
     /// Zero the transport-error display against the driver's current counters.
@@ -2311,6 +2321,18 @@ pub enum RowMode {
     #[default]
     Three,
     Two,
+}
+
+/// How the PipeWire graph's sample rate is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum EngineRateMode {
+    /// PipeWire decides (`clock.force-rate = 0`).
+    #[default]
+    Auto,
+    /// Follow the stream feeding SW playback 1/2.
+    Follow,
+    /// Force the rate stored in `engine_force_rate`.
+    Fixed,
 }
 
 /// The strip-rename field's widget id, so `RenameStart` can focus it.
@@ -2730,6 +2752,16 @@ pub struct TotalControl {
     /// kept in the preferences and applied again at launch.
     pub engine_force_rate: u32,
     pub engine_force_quantum: u32,
+    /// How the graph rate is chosen.  In `Follow` mode `engine_force_rate`
+    /// keeps the last fixed choice, not the followed rate.
+    pub engine_rate_mode: EngineRateMode,
+    /// Runtime owner of the followed rate (never persisted).
+    pub rate_follow: totalcontrol_core::pw_follow::RateFollower,
+    /// `clock.allowed-rates` seen before TotalControl replaced it, and the
+    /// list it wrote.  Restored on disconnect or a clean exit when still
+    /// unchanged.
+    pub allowed_rates_saved: Option<Vec<u32>>,
+    pub allowed_rates_written: Option<Vec<u32>>,
     /// What the card itself runs at while audio plays (kernel driver only):
     /// its rate and hardware period, which the sound server may pin
     /// regardless of the quantum. `None` while the card is idle.
@@ -3225,6 +3257,10 @@ pub fn new_with_device(
         engine: simulated.then_some(SIMULATED_ENGINE),
         engine_force_rate: 0,
         engine_force_quantum: 0,
+        engine_rate_mode: EngineRateMode::Auto,
+        rate_follow: totalcontrol_core::pw_follow::RateFollower::new(),
+        allowed_rates_saved: None,
+        allowed_rates_written: None,
         card_stream: None,
         transport_counters: None,
         transport_baseline: None,
@@ -3334,6 +3370,7 @@ pub fn prefs_of(state: &TotalControl) -> crate::prefs::Prefs {
         // Only a choice to leave the default is worth writing down.
         keep_in_tray: (!state.keep_in_tray).then_some(false),
         engine_force_rate: Some(state.engine_force_rate),
+        engine_rate_mode: Some(state.engine_rate_mode),
         engine_force_quantum: Some(state.engine_force_quantum),
         collapsed,
         flyouts,
@@ -3418,6 +3455,11 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
     state.workspace_last_dir = prefs.workspace_last_dir;
     state.keep_in_tray = prefs.keep_in_tray.unwrap_or(true);
     state.engine_force_rate = prefs.engine_force_rate.unwrap_or(0);
+    state.engine_rate_mode = prefs.engine_rate_mode.unwrap_or(if state.engine_force_rate > 0 {
+        EngineRateMode::Fixed
+    } else {
+        EngineRateMode::Auto
+    });
     state.engine_force_quantum = prefs.engine_force_quantum.unwrap_or(0);
     state.always_init_device = prefs.always_init_device;
     if !state.osc_cli {
@@ -3487,8 +3529,14 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         .unwrap_or_else(|| state.device.capture_scene());
     // The host scene deliberately does not let device-reported values
     // overwrite the saved mix.  The live rate and Dim amount are workspace
-    // settings, so take their current values at save time.
-    scene.settings.sample_rate = state.device.settings().sample_rate;
+    // settings, so take their current values at save time.  In Follow mode
+    // the workspace stores the graph's current rate, without turning it into
+    // the user's fixed-rate choice.
+    scene.settings.sample_rate = if state.engine_rate_mode == EngineRateMode::Fixed {
+        state.device.settings().sample_rate
+    } else {
+        current_graph_rate(state)
+    };
     scene.settings.pitch_percent = state.device.settings().pitch_percent;
     scene.settings.dim_amount_db = state.control_room.main_dim_db;
     let snapshots: [WorkspaceSnapshot; 8] = std::array::from_fn(|i| WorkspaceSnapshot {
@@ -3582,6 +3630,11 @@ fn apply_workspace_state(
     // The Dim amount is both a Control Room preference and part of the
     // active workspace state.  Older files may only carry the preference.
     scene.settings.dim_amount_db = workspace.control_room.main_dim_db;
+    // A file's rate is only applied in fixed-rate mode.  Auto and Follow
+    // keep the mode and rate they are already running at.
+    if state.engine_rate_mode != EngineRateMode::Fixed {
+        scene.settings.sample_rate = state.device.settings().sample_rate;
+    }
     scene
         .check_compatible(state.device.canonical_model())
         .map_err(|e| e.to_string())?;
@@ -3751,6 +3804,11 @@ fn apply_workspace_pfl(state: &mut TotalControl, workspace: &Workspace) -> Resul
 /// model/register; this also moves the PipeWire graph when the sound server
 /// owns the card, then schedules a scene reapply for the stream restart.
 fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
+    // A workspace stores its graph rate, but Auto and Follow keep their
+    // current mode and must not be pinned to the file's value.
+    if state.engine_rate_mode != EngineRateMode::Fixed {
+        return;
+    }
     let rate = scene.settings.sample_rate;
     if rate == 0 {
         return;
@@ -4489,11 +4547,145 @@ fn rate_needs_mixer_reapply(
     card_rate_changed(last, current) || first_rate_needs_reapply(last, current, model_rate)
 }
 
+/// Force the PipeWire graph through the ordinary engine-rate path.  A
+/// followed rate passes `remember = false`: it is runtime state, not the
+/// user's fixed-rate preference.  The UC capture side is suspended and its
+/// scene shadow-written before the graph restarts, so routing and meters
+/// survive the rate change.
+fn apply_graph_rate(state: &mut TotalControl, rate: u32, remember: bool) {
+    if remember && !state.device.is_mock() {
+        state.engine_force_rate = rate;
+    }
+    if state.device.is_mock() {
+        if let Some(e) = state.engine.as_mut() {
+            e.force_rate = rate;
+        }
+        return;
+    }
+    if !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let uc = state.device.is_uc_model();
+    // The UC latches matrix routing at engine start.  A scene written while
+    // the engine is running only updates its shadow state; the next engine
+    // start applies it.
+    //
+    // Before a rate change, close the capture side so the kernel no longer
+    // locks the playback rate to the old value.  Keep playback running, write
+    // the full scene into the shadow, then change the rate.  PipeWire restarts
+    // the playback stream at the new rate, and that restarted engine latches
+    // the scene we just wrote.
+    let suspended_source = if uc && rate > 0 {
+        let source = pw_clock::fireface_source_name();
+        if let Some(source) = &source {
+            if pw_clock::set_source_suspended(source, true) {
+                // Let the kernel clear the capture hw_params (the rate lock)
+                // before touching the graph.
+                std::thread::sleep(Duration::from_millis(120));
+            } else {
+                log::warn!("Could not suspend the RME source for the rate change");
+            }
+        }
+        source
+    } else {
+        None
+    };
+    if uc && rate > 0 {
+        // Shadow write before the rate change.  Playback is still running, so
+        // this does not disturb the current audio; the rate-change engine
+        // restart latches it.
+        let scene = state.device.capture_scene();
+        if let Err(e) = state.device.apply_scene(&scene) {
+            log::warn!("Scene shadow write before rate change failed: {e:?}");
+        }
+    }
+    if let Err(e) = pw_clock::force_rate(rate) {
+        log::warn!("Setting the PipeWire rate failed: {e}");
+    }
+    if rate > 0 {
+        state.device.set_meter_rate(rate);
+        // Only wait for confirmation when a stream is open.  An idle card
+        // closes its PCM; the forced graph rate will be used when the next
+        // stream opens, and a timeout notice there would be a false failure.
+        state.pending_device_rate = state
+            .card_stream
+            .is_some()
+            .then_some((rate, Instant::now()));
+        if let Some(source) = suspended_source {
+            pw_clock::set_source_suspended(&source, false);
+        }
+        // Fallback for a backend/card where the restart did not latch the
+        // shadow state.
+        schedule_mixer_reapply(state, Duration::from_millis(1_500), "host sample-rate change");
+    } else {
+        state.pending_device_rate = None;
+    }
+    state.engine = pw_clock::read();
+    state.card_stream = pw_clock::card_stream(state.device.card_id());
+}
+
+/// Replace `clock.allowed-rates` with the connected device's list, saving the
+/// value that was there first.  Called on every connect and at startup; the
+/// previous value is restored on disconnect or a clean exit when TotalControl
+/// still owns it.
+fn apply_allowed_rates(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    let wanted = state.device.sample_rates().to_vec();
+    if wanted.is_empty() {
+        return;
+    }
+    let Some(current) = pw_clock::read_allowed_rates() else {
+        return;
+    };
+    let we_own_current = state.allowed_rates_written.as_ref() == Some(&current);
+    if !we_own_current {
+        state.allowed_rates_saved = Some(current.clone());
+    }
+    if current == wanted {
+        state.allowed_rates_written = Some(wanted);
+        return;
+    }
+    if let Err(e) = pw_clock::set_allowed_rates(&wanted) {
+        log::warn!("Setting the PipeWire allowed rates failed: {e}");
+    } else {
+        state.allowed_rates_written = Some(wanted);
+    }
+}
+
+/// Restore `clock.allowed-rates` saved by [`apply_allowed_rates`], unless
+/// another tool has replaced the list since.
+fn restore_allowed_rates(state: &mut TotalControl) {
+    if let (Some(written), Some(saved)) = (
+        state.allowed_rates_written.take(),
+        state.allowed_rates_saved.take(),
+    ) {
+        if pw_clock::read_allowed_rates().as_ref() == Some(&written) {
+            if let Err(e) = pw_clock::set_allowed_rates(&saved) {
+                log::warn!("Restoring the PipeWire allowed rates failed: {e}");
+            }
+        }
+    }
+}
+
+/// Release TotalControl's graph override on a clean exit and give the
+/// allowed-rate list back.  The mode and the fixed-rate preference are
+/// restored on the next launch.
+pub fn release_engine(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    if let Err(e) = pw_clock::force_rate(0) {
+        log::warn!("Releasing the PipeWire rate override failed: {e}");
+    }
+    restore_allowed_rates(state);
+}
+
 /// Brings the audio engine in line with the preferences at launch: the
 /// rate / buffer forced here last time are forced again (PipeWire forgets
-/// them when it restarts), then the clock is read. A choice of "Auto"
-/// (`0`) is not re-sent, so launching TotalControl never lifts an override some
-/// other tool set. The mock applies them to its simulated clock only.
+/// them when it restarts), then the clock is read. The mock applies them to
+/// its simulated clock only.
 pub fn restore_engine(state: &mut TotalControl) {
     if state.device.is_mock() {
         // The simulated clock starts at its defaults: the remembered
@@ -4503,28 +4695,44 @@ pub fn restore_engine(state: &mut TotalControl) {
     if !state.device.rate_follows_sound_server() {
         return;
     }
-    // The UC sample rate follows the host's stream, as it does on
-    // Windows: the device keeps its last rate while powered, but the host's
-    // remembered rate is what opens the next stream.  Restore the saved
-    // choice; "Auto" (0) releases the override so the graph/device rate is
-    // used instead.
-    if state.device.is_uc_model() {
-        state.pending_device_rate = None;
-        if state.engine_force_rate > 0 {
-            if let Err(e) = pw_clock::force_rate(state.engine_force_rate) {
-                log::warn!("Restoring the PipeWire rate failed: {e}");
+    apply_allowed_rates(state);
+    // The UC sample rate follows the host's stream, as it does on Windows:
+    // the device keeps its last rate while powered, but the host's remembered
+    // mode is what opens the next stream.
+    match state.engine_rate_mode {
+        EngineRateMode::Auto => {
+            state.rate_follow.clear_owner();
+            if state.device.is_uc_model() {
+                state.pending_device_rate = None;
             }
-            state.device.set_meter_rate(state.engine_force_rate);
-        } else if let Err(e) = pw_clock::force_rate(0) {
-            log::warn!("Releasing the PipeWire rate override failed: {e}");
+            if let Err(e) = pw_clock::force_rate(0) {
+                log::warn!("Releasing the PipeWire rate override failed: {e}");
+            }
         }
-    } else if state.engine_force_rate > 0 {
-        if let Err(e) = pw_clock::force_rate(state.engine_force_rate) {
-            log::warn!("Restoring the PipeWire rate failed: {e}");
+        EngineRateMode::Follow => {
+            // The next graph poll chooses the current owner.  Seed the
+            // already-forced rate so the first observation does not rewrite
+            // an identical override.
+            state.rate_follow.reset();
+            let forced = pw_clock::read().map(|c| c.force_rate).unwrap_or(0);
+            state.rate_follow.seed_applied_rate(Some(forced));
         }
-        // The input capture PCM shares the device clock; release it so
-        // the kernel driver can move the card to the requested rate.
-        state.device.set_meter_rate(state.engine_force_rate);
+        EngineRateMode::Fixed => {
+            if state.device.is_uc_model() {
+                state.pending_device_rate = None;
+            }
+            if state.engine_force_rate > 0 {
+                if let Err(e) = pw_clock::force_rate(state.engine_force_rate) {
+                    log::warn!("Restoring the PipeWire rate failed: {e}");
+                }
+                // The input capture PCM shares the device clock; release it
+                // so the kernel driver can move the card to the requested
+                // rate.
+                state.device.set_meter_rate(state.engine_force_rate);
+            } else if let Err(e) = pw_clock::force_rate(0) {
+                log::warn!("Releasing the PipeWire rate override failed: {e}");
+            }
+        }
     }
     if state.engine_force_quantum > 0 {
         if let Err(e) = pw_clock::force_quantum(state.engine_force_quantum) {
@@ -4585,6 +4793,7 @@ fn changes_prefs(message: &Message) -> bool {
             | Message::SetSurround51(_)
             | Message::SetSurround71(_)
             | Message::EngineRate(_)
+            | Message::EngineRateMode(_)
             | Message::EngineQuantum(_)
             | Message::SelectDevice(_)
             | Message::ApplyControlRoomSettings
@@ -7177,9 +7386,12 @@ fn is_undoable(message: &Message) -> bool {
             | Message::PointerPressed
             | Message::FieldFocus(..)
             | Message::EngineRate(_)
+            | Message::EngineRateMode(_)
             | Message::EngineQuantum(_)
             | Message::EnginePoll
             | Message::EngineRead(..)
+            | Message::FollowPoll
+            | Message::FollowRead(..)
             | Message::RenameStart(_)
             | Message::RenameChanged(_)
             | Message::RenameCommit
@@ -7479,6 +7691,9 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::WorkspaceSaveAs
                 | Message::LoadSurroundWorkspace(_)
                 | Message::CloseWorkspace
+                // The rate mode is a gui.json preference, not workspace
+                // state; choosing Follow must not dirty an open workspace.
+                | Message::EngineRateMode(_)
         )
     {
         state.workspace_dirty = true;
@@ -7508,6 +7723,8 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::CollapseTick
                 | Message::EnginePoll
                 | Message::EngineRead(..)
+                | Message::FollowPoll
+                | Message::FollowRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
                 | Message::OscGlobalIn(_)
@@ -7602,7 +7819,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // something the user must see: keep the tick fast for a while.
     if !matches!(
         message,
-        Message::Tick | Message::EnginePoll | Message::EngineRead(..)
+        Message::Tick
+            | Message::EnginePoll
+            | Message::EngineRead(..)
+            | Message::FollowPoll
+            | Message::FollowRead(..)
     ) {
         state.last_activity = Instant::now();
     }
@@ -7726,8 +7947,15 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 .map_or(true, |t| t.elapsed() >= Duration::from_millis(CONN_CHECK_MS));
             if conn_due {
                 state.last_conn_check = Some(Instant::now());
+                let was_connected = state.connected;
                 state.connected = state.device.is_connected();
                 if !state.connected {
+                    if was_connected {
+                        // Give the host its allowed-rate list back while the
+                        // unit is away; a reconnect applies the device's list
+                        // again.
+                        restore_allowed_rates(state);
+                    }
                     state.show_device_panel = false;
                     clear_meters(state);
                 }
@@ -7977,6 +8205,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     state.window_hidden = true;
                 } else {
                     let saved = update(state, Message::SaveNow);
+                    release_engine(state);
                     stop_surround_bridge(state);
                     return Task::batch([saved, iced::exit()]);
                 }
@@ -7989,6 +8218,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // after a replug are this app's job (see `tray`).
                 return Task::batch([saved, hide_window(state)]);
             }
+            release_engine(state);
             stop_surround_bridge(state);
             return Task::batch([saved, iced::exit()]);
         }
@@ -8012,6 +8242,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
             crate::tray::TrayEvent::Quit => {
                 let saved = update(state, Message::SaveNow);
+                release_engine(state);
                 stop_surround_bridge(state);
                 return Task::batch([saved, iced::exit()]);
             }
@@ -9504,84 +9735,70 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.transport_baseline = state.transport_counters;
         }
         Message::EngineRate(rate) => {
-            // A simulated session changes its simulated clock only, and
-            // never the remembered choice: that is applied to the real
-            // PipeWire at the next real launch.
-            if !state.device.is_mock() {
-                state.engine_force_rate = rate;
-            }
-            if state.device.is_mock() {
-                if let Some(e) = state.engine.as_mut() {
-                    e.force_rate = rate;
-                }
-            } else if state.device.rate_follows_sound_server() {
-                let uc = state.device.is_uc_model();
-                // The UC latches matrix routing at engine start.  A scene
-                // written while the engine is running only updates its
-                // shadow state; the next engine start applies it.
-                //
-                // Before a rate change, close the capture side so the
-                // kernel no longer locks the playback rate to the old
-                // value.  Keep playback running, write the full scene into
-                // the shadow, then change the rate.  PipeWire restarts the
-                // playback stream at the new rate, and that restarted
-                // engine latches the scene we just wrote.
-                let suspended_source = if uc && rate > 0 {
-                    let source = pw_clock::fireface_source_name();
-                    if let Some(source) = &source {
-                        if pw_clock::set_source_suspended(source, true) {
-                            // Let the kernel clear the capture hw_params
-                            // (the rate lock) before touching the graph.
-                            std::thread::sleep(Duration::from_millis(120));
-                        } else {
-                            log::warn!(
-                                "Could not suspend the RME source for the rate change"
-                            );
-                        }
-                    }
-                    source
-                } else {
-                    None
-                };
-                if uc && rate > 0 {
-                    // Shadow write before the rate change.  Playback is
-                    // still running, so this does not disturb the current
-                    // audio; the rate-change engine restart latches it.
-                    let scene = state.device.capture_scene();
-                    if let Err(e) = state.device.apply_scene(&scene) {
-                        log::warn!("Scene shadow write before rate change failed: {e:?}");
-                    }
-                }
-                if let Err(e) = pw_clock::force_rate(rate) {
-                    log::warn!("Setting the PipeWire rate failed: {e}");
-                }
-                if rate > 0 {
-                    state.device.set_meter_rate(rate);
-                    // Only wait for confirmation when a stream is open.  An
-                    // idle card closes its PCM; the forced graph rate will
-                    // be used when the next stream opens, and a timeout
-                    // notice there would be a false failure.
-                    state.pending_device_rate = state
-                        .card_stream
-                        .is_some()
-                        .then_some((rate, Instant::now()));
-                    if let Some(source) = suspended_source {
-                        pw_clock::set_source_suspended(&source, false);
-                    }
-                    // Fallback for a backend/card where the restart did not
-                    // latch the shadow state.
-                    schedule_mixer_reapply(
-                        state,
-                        Duration::from_millis(1_500),
-                        "host sample-rate change",
-                    );
-                } else {
-                    state.pending_device_rate = None;
-                }
-                state.engine = pw_clock::read();
-                state.card_stream = pw_clock::card_stream(state.device.card_id());
-            }
+            state.engine_rate_mode = if rate == 0 {
+                EngineRateMode::Auto
+            } else {
+                EngineRateMode::Fixed
+            };
+            state.rate_follow.clear_owner();
+            apply_graph_rate(state, rate, true);
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(rate as i32)]);
+        }
+        Message::EngineRateMode(mode) => {
+            match mode {
+                EngineRateMode::Auto => {
+                    state.engine_rate_mode = EngineRateMode::Auto;
+                    state.rate_follow.clear_owner();
+                    apply_graph_rate(state, 0, false);
+                }
+                EngineRateMode::Follow => {
+                    state.engine_rate_mode = EngineRateMode::Follow;
+                    state.rate_follow.reset();
+                    let forced = state.engine.map(|e| e.force_rate).unwrap_or(0);
+                    state.rate_follow.seed_applied_rate(Some(forced));
+                }
+                EngineRateMode::Fixed => {
+                    state.engine_rate_mode = EngineRateMode::Fixed;
+                    state.rate_follow.clear_owner();
+                    apply_graph_rate(state, state.engine_force_rate, true);
+                }
+            }
+            let shown = state
+                .engine
+                .map(|e| e.effective_rate())
+                .unwrap_or(state.engine_force_rate);
+            notify_osc_raw(state, "/sample_rate", vec![OscType::Int(shown as i32)]);
+        }
+        Message::FollowPoll => {
+            if state.device.is_mock()
+                || state.engine_rate_mode != EngineRateMode::Follow
+                || !state.device.rate_follows_sound_server()
+            {
+                return Task::none();
+            }
+            return Task::perform(
+                async { totalcontrol_core::pw_follow::read_graph() },
+                Message::FollowRead,
+            );
+        }
+        Message::FollowRead(graph) => {
+            if state.device.is_mock()
+                || state.engine_rate_mode != EngineRateMode::Follow
+                || !state.device.rate_follows_sound_server()
+            {
+                return Task::none();
+            }
+            let Some(graph) = graph else {
+                return Task::none();
+            };
+            let candidates = totalcontrol_core::pw_follow::candidates(&graph, None);
+            let supported = state.device.sample_rates();
+            let rate = state
+                .rate_follow
+                .observe(&candidates, supported, Instant::now());
+            if let Some(rate) = rate {
+                apply_graph_rate(state, rate, false);
+            }
         }
         Message::EngineQuantum(quantum) => {
             if !state.device.is_mock() {
@@ -9649,10 +9866,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                     model_rate,
                 );
                 if let Some(rate) = new_rate {
-                    if rate_changed {
+                    if rate_changed && state.engine_rate_mode != EngineRateMode::Follow {
                         // Keep the scene/model in step with the rate the
                         // card actually opened at, whether TotalControl, the
-                        // player or PipeWire initiated the switch.
+                        // player or PipeWire initiated the switch.  A
+                        // followed rate is runtime state, not the user's
+                        // fixed choice, so it stays out of the saved scene.
                         let _ = state.device.set_sample_rate(rate);
                     }
                     state.last_card_rate = Some(rate);
@@ -10123,6 +10342,8 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.last_sink_running = false;
     state.last_card_rate = None;
     apply_prefs(state, prefs);
+    apply_allowed_rates(state);
+    state.rate_follow.reset();
     enforce_control_room_stereo(state);
     state.sel_out = state
         .sel_out
@@ -10291,7 +10512,21 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     // Another app (or `pw-metadata` by hand) can change the graph clock;
     // re-read it now and then so the device card never shows a stale rate.
     if state.device.rate_follows_sound_server() {
-        subs.push(iced::time::every(Duration::from_secs(3)).map(|_| Message::EnginePoll));
+        // The graph rate can change from another tool at any time.  Poll
+        // faster while the Settings sheet is showing the live Graph line.
+        let poll = if state.show_device_panel {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(3)
+        };
+        subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
+        if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
+            // Graph changes are cheap to observe compared with a card-rate
+            // poll; 4 Hz keeps the 300 ms stabilization delay responsive.
+            subs.push(
+                iced::time::every(Duration::from_millis(250)).map(|_| Message::FollowPoll),
+            );
+        }
     }
     // Only running while a collapse/expand transition is actually in
     // flight — plain `column`/`container` widgets can't self-request a
@@ -11270,6 +11505,67 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     centered_dialog(state, body.into(), Message::ToggleSettings, 520.0)
 }
 
+/// The rate the graph/card is actually running at, with the device model as
+/// the last fallback while both the stream and PipeWire are unavailable.
+pub(crate) fn current_graph_rate(state: &TotalControl) -> u32 {
+    // A forced rate is what the graph is being told to run at, even before
+    // the card's stream has reopened.  Without one, the open card stream is
+    // the graph's actual rate; the default `clock.rate` is the fallback.
+    state
+        .engine
+        .map(|engine| engine.force_rate)
+        .filter(|rate| *rate > 0)
+        .or_else(|| state.card_stream.map(|stream| stream.rate))
+        .or_else(|| state.engine.map(|engine| engine.rate))
+        .filter(|rate| *rate > 0)
+        .unwrap_or_else(|| state.device.settings().sample_rate)
+}
+
+const RATE_MODE_AUTO: &str = "Auto (PipeWire)";
+const RATE_MODE_FOLLOW: &str = "Follow SW playback 1/2";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RateChoice {
+    Auto,
+    Follow,
+    Fixed(u32),
+}
+
+fn rate_choices(state: &TotalControl) -> (Vec<String>, String, Vec<RateChoice>) {
+    let mut labels = vec![RATE_MODE_AUTO.to_string(), RATE_MODE_FOLLOW.to_string()];
+    let mut choices = vec![RateChoice::Auto, RateChoice::Follow];
+    for rate in state.device.sample_rates() {
+        labels.push(rate_label(*rate));
+        choices.push(RateChoice::Fixed(*rate));
+    }
+    let selected = match state.engine_rate_mode {
+        EngineRateMode::Auto => labels[0].clone(),
+        EngineRateMode::Follow => labels[1].clone(),
+        EngineRateMode::Fixed => {
+            let rate = if state.engine_force_rate > 0 {
+                state.engine_force_rate
+            } else {
+                current_graph_rate(state)
+            };
+            let label = rate_label(rate);
+            if labels.contains(&label) {
+                label
+            } else {
+                labels[2].clone()
+            }
+        }
+    };
+    (labels, selected, choices)
+}
+
+fn rate_choice_message(choice: RateChoice) -> Message {
+    match choice {
+        RateChoice::Auto => Message::EngineRateMode(EngineRateMode::Auto),
+        RateChoice::Follow => Message::EngineRateMode(EngineRateMode::Follow),
+        RateChoice::Fixed(rate) => Message::EngineRate(rate),
+    }
+}
+
 /// A sample rate as people say it: "48 kHz", "44.1 kHz", "176.4 kHz".
 pub(crate) fn rate_label(hz: u32) -> String {
     if hz % 1000 == 0 {
@@ -11395,49 +11691,30 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .serial()
         .map(str::to_string)
         .unwrap_or_else(|| "\u{2014}".into());
-    // The card's open stream is the device rate; while it is idle, show the
-    // requested graph rate so the single picker does not snap back after a
-    // selection.
-    let device_rate = state
-        .card_stream
-        .map(|c| c.rate)
-        .or_else(|| {
-            state
-                .engine
-                .map(|e| if e.force_rate > 0 { e.force_rate } else { e.effective_rate() })
-        })
-        .unwrap_or(settings.sample_rate);
-
-    // Every rate class the UC/UCX hardware provides.  The kernel keeps a
-    // constant 18-channel ALSA node at all rates; at 2x/4x the USB packet
-    // carries fewer words and the unused ADAT channels stay silent.
-    const UC_RATES: [u32; 9] = [
-        32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400, 192_000,
-    ];
-    let rate_opts: Vec<String> = UC_RATES.iter().map(|r| rate_label(*r)).collect();
-    let rate_for_pick = UC_RATES;
-    let engine_rate_sel = if device_rate == 0 {
-        rate_label(48_000)
-    } else {
-        rate_label(device_rate)
-    };
+    // The same mode picker everywhere: Auto, Follow, then every rate class
+    // the connected device supports.  The kernel keeps a constant 18-channel
+    // ALSA node at all rates; at 2x/4x the USB packet carries fewer words and
+    // the unused ADAT channels stay silent.
+    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
+    let labels_for_pick = rate_labels.clone();
+    let choices_for_pick = rate_choices_vec;
     let engine_rate_row = row![
         caption("Sample rate"),
-        field(pick_list(rate_opts, Some(engine_rate_sel), move |label| {
-            let idx = UC_RATES
+        field(pick_list(rate_labels, Some(rate_selected), move |label| {
+            let idx = labels_for_pick
                 .iter()
-                .position(|r| rate_label(*r) == label)
-                .unwrap_or(2);
-            Message::EngineRate(rate_for_pick[idx])
+                .position(|l| *l == label)
+                .unwrap_or(0);
+            rate_choice_message(choices_for_pick[idx])
         })),
     ]
     .spacing(theme::SPACE_MD * scale)
     .align_y(iced::Alignment::Center);
-    // The UCX's own rate class list, used when the device owns the rate.
+    // The device-owned rate list, used when the device owns the rate.
     let device_rate_row = row![
         caption("Sample rate"),
         pick_list(
-            UC_RATES.to_vec(),
+            state.device.sample_rates().to_vec(),
             Some(settings.sample_rate),
             Message::SampleRateSelected,
         )
@@ -11596,9 +11873,8 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         .into();
     };
 
-    // "Auto" is PipeWire's own value (it may differ per graph); naming it
-    // keeps the default visible next to the overrides.
-    const RATES: [u32; 6] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
+    // Auto, Follow, then the connected device's fixed rates.
+    let (rate_labels, rate_selected, rate_choices_vec) = rate_choices(state);
     // 48 and 96 are 1 and 2 ms at 48 kHz, whole USB packets; PipeWire takes
     // quanta that are not powers of two. 16 and 24 only when the driver can
     // run them: its period floor is one URB, `urb_frames_min` (32 unless
@@ -11609,14 +11885,6 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
     let floor = state.driver_floor.unwrap_or(32);
     let quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
-    let rate_opts: Vec<String> = std::iter::once(format!("Auto ({})", rate_label(clock.rate)))
-        .chain(RATES.iter().map(|r| rate_label(*r)))
-        .collect();
-    let rate_sel = if clock.force_rate == 0 {
-        rate_opts[0].clone()
-    } else {
-        rate_label(clock.force_rate)
-    };
     // "Auto" without a number: the card follows the graph's quantum.
     // The latency line below shows the resulting hardware buffer and chain.
     let quantum_opts: Vec<String> = std::iter::once("Auto".to_string())
@@ -11634,10 +11902,11 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             .text_size(text_size)
             .width(Length::Fill)
     };
-    let rate_list = rate_opts.clone();
-    let rate_pick = field(pick_list(rate_opts, Some(rate_sel), move |label| {
+    let rate_list = rate_labels.clone();
+    let rate_choices_for_pick = rate_choices_vec;
+    let rate_pick = field(pick_list(rate_labels, Some(rate_selected), move |label| {
         let idx = rate_list.iter().position(|l| *l == label).unwrap_or(0);
-        Message::EngineRate(if idx == 0 { 0 } else { RATES[idx - 1] })
+        rate_choice_message(rate_choices_for_pick[idx])
     }));
     let quantum_list = quantum_opts.clone();
     let quanta_for_pick = quanta.clone();
@@ -11646,16 +11915,64 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         Message::EngineQuantum(if idx == 0 { 0 } else { quanta_for_pick[idx - 1] })
     }));
 
+    let follow = state.engine_rate_mode == EngineRateMode::Follow;
     let mut body = column![heading];
-    // The UC's single sample-rate control lives in the DEVICE group above.
-    // This section is the host/PipeWire graph: buffer and latency only.
+    // The UC's single sample-rate control lives in the DEVICE group above;
+    // the other models pick the mode here.
     if !state.device.is_uc_model() {
         body = body.push(
-            row![caption("Sample rate"), rate_pick]
-                .spacing(theme::SPACE_MD * scale)
-                .align_y(iced::Alignment::Center),
+            row![
+                caption(if follow { "Mode" } else { "Sample rate" }),
+                rate_pick
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    } else if follow {
+        body = body.push(
+            row![
+                caption("Mode"),
+                text(RATE_MODE_FOLLOW)
+                    .color(theme::TEXT_PRIMARY)
+                    .size(text_size),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
         );
     }
+    if follow {
+        let source = state
+            .rate_follow
+            .owner()
+            .map(|owner| {
+                format!(
+                    "{} \u{00b7} {}",
+                    owner.application_name,
+                    rate_label(owner.rate)
+                )
+            })
+            .unwrap_or_else(|| "Waiting for playback".to_string());
+        body = body.push(
+            row![
+                caption("Source"),
+                text(source).color(theme::TEXT_PRIMARY).size(text_size),
+            ]
+            .spacing(theme::SPACE_MD * scale)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    // The graph rate is reported in every mode: Auto may move it without
+    // there being a fixed choice to show in the picker.
+    body = body.push(
+        row![
+            caption("Graph"),
+            text(rate_label(current_graph_rate(state)))
+                .color(theme::TEXT_PRIMARY)
+                .size(text_size),
+        ]
+        .spacing(theme::SPACE_MD * scale)
+        .align_y(iced::Alignment::Center),
+    );
     body = body.push(
         row![caption("Quantum"), quantum_pick]
             .spacing(theme::SPACE_MD * scale)
@@ -17293,7 +17610,8 @@ mod tests {
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
-        DeviceKind, DeviceTarget, EditField, MeterAnim, Message, RowMode, View,
+        DeviceKind, DeviceTarget, EditField, EngineRateMode, MeterAnim, Message, PwClock,
+        RateChoice, RowMode, View, rate_choices,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
@@ -19167,6 +19485,26 @@ mod tests {
     }
 
     #[test]
+    fn the_reported_graph_rate_prefers_the_forced_value_then_the_card() {
+        let mut state = new(true, None, None);
+        state.engine = Some(PwClock {
+            rate: 48_000,
+            quantum: 256,
+            force_rate: 0,
+            force_quantum: 0,
+        });
+        assert_eq!(super::current_graph_rate(&state), 48_000);
+        state.card_stream = Some(totalcontrol_core::pw_clock::CardStream {
+            rate: 44_100,
+            period: 128,
+            buffer: 256,
+        });
+        assert_eq!(super::current_graph_rate(&state), 44_100);
+        state.engine.as_mut().unwrap().force_rate = 96_000;
+        assert_eq!(super::current_graph_rate(&state), 96_000);
+    }
+
+    #[test]
     fn sample_rates_read_as_people_say_them() {
         assert_eq!(super::rate_label(48_000), "48 kHz");
         assert_eq!(super::rate_label(44_100), "44.1 kHz");
@@ -20130,6 +20468,7 @@ mod tests {
     #[test]
     fn a_workspace_captures_rate_pitch_dim_and_talkback() {
         let mut state = new(true, None, None);
+        state.engine_rate_mode = EngineRateMode::Fixed;
         state.device.settings_mut().sample_rate = 44_100;
         state.device.settings_mut().pitch_percent = 1.5;
         state.device.settings_mut().dim = true;
@@ -20142,6 +20481,105 @@ mod tests {
         assert!(workspace.scene.settings.dim);
         assert_eq!(workspace.scene.settings.dim_amount_db, -12.0);
         assert!(workspace.view.talkback_on);
+    }
+
+    #[test]
+    fn a_followed_rate_is_stored_as_the_graph_rate_not_the_fixed_choice() {
+        let mut state = new(true, None, None);
+        state.engine_rate_mode = EngineRateMode::Follow;
+        state.engine_force_rate = 96_000;
+        state.device.settings_mut().sample_rate = 96_000;
+        state.engine = Some(PwClock {
+            rate: 48_000,
+            quantum: 256,
+            force_rate: 48_000,
+            force_quantum: 0,
+        });
+        let workspace = capture_workspace(&state);
+        assert_eq!(workspace.scene.settings.sample_rate, 48_000);
+        assert_eq!(state.engine_force_rate, 96_000, "the fixed choice is kept");
+        assert_eq!(
+            prefs_of(&state).engine_rate_mode,
+            Some(EngineRateMode::Follow)
+        );
+    }
+
+    #[test]
+    fn a_workspace_rate_is_ignored_outside_fixed_mode() {
+        let mut source = new(true, None, None);
+        source.engine_rate_mode = EngineRateMode::Fixed;
+        source.device.settings_mut().sample_rate = 44_100;
+        let workspace = capture_workspace(&source);
+
+        let mut target = new(true, None, None);
+        target.engine_rate_mode = EngineRateMode::Follow;
+        target.device.settings_mut().sample_rate = 48_000;
+        apply_workspace(&mut target, &workspace, PathBuf::from("/tmp/follow.tcws")).unwrap();
+        assert_eq!(target.engine_rate_mode, EngineRateMode::Follow);
+        assert_eq!(target.device.settings().sample_rate, 48_000);
+    }
+
+    #[test]
+    fn the_rate_picker_offers_auto_follow_and_every_device_rate() {
+        let state = new(true, None, None);
+        let (labels, selected, choices) = rate_choices(&state);
+        assert_eq!(labels[0], "Auto (PipeWire)");
+        assert_eq!(labels[1], "Follow SW playback 1/2");
+        assert_eq!(labels.len(), 11);
+        assert_eq!(selected, labels[0]);
+        assert_eq!(choices[0], RateChoice::Auto);
+        assert_eq!(choices[1], RateChoice::Follow);
+        assert_eq!(choices[2], RateChoice::Fixed(32_000));
+        assert_eq!(choices[10], RateChoice::Fixed(192_000));
+        assert_eq!(labels[2], "32 kHz");
+        assert_eq!(labels[10], "192 kHz");
+    }
+
+    #[test]
+    fn the_rate_mode_is_remembered_without_becoming_mix_state() {
+        let mut state = new(true, None, None);
+        state.workspace_dirty = false;
+        let _ = update(
+            &mut state,
+            Message::EngineRateMode(EngineRateMode::Follow),
+        );
+        assert_eq!(state.engine_rate_mode, EngineRateMode::Follow);
+        assert_eq!(
+            prefs_of(&state).engine_rate_mode,
+            Some(EngineRateMode::Follow)
+        );
+        assert!(state.undo_stack.is_empty(), "the mode is not a mix edit");
+        assert!(!state.workspace_dirty, "the mode is not a workspace edit");
+
+        let _ = update(&mut state, Message::EngineRateMode(EngineRateMode::Auto));
+        assert_eq!(state.engine_rate_mode, EngineRateMode::Auto);
+        assert_eq!(
+            prefs_of(&state).engine_rate_mode,
+            Some(EngineRateMode::Auto)
+        );
+    }
+
+    #[test]
+    fn an_older_preference_file_infers_the_rate_mode() {
+        let mut fixed = new(true, None, None);
+        apply_prefs(
+            &mut fixed,
+            crate::prefs::Prefs {
+                engine_force_rate: Some(96_000),
+                ..Default::default()
+            },
+        );
+        assert_eq!(fixed.engine_rate_mode, EngineRateMode::Fixed);
+
+        let mut automatic = new(true, None, None);
+        apply_prefs(
+            &mut automatic,
+            crate::prefs::Prefs {
+                engine_force_rate: Some(0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(automatic.engine_rate_mode, EngineRateMode::Auto);
     }
 
     #[test]
@@ -20174,11 +20612,13 @@ mod tests {
         source.snapshot_names[2] = "Stereo".into();
         source.snapshots[2] = Some(source.device.capture_scene());
         source.talkback_on = true;
+        source.engine_rate_mode = EngineRateMode::Fixed;
         source.device.settings_mut().sample_rate = 44_100;
         source.device.settings_mut().pitch_percent = 1.5;
         let workspace = capture_workspace(&source);
 
         let mut target = new(true, None, None);
+        target.engine_rate_mode = EngineRateMode::Fixed;
         apply_workspace(&mut target, &workspace, PathBuf::from("/tmp/test.tcws")).unwrap();
         assert_eq!(target.view, View::Mixer);
         assert_eq!(target.labels.get(&ChannelId::Input(0)).map(String::as_str), Some("Vocal"));
@@ -20346,6 +20786,7 @@ mod tests {
 
 impl Drop for TotalControl {
     fn drop(&mut self) {
+        release_engine(self);
         stop_surround_bridge(self);
     }
 }

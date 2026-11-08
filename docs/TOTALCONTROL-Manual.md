@@ -267,6 +267,20 @@ The device card in the sidebar reads `Internal, <sample rate>, <buffer>` and
 opens the device sheet, which carries clock source, sample rate, the digital
 input formats and firmware and serial information.
 
+The sample-rate control has three kinds of choice:
+
+- **Auto (PipeWire)** lets PipeWire choose the graph rate.
+- **Follow SW playback 1/2** makes the rate follow the player feeding software
+  playback 1/2. The engine section names the application and its rate. With
+  nothing playing it reads `Waiting for playback` and keeps the last rate.
+- A fixed rate (32, 44.1, 48, 64, 88.2, 96, 128, 176.4 or 192 kHz) forces that
+  rate.
+
+The `Graph` line always shows the rate PipeWire is running at, in every mode.
+A followed rate change is a runtime change, so it does not add an undo step or
+mark the workspace dirty. The chosen mode is remembered in the application
+preferences, not in a workspace.
+
 ## 2. Views
 
 TotalControl offers three views:

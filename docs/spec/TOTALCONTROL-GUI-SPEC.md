@@ -514,6 +514,28 @@ percent and dB, with a `0 dB` action. The host volume is an attenuation before
 the interface, so it lowers the playback meters by the same amount; the
 interface's own faders remain the monitoring level.
 
+The rate control offers `Auto (PipeWire)`, `Follow SW playback 1/2` and the
+connected device's fixed rates: 32, 44.1, 48, 64, 88.2, 96, 128, 176.4 and
+192 kHz. The engine group always shows `Graph`, the rate PipeWire is currently
+running at, in every mode. In Follow mode it also shows `Mode` and `Source`;
+`Source` reads `<application> · <rate>` for the stream setting the graph, and
+reads `Waiting for playback` with the last graph rate when no stream feeds SW
+playback 1/2. The source is always SW playback 1/2, never the focused strip.
+
+Follow uses the stream linked to `playback_AUX0`/`playback_AUX1`, including a
+player feeding a TotalControl 5.1/7.1 sink through the sink's input stream, not
+the loopback output. A live owner keeps the rate while its node exists; another
+client does not take it, a same-client replacement does, and after two seconds
+without one the most recent remaining candidate takes over. A new rate is
+forced after it has been stable for 300 ms. Unsupported rates stay visible but
+are not forced. A followed rate is runtime state: it does not create an undo
+step, mark the workspace dirty, or replace the fixed-rate preference.
+
+At connect TotalControl replaces PipeWire's `clock.allowed-rates` with the
+connected device's nine rates, keeping the previous value. On disconnect or a
+clean exit it restores that value if the list is still the one it wrote. No
+persistent PipeWire configuration file is installed.
+
 `Errors` lists the driver transport faults since the sheet opened or the
 last `reset`, one row per type: `usb` (URB status errors), `urb` (URB resubmit
 errors), `gaps` (the USB queue ran dry), `short` (short packets), `recover`

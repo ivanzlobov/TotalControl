@@ -267,6 +267,12 @@ pub trait RmeDevice {
         self.model_name()
     }
 
+    /// The sample rates this device supports.  The UC, UCX and Babyface Pro
+    /// FS share the nine 1x/2x/4x classes; a future model can override it.
+    fn sample_rates(&self) -> &'static [u32] {
+        &crate::pw_clock::DEVICE_SAMPLE_RATES
+    }
+
     /// Whether the DSP features that live in RME's own protocol can be
     /// driven on this connection: EQ, phase, trim, stereo split, MS
     /// processing, AN 1>2, input link, width, FX send, varispeed pitch,

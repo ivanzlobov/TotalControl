@@ -122,6 +122,10 @@ pub struct Prefs {
     /// The PipeWire rate / buffer size forced from the Settings panel
     /// (`0` = PipeWire's own), applied again at launch.
     pub engine_force_rate: Option<u32>,
+    /// How the graph rate is chosen.  Missing in older files: a non-zero
+    /// `engine_force_rate` means a fixed rate, otherwise Auto.
+    #[serde(default)]
+    pub engine_rate_mode: Option<crate::app::EngineRateMode>,
     /// Logical size of the window at the last close.
     pub window_size: Option<(f32, f32)>,
     /// Last folder used by the Workspace open/save dialogs.
@@ -218,6 +222,7 @@ mod tests {
             labels: vec![(ChannelId::Input(0), "Vocal".into())],
             show_original_names: true,
             engine_force_rate: Some(96_000),
+            engine_rate_mode: Some(crate::app::EngineRateMode::Follow),
             window_size: Some((1600.0, 900.0)),
             keep_in_tray: Some(false),
             engine_force_quantum: Some(128),

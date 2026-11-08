@@ -16,6 +16,12 @@
 
 use std::process::{Command, Stdio};
 
+/// The sample-rate classes the Fireface UC, UCX and Babyface Pro FS support:
+/// 1x, 2x and 4x for the 32, 44.1 and 48 kHz families.
+pub const DEVICE_SAMPLE_RATES: [u32; 9] = [
+    32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400, 192_000,
+];
+
 /// The graph clock as PipeWire reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PwClock {
@@ -85,6 +91,44 @@ pub fn read() -> Option<PwClock> {
     parse(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The graph's allowed sample-rate list, from `pw-metadata` output.
+pub fn parse_allowed_rates(output: &str) -> Option<Vec<u32>> {
+    let needle = "key:'clock.allowed-rates' value:'";
+    let start = output.find(needle)? + needle.len();
+    let rest = &output[start..];
+    let end = rest.find('\'')?;
+    let value = rest[..end].trim().trim_start_matches('[').trim_end_matches(']');
+    let rates: Vec<u32> = value
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|token| !token.is_empty())
+        .filter_map(|token| token.parse().ok())
+        .collect();
+    Some(rates)
+}
+
+/// Reads `clock.allowed-rates`.  `None` when PipeWire is absent or the key
+/// is not present.
+pub fn read_allowed_rates() -> Option<Vec<u32>> {
+    let out = Command::new("pw-metadata")
+        .args(["-n", "settings", "0"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_allowed_rates(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Replaces the graph's allowed-rate list at runtime.
+pub fn set_allowed_rates(rates: &[u32]) -> Result<(), String> {
+    let list = rates
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    set_value("clock.allowed-rates", &format!("[ {list} ]"))
+}
+
 /// Forces the graph rate; `0` lifts the override.
 pub fn force_rate(rate: u32) -> Result<(), String> {
     set("clock.force-rate", rate)
@@ -96,8 +140,12 @@ pub fn force_quantum(quantum: u32) -> Result<(), String> {
 }
 
 fn set(key: &str, value: u32) -> Result<(), String> {
+    set_value(key, &value.to_string())
+}
+
+fn set_value(key: &str, value: &str) -> Result<(), String> {
     let status = Command::new("pw-metadata")
-        .args(["-n", "settings", "0", key, &value.to_string()])
+        .args(["-n", "settings", "0", key, value])
         .output()
         .map_err(|e| format!("pw-metadata: {e}"))?
         .status;
@@ -399,6 +447,21 @@ update: id:0 key:'clock.force-rate' value:'0' type:''
         assert!((s.period_ms() - 5.333).abs() < 0.01);
         assert!((s.buffer_ms() - 10.667).abs() < 0.01);
         assert_eq!(parse_hw_params("closed\n"), None);
+    }
+
+    #[test]
+    fn parses_and_writes_the_allowed_rate_list() {
+        assert_eq!(
+            parse_allowed_rates(SAMPLE),
+            Some(vec![48_000])
+        );
+        assert_eq!(
+            parse_allowed_rates(
+                "update: id:0 key:'clock.allowed-rates' value:'[ 32000 44100 48000 96000 ]' type:''"
+            ),
+            Some(vec![32_000, 44_100, 48_000, 96_000])
+        );
+        assert_eq!(parse_allowed_rates(""), None);
     }
 
     #[test]

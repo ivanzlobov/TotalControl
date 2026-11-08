@@ -85,6 +85,7 @@ pub enum Command {
 pub struct DeviceInfo {
     pub model_name: String,
     pub canonical_model: String,
+    pub sample_rates: &'static [u32],
     pub capabilities: totalcontrol_core::DeviceCapabilities,
     pub protocol_features: bool,
     pub low_cut_supported: bool,
@@ -379,6 +380,10 @@ impl RmeDevice for Mirror {
 
     fn model_name(&self) -> &str {
         &self.info.model_name
+    }
+
+    fn sample_rates(&self) -> &'static [u32] {
+        self.info.sample_rates
     }
 
     fn capabilities(&self) -> totalcontrol_core::DeviceCapabilities {
@@ -1344,6 +1349,7 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
     DeviceInfo {
         model_name: device.model_name().to_string(),
         canonical_model: device.canonical_model().to_string(),
+        sample_rates: device.sample_rates(),
         capabilities: device.capabilities(),
         protocol_features: device.protocol_features(),
         low_cut_supported: device.low_cut_supported(),

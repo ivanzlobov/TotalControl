@@ -33,6 +33,7 @@ pub mod panel;
 pub mod profile;
 pub mod profiles;
 pub mod pw_clock;
+pub mod pw_follow;
 pub mod pw_input;
 pub mod pw_meter;
 pub mod scene;
