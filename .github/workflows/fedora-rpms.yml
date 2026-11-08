@@ -1,0 +1,53 @@
+name: Fedora RPMs
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rpms:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install git for checkout
+        run: dnf -y --setopt=install_weak_deps=False install git
+
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          dnf -y --setopt=install_weak_deps=False install \
+            cargo rust gcc gcc-c++ make pkgconf-pkg-config \
+            alsa-lib-devel mesa-libGL-devel libX11-devel \
+            libxkbcommon-devel wayland-devel systemd-devel \
+            fontconfig-devel freetype-devel openssl-devel \
+            desktop-file-utils git tar gzip rpm-build
+
+      - name: Build RPMs
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ./packaging/fedora/build-rpms.sh
+
+      - name: Select release RPMs
+        if: github.event_name == 'release'
+        run: |
+          mkdir release-rpms
+          cp packaging/fedora/out/totalcontrol-[0-9]*.rpm release-rpms/
+          cp packaging/fedora/out/totalcontrol-kmod-*.rpm release-rpms/
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: totalcontrol-fedora-rpms
+          path: packaging/fedora/out/*.rpm
+          if-no-files-found: error
+
+      - name: Attach RPMs to GitHub release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-rpms/*.rpm

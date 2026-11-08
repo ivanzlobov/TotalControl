@@ -51,13 +51,41 @@ reduced control set.
 - A Linux system with ALSA and PipeWire.
 - A supported Fireface in normal vendor mode.
 - A kernel with matching headers and DKMS for the driver.
+- Rust and the build dependencies for the source or RPM build.
 
 The supported devices are the Fireface UC and Fireface UCX. The Babyface Pro
 FS backend is present but is not part of the supported installation path yet.
 
-### Install the kernel driver
+The source and RPM paths below are alternatives.  Use the source path to work
+from a checkout; use the RPM path when you want packages that can be installed
+and removed with `dnf`.
 
-From the repository root:
+### Build and run from source
+
+Install the build dependencies.  On Fedora:
+
+```sh
+sudo dnf install git cargo rust gcc gcc-c++ make pkgconf-pkg-config \
+    alsa-lib-devel mesa-libGL-devel libX11-devel libxkbcommon-devel \
+    wayland-devel systemd-devel fontconfig-devel freetype-devel \
+    openssl-devel dkms kernel-devel
+```
+
+On another distribution, install the equivalent C/C++ toolchain, pkg-config,
+Rust, ALSA, X11 and Wayland, fontconfig, FreeType, OpenSSL and udev
+development packages, plus DKMS and the headers for the running kernel.
+
+Clone the repository and build the GUI and TUI:
+
+```sh
+git clone https://github.com/jspx-projects/TotalControl.git
+cd TotalControl
+cargo build --release --locked \
+    --manifest-path ui/totalcontrol/Cargo.toml \
+    -p totalcontrol-gui -p totalcontrol-tui
+```
+
+Install the kernel driver from the same checkout:
 
 ```sh
 ./scripts/install-dkms.sh
@@ -82,9 +110,82 @@ sudo dkms autoinstall -k "$(uname -r)"
 sudo modprobe snd-fireface-uc
 ```
 
+The GUI and TUI binaries are ready in `ui/totalcontrol/target/release/`; see
+[Start TotalControl](#start-totalcontrol) below.
+
+### Create RPM packages
+
+Prebuilt Fedora packages are published on the repository's
+[GitHub releases](https://github.com/jspx-projects/TotalControl/releases) page
+when a release is available for your Fedora version.  Download and install the
+two RPMs to try TotalControl without building them; use the instructions below
+when no package exists for your Fedora release.
+
+The repository contains two Fedora spec files and a build helper in
+[`packaging/fedora/`](../packaging/fedora/README.md).  They produce the
+`totalcontrol` application package and the separate `totalcontrol-kmod` DKMS
+package.  The kernel module is separate because it has to be rebuilt for each
+kernel.
+
+Build the RPMs on the Fedora release where you will install them.  Install the
+extra packaging tools:
+
+```sh
+sudo dnf install rpm-build desktop-file-utils
+```
+
+From the repository root:
+
+```sh
+./packaging/fedora/build-rpms.sh
+```
+
+The script uses the current commit as its source archive and writes the RPMs
+to `packaging/fedora/out/`.  The main packages are the application RPM and
+`totalcontrol-kmod`; the build also produces debuginfo and debugsource
+sidecars.  The helper requires the build dependencies from the source section.
+
+Install the kernel module first, then the application:
+
+```sh
+sudo dnf install ./packaging/fedora/out/totalcontrol-kmod-*.rpm
+sudo dnf install ./packaging/fedora/out/totalcontrol-[0-9]*.rpm
+```
+
+The `totalcontrol-kmod` package builds the module for the running kernel
+during installation.  If it cannot build, install the matching headers and
+retry:
+
+```sh
+sudo dnf install kernel-devel-"$(uname -r)"
+sudo dkms autoinstall -k "$(uname -r)"
+```
+
+The source installer and `totalcontrol-kmod` both register the same DKMS
+module.  Use one of the two driver paths on a machine.  If the source
+installer was used earlier, remove its DKMS entry before installing the RPM:
+
+```sh
+sudo dkms remove -m snd-fireface-uc -v 0.1 --all
+sudo rm -f /etc/systemd/system/snd-fireface-uc-load.service
+sudo systemctl daemon-reload
+```
+
+These are convenience packages, not an official Fedora repository: they are
+not signed, are not updated by `dnf`, and should be rebuilt after a Fedora
+release upgrade.  With UEFI Secure Boot enabled, sign the DKMS module and
+enrol the signing key in MOK before the kernel will load it.
+
 ### Start TotalControl
 
-Start the application from the desktop menu or from a terminal:
+From the source build:
+
+```sh
+./ui/totalcontrol/target/release/totalcontrol-gui
+```
+
+After installing the RPMs, start the application from the desktop menu or
+from a terminal:
 
 ```sh
 totalcontrol

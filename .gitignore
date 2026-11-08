@@ -12,3 +12,7 @@ __pycache__/
 *.log
 *.pcap
 /rme-probe
+
+# Fedora RPM build outputs
+packaging/fedora/out/
+packaging/fedora/.rpmbuild/
