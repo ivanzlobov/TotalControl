@@ -930,6 +930,11 @@ destinations in this order, using the same names as the Control Room channels:
 | Phones 1..4 | host-side; the unit receives nothing |
 | Cue/PFL to | host-side; selects the Cue/PFL monitoring target |
 
+The Cue button on a hardware output copies that output's submix into the
+selected Cue/PFL target, replacing the target's sources. It is exclusive
+across outputs. Releasing Cue, moving it to another output, or changing the
+target restores the previous target submix and FX returns.
+
 The second level for an output destination lists the predetermined hardware
 channel names—`None` first, then every hardware output in display order, the
 current output in bold. It never shows user names. Choosing `None` clears the

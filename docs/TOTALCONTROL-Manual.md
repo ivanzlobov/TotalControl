@@ -306,6 +306,9 @@ A channel strip shows, left to right:
 Mute silences a channel without moving its fader; unmuting restores the same
 level. Solo silences the other inputs and software playbacks while the soloed
 channel keeps its fader; releasing the last solo restores the others.
+The Cue button on a hardware output copies that output's submix into the
+selected `Cue/PFL to` target, so you can listen to any hardware output through
+the monitor output. Cue is exclusive; releasing it restores the target mix.
 - a column of small buttons: `T` (trim), the settings gear, `EQ` and `D`
   (dynamics), when the unit provides them;
 - a **thin FX fader** at the top of that column, when the unit has an FX bus.

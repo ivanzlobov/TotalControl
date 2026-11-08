@@ -563,6 +563,9 @@ pub struct Fireface {
     pfl_target: Option<usize>,
     pfl_mode: bool,
     pfl_exclusive: bool,
+    /// Cued output pair, its target pair, and the target FX-return levels
+    /// saved while Cue is active.
+    cue_state: Option<(usize, usize, Vec<(usize, f32)>)>,
     /// Speaker pairs and their saved levels while control-room Dim is
     /// engaged.  RME's Dim attenuates the monitor speakers (Main and
     /// Speaker B), not the Phones outputs.
@@ -1087,6 +1090,7 @@ impl Fireface {
             pfl_target: None,
             pfl_mode: false,
             pfl_exclusive: false,
+            cue_state: None,
             dim_saved: Vec::new(),
             dim_amount_db: -20.0,
             speaker_b_linked: false,
@@ -3530,6 +3534,88 @@ impl Fireface {
         Ok(())
     }
 
+    fn display_blocks_for_pair(&self, pair: usize) -> Option<(usize, usize)> {
+        let display = self
+            .spec
+            .profile
+            .output_order
+            .iter()
+            .position(|&p| p == pair)?;
+        Some((display * 2, display * 2 + 1))
+    }
+
+    fn idle_monitor_mask(&self) -> u16 {
+        if self.settings.mono {
+            0x83ff
+        } else {
+            0xffff
+        }
+    }
+
+    fn cue_monitor_mask(&self, source: usize, target: usize) -> u16 {
+        let dsp = ucx::output_pair_dsp(source).unwrap_or(0) as u16;
+        let phones = self.settings.main_out != Some(target);
+        0xfc40 | if phones { 0x80 } else { 0 } | dsp
+    }
+
+    /// Copy the cued output's submix into the Cue/PFL target.  The target
+    /// is replaced, not mixed with the source.
+    fn apply_cue(&mut self, source: usize, target: usize) -> Result<(), Error> {
+        let (source_left, source_right) = self
+            .display_blocks_for_pair(source)
+            .ok_or_else(|| Error::InvalidChannel(format!("cue source {source}")))?;
+        let (target_left, target_right) = self
+            .display_blocks_for_pair(target)
+            .ok_or_else(|| Error::InvalidChannel(format!("cue target {target}")))?;
+        let target_dsp = ucx::output_pair_dsp(target)
+            .ok_or_else(|| Error::InvalidChannel(format!("cue target {target}")))?;
+
+        for source_idx in 0..self.inputs.len() + self.playbacks.len() {
+            let Some(channel) = Self::matrix_source_channel(source_idx) else {
+                continue;
+            };
+            let source = match channel {
+                ChannelId::Input(i) => Source::Input(i),
+                ChannelId::Playback(p) => Source::Playback(p),
+                ChannelId::Output(_) => continue,
+            };
+            let left = self.matrix_cell(channel, source_left).unwrap_or(0.0)
+                * self.dest_trim(channel, target * 2);
+            let right = self.matrix_cell(channel, source_right).unwrap_or(0.0)
+                * self.dest_trim(channel, target * 2 + 1);
+            self.ucx_write_matrix(target_left as u8, source, left as f64)?;
+            self.ucx_write_matrix(target_right as u8, source, right as f64)?;
+        }
+
+        for (idx, input) in self.inputs.iter().enumerate() {
+            let volume = input.volumes.get(source).copied().unwrap_or(0.0);
+            let pan = input.pans.get(source).copied().unwrap_or(0);
+            let level = ucx::linear_to_tenths(volume) as i16;
+            let pan_word = ucx::fader_pan(pan as i16);
+            for side in 0..2 {
+                let table = ucx::fader_table_reg((target_dsp + side) as u8, idx);
+                self.write_word(table, ucx::fader_level(level))?;
+                self.write_word(table, pan_word)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn release_cue(&mut self) -> Result<(), Error> {
+        let Some((_, target, fx)) = self.cue_state.take() else {
+            return Ok(());
+        };
+        self.restore_pair_from_model(target)?;
+        for (idx, db) in fx {
+            self.ucx_write_fx_return(idx, db)?;
+        }
+        for output in &mut self.outputs {
+            output.cue = false;
+        }
+        self.write_word(0x3f98, self.idle_monitor_mask())?;
+        Ok(())
+    }
+
     fn release_external_input(&mut self) -> Result<(), Error> {
         let Some((pairs, fx)) = self.external_input_saved.take() else {
             self.settings.external_input = false;
@@ -4975,6 +5061,9 @@ impl RmeDevice for Fireface {
         if self.pfl_saved.is_some() {
             self.release_pfl()?;
         }
+        if self.cue_state.is_some() {
+            self.release_cue()?;
+        }
         self.pfl_target = pair;
         Ok(())
     }
@@ -5000,6 +5089,9 @@ impl RmeDevice for Fireface {
             return Err(Error::InvalidChannel(format!("input {idx}")));
         }
         if on {
+            if self.cue_state.is_some() {
+                self.release_cue()?;
+            }
             if self.pfl_exclusive
                 && !self
                     .pfl_active
@@ -5092,12 +5184,13 @@ impl RmeDevice for Fireface {
         }
         // Monitor flags: bit 0 Talkback, bit 1 Mono Main Out.  The mask
         // word is 0x83ff while Mono is active and 0xffff when it is idle.
-        let flags = self.monitor_flags() & !2 | ((on as u16) << 1);
-        self.write_words(&[
-            (0x3f9e, flags),
-            (0x3f98, if on { 0x83ff } else { 0xffff }),
-        ])?;
+        if on && self.cue_state.is_some() {
+            self.release_cue()?;
+        }
         self.settings.mono = on;
+        let flags = self.monitor_flags() & !2 | ((on as u16) << 1);
+        let mask = if on { 0x83ff } else { self.idle_monitor_mask() };
+        self.write_words(&[(0x3f9e, flags), (0x3f98, mask)])?;
         Ok(())
     }
 
@@ -5177,9 +5270,54 @@ impl RmeDevice for Fireface {
     }
 
     fn set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        if let Some(output) = self.outputs.get_mut(idx) {
-            output.cue = on;
+        if idx >= BLOCKS / 2 {
+            return Err(Error::InvalidChannel(format!("output {idx}")));
         }
+        if !on {
+            if self
+                .cue_state
+                .as_ref()
+                .is_some_and(|(source, _, _)| *source == idx)
+            {
+                self.release_cue()?;
+            }
+            return Ok(());
+        }
+        if self.cue_state.is_some() {
+            self.release_cue()?;
+        }
+        let target = self
+            .pfl_target
+            .ok_or_else(|| Error::InvalidChannel("Cue needs a Cue/PFL target".into()))?;
+        if target == idx {
+            // TotalMix cannot cue the output that receives Cue/PFL.
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+            return Ok(());
+        }
+        let mut fx = Vec::new();
+        for side in 0..2 {
+            let out = target * 2 + side;
+            if let Some(output) = self.outputs.get(out) {
+                fx.push((out, output.fx_return_db));
+            }
+        }
+        for (out, _) in &fx {
+            self.ucx_write_fx_return(*out, -65.0)?;
+        }
+        self.cue_state = Some((idx, target, fx));
+        self.apply_cue(idx, target)?;
+        for output in &mut self.outputs {
+            output.cue = false;
+        }
+        if let Some(left) = self.outputs.get_mut(idx * 2) {
+            left.cue = true;
+        }
+        if let Some(right) = self.outputs.get_mut(idx * 2 + 1) {
+            right.cue = true;
+        }
+        self.write_word(0x3f98, self.cue_monitor_mask(idx, target))?;
         Ok(())
     }
 
@@ -5807,6 +5945,9 @@ impl RmeDevice for Fireface {
         // word separately made a connect take several seconds.
         let started = Instant::now();
         let batch = self.begin_write_batch();
+        if !self.dry_run && self.cue_state.is_some() {
+            self.release_cue()?;
+        }
         let normalized = if self.model == Model::Ucx {
             let mut scene = scene.clone();
             scene.normalize_ucx_pairs();
@@ -6284,6 +6425,7 @@ impl RmeDevice for Fireface {
                 }
             }
             self.pfl_saved = None;
+            self.cue_state = None;
             self.write_word(ucx::global::DIM, scene_dim as u16)?;
             self.set_mono(self.settings.mono)?;
             // The scene has just written its FX-return levels.  Force a
@@ -7509,8 +7651,52 @@ mod tests {
     }
 
     #[test]
-    fn ucx_pfl_routes_the_input_at_unity_and_restores_the_target() {
+    fn ucx_cue_copies_the_source_submix_to_the_target_and_restores() {
         let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(1)).unwrap();
+        dev.set_cue_target(Some(0)).unwrap();
+        dev.inputs[0].volumes[1] = 0.5;
+        dev.inputs[0].pans[1] = 0;
+        writes.lock().unwrap().clear();
+
+        dev.set_cue(1, true).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(
+            ucx::matrix_reg(6, Source::Input(0)),
+            ucx::matrix_gain(0.5)
+        )));
+        assert!(words.contains(&(
+            0x18e0,
+            ucx::fader_level(ucx::linear_to_tenths(0.5) as i16)
+        )));
+        assert!(words.contains(&(0x1803, 0xfd76)));
+        assert!(words.contains(&(0x1903, 0xfd76)));
+        assert!(words.contains(&(0x3f98, 0xfcc0)));
+        assert!(dev.outputs()[2].cue);
+        assert!(dev.outputs()[3].cue);
+        assert!(!dev.outputs()[0].cue);
+
+        writes.lock().unwrap().clear();
+        dev.set_cue(1, false).unwrap();
+        let words = written_words(&writes);
+        assert!(words.contains(&(0x3f98, 0xffff)));
+        assert!(words.contains(&(0x4180, 0x9000)));
+        assert!(!dev.outputs()[2].cue);
+        assert!(!dev.outputs()[3].cue);
+    }
+
+    #[test]
+    fn ucx_cue_uses_the_main_target_mask_when_the_target_is_main() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_main_out(Some(0)).unwrap();
+        dev.set_cue_target(Some(0)).unwrap();
+        writes.lock().unwrap().clear();
+        dev.set_cue(1, true).unwrap();
+        assert!(written_words(&writes).contains(&(0x3f98, 0xfc40)));
+    }
+
+    #[test]
+    fn ucx_pfl_routes_the_input_at_unity_and_restores_the_target() {        let (mut dev, writes) = open(Model::Ucx);
         dev.set_cue_target(Some(0)).unwrap();
         dev.set_pfl_mode(true, true).unwrap();
         writes.lock().unwrap().clear();

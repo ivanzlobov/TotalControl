@@ -709,7 +709,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             .height(btn_h)
             .style(theme::toggle_button(p.cue, theme::ACCENT))
             .on_press(Message::CueChanged(cid, !p.cue)),
-        "CUE — exclusively monitor this output's own playback feed through AN1/2",
+        "CUE — exclusively monitor this output's submix through the Cue/PFL target",
         scale,
     );
     let second_slot: Element<'a, Message> = if matches!(cid, ChannelId::Output(_)) {
@@ -855,7 +855,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             .height(btn_h)
             .style(theme::toggle_button(p.cue, theme::ACCENT))
             .on_press(Message::CueChanged(cid, !p.cue)),
-        "CUE — exclusively monitor this output's own playback feed through AN1/2",
+        "CUE — exclusively monitor this output's submix through the Cue/PFL target",
         scale,
     );
     // Inputs and software playbacks pair M with S. Outputs, including the

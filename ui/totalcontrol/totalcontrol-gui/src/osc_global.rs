@@ -211,7 +211,7 @@ pub enum ControlRoomControl {
     Recall,
     TalkChannel(usize),
     Talkback(bool),
-    CueChannel(usize),
+    CueChannel(Option<usize>),
     ExternalIn(bool),
     ExtInChannel(usize),
     ExtInGain(f32),
@@ -589,7 +589,7 @@ fn parse_control_room(field: &str, args: &[OscType]) -> Result<ControlRoomContro
         }
         "talkchannel" => ControlRoomControl::TalkChannel(channel_index_arg(args)?),
         "talkback" => ControlRoomControl::Talkback(bool_arg(args)?),
-        "cuechan" => ControlRoomControl::CueChannel(channel_index_arg(args)?),
+        "cuechan" => ControlRoomControl::CueChannel(cue_channel_arg(args)?),
         "externalin" => ControlRoomControl::ExternalIn(bool_arg(args)?),
         "extinchannel" => ControlRoomControl::ExtInChannel(channel_index_arg(args)?),
         "extingain" => ControlRoomControl::ExtInGain(float_arg(args)?),
@@ -718,6 +718,23 @@ fn channel_index_arg(args: &[OscType]) -> Result<usize, DecodeError> {
         Err(DecodeError::InvalidIndex)
     } else {
         Ok(index)
+    }
+}
+
+fn cue_channel_arg(args: &[OscType]) -> Result<Option<usize>, DecodeError> {
+    let v = float_arg(args)?;
+    if !v.is_finite() {
+        return Err(DecodeError::InvalidIndex);
+    }
+    if v < 0.0 {
+        Ok(None)
+    } else {
+        let index = v.round() as usize;
+        if index >= CHANNELS {
+            Err(DecodeError::InvalidIndex)
+        } else {
+            Ok(Some(index))
+        }
     }
 }
 
@@ -966,7 +983,10 @@ fn control_room_wire(control: &ControlRoomControl) -> (String, Vec<OscType>) {
         ControlRoomControl::Talkback(v) => ("/controlroom/talkback".into(), vec![osc_bool(*v)]),
         ControlRoomControl::CueChannel(v) => (
             "/controlroom/cuechan".into(),
-            vec![OscType::Float(*v as f32)],
+            vec![OscType::Float(match v {
+                Some(v) => *v as f32,
+                None => -1.0,
+            })],
         ),
         ControlRoomControl::ExternalIn(v) => ("/controlroom/externalin".into(), vec![osc_bool(*v)]),
         ControlRoomControl::ExtInChannel(v) => (
@@ -1148,6 +1168,18 @@ mod tests {
         assert_eq!(
             parse("/controlroom/recall", &[]),
             Ok(GlobalCommand::ControlRoom(ControlRoomControl::Recall))
+        );
+        assert_eq!(
+            parse("/controlroom/cuechan", &f(4.0)),
+            Ok(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
+                Some(4)
+            )))
+        );
+        assert_eq!(
+            parse("/controlroom/cuechan", &f(-1.0)),
+            Ok(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
+                None
+            )))
         );
     }
 

@@ -409,7 +409,7 @@ value.
 | `0x3d44` | unknown index/sentinel | writable; −1, 0 and 2 accepted |
 | `0x3d45`, `0x3d46` | unknown | writable words |
 | `0x3f00` | heartbeat / window | sequence |
-| `0x3f98` | monitor mask; `0x83ff` with Mono, `0xfc40` with Cue, `0xffff` idle | — |
+| `0x3f98` | monitor mask; `0x83ff` with Mono, Cue `0xfc40 \| target \| channel`, `0xffff` idle | — |
 | `0x3f9e` | monitor flags; bit 0 Talkback, bit 1 Mono Main Out, bit 2 Main Out mute, bit 5 External Input | — |
 
 The requested dump emits only `0x3d00`–`0x3d04`, `0x3d20`–`0x3d22` and
@@ -650,9 +650,10 @@ burst.
 
 The host rewrites the monitor mask (`0x3f98`) and the monitor flags
 (`0x3f9e`) together every 1.5–1.9 s while it is connected. `0x3f98` is
-`0x83ff` while Mono Main Out is active, `0xfc40` while a Cue output is
-active, and `0xffff` otherwise. The refresh is independent of Talkback and
-can share a USB transfer with an unrelated burst.
+`0x83ff` while Mono Main Out is active, `0xffff` while idle, and with Cue
+active it is `0xfc40`, plus `0x80` when the Cue/PFL target is not Main, plus
+the zero-based DSP output channel being cued. The refresh is independent of
+Talkback and can share a USB transfer with an unrelated burst.
 
 ### 6.3 Mute, solo and stereo mode
 
@@ -725,7 +726,20 @@ A pair writes both indices. The whole 30-entry bank is available.
 
 ### 7.4 Cue
 
-Cue is a host-side monitoring flag on an output.
+Cue copies the selected hardware output's submix to the Cue/PFL target. The
+target is chosen in the application; it is not encoded by the Cue button.
+The host replaces the target's input and playback fader records and matrix
+crosspoints, sets both target FX returns to `0xFD76` (`-65.0 dB`), and writes
+the monitor mask. Releasing Cue restores the target from the channel model,
+restores the saved FX-return levels, and returns `0x3f98` to idle.
+
+The monitor mask is `0xfc40`, plus `0x80` when the target is not Main, plus
+the zero-based DSP output channel being cued. Examples: Cue on AN1/2
+(DSP 0) to Main is `0xfc40`; the same source to Phones is `0xfcc0`; Cue on
+AN5/6 (DSP 4) to Phones is `0xfcc4`.
+
+The ALSA simple-mixer backend exposes the matrix but not the monitor mask or
+FX returns, so its Cue implementation is limited to the target matrix copy.
 
 ### 7.5 Phase and No Trim
 

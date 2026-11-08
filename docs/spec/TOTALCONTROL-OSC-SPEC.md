@@ -555,10 +555,10 @@ literal dB value. The authoritative RME OSC table is
 | `/2/alevHeadroom` | input/output | `NN82` | 0.1 dB |
 | `/2/alevRisetime` | input/output | `NN83` | 0.1 s |
 | `/2/reverbSend` | input | `NN01` | 0.1 dB, signed |
-| `/2/reverbSend` | playback | `0x47A0 + 2 × channel` and `+0x41` | linear matrix |
+| `/2/reverbSend` | playback | `0x47a0 + channel` and `+0x40` | linear matrix |
 | `/2/reverbReturn` | output | `NN03` | 0.1 dB, signed |
 | `/2/width` | input/playback | matrix rewrite | host-side |
-| `/2/cue`, `/2/talkbackSel`, `/2/noTrim`, `/2/loopback` | output | none except loopback | host-side; loopback uses EP0 `0x15` |
+| `/2/cue`, `/2/talkbackSel`, `/2/noTrim`, `/2/loopback` | output | Cue rewrites the Cue/PFL target and `0x3f98`; the others are host-side except loopback | Cue uses matrix records; loopback uses EP0 `0x15` |
 | `/2/playChannel` | playback | none | host-side |
 | `/2/recordEnable` | all | none | host-side |
 | `/2/stereo` | playback | none | host-side |
@@ -627,8 +627,11 @@ The value is 15-bit signed with a coarse-scale flag in bit 15.
 
 Playback sends use the `0x4020` and `0x41A0` families, which are different
 output rows (`0x4020` is AN 1/2 and `0x41A0` is Phones), not copies of one
-another. The playback FX send uses `0x47A0 + 2 × channel` and its `+0x41`
+another. The playback FX send uses `0x47a0 + channel` and its `+0x40`
 mirror.
+
+Each side of an output pair has its own fader record. The selected submix
+does not imply the other side; both must be written when a pair is restored.
 
 ### 12.5 IF1 word
 
@@ -644,3 +647,21 @@ into bursts; a burst carries complete 4-byte words. A 4-byte word is
 `[value16 LE][address16 LE]` after stripping the parity bit.
 
 The UCX state stream on endpoint `0x8d` uses the same word layout.
+
+## 13. Global OSC Cue
+
+Global OSC (TotalMix FX 2.1 and later) carries Cue in the Control Room
+namespace:
+
+```text
+/controlroom/cuechan N
+```
+
+`N` is the zero-based hardware output channel whose submix is cued;
+`-1` clears Cue. It is the cued output, not the Cue/PFL monitoring target.
+The target remains a TotalMix setting (`Assign → Cue/PFL to`).
+
+Cue replaces the target submix with the cued output's fader and matrix
+records, sets the target FX returns to `-65.0 dB`, and writes the monitor
+mask. Releasing Cue restores the target from the model and returns
+`0x3f98` to its idle value.

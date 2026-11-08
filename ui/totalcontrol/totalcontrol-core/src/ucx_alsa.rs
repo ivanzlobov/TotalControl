@@ -182,6 +182,9 @@ pub struct UcxAlsa {
     mute_saved: HashMap<ChannelId, Vec<i64>>,
     /// Saved (hardware-volume dB, matrix master) for UC output mute.
     output_mute_saved: HashMap<usize, (i32, i64)>,
+    /// Cue/PFL target pair and the active cue source pair.
+    cue_target: Option<usize>,
+    cue_state: Option<(usize, usize)>,
     /// Throttle for readback of the output masters, so a turn of the
     /// physical encoder moves the GUI's Phones slider instead of leaving
     /// it at the value read when the app opened.
@@ -372,6 +375,44 @@ impl UcxAlsa {
                 .ok_or_else(|| Error::InvalidChannel(format!("matrix source {src}")))?;
         }
         elem.write(&value)?;
+        Ok(())
+    }
+
+    /// Copy one output pair's model sends into another output pair through
+    /// the ALSA matrix controls.  Used by Cue; the target row is replaced.
+    fn copy_cue_source(&self, source: usize, target: usize) -> Result<(), Error> {
+        if source >= PAIRS || target >= PAIRS {
+            return Err(Error::InvalidChannel(format!("cue {source} -> {target}")));
+        }
+        for idx in 0..self.inputs.len() {
+            let volume = self.inputs[idx].volumes.get(source).copied().unwrap_or(0.0);
+            let pan = self.inputs[idx].pans.get(source).copied().unwrap_or(0);
+            let (left, right) = pan_split(volume, pan);
+            self.write_crosspoint(target * 2, idx, raw_volume(left))?;
+            self.write_crosspoint(target * 2 + 1, idx, raw_volume(right))?;
+        }
+        for idx in 0..self.playbacks.len() {
+            let dev = self.playbacks[idx].id;
+            let volume = self.playbacks[idx]
+                .volumes
+                .get(source)
+                .copied()
+                .unwrap_or(0.0);
+            let block = target * 2 + (dev % 2);
+            self.write_crosspoint(block, 18 + dev, raw_volume(volume))?;
+        }
+        Ok(())
+    }
+
+    fn release_cue(&mut self) -> Result<(), Error> {
+        let Some((_, target)) = self.cue_state.take() else {
+            return Ok(());
+        };
+        self.write_uc_matrix_row(target * 2)?;
+        self.write_uc_matrix_row(target * 2 + 1)?;
+        for output in &mut self.outputs {
+            output.cue = false;
+        }
         Ok(())
     }
 
@@ -1069,9 +1110,55 @@ impl RmeDevice for UcxAlsa {
         Ok(())
     }
 
+    fn set_cue_target(&mut self, pair: Option<usize>) -> Result<(), Error> {
+        if let Some(pair) = pair {
+            if pair >= PAIRS {
+                return Err(Error::InvalidChannel(format!("cue target {pair}")));
+            }
+        }
+        if self.cue_state.is_some() {
+            self.release_cue()?;
+        }
+        self.cue_target = pair;
+        Ok(())
+    }
+
     fn set_cue(&mut self, idx: usize, on: bool) -> Result<(), Error> {
-        if let Some(output) = self.outputs.get_mut(idx) {
-            output.cue = on;
+        if idx >= PAIRS {
+            return Err(Error::InvalidChannel(format!("Output {idx}")));
+        }
+        if !on {
+            if self
+                .cue_state
+                .as_ref()
+                .is_some_and(|(source, _)| *source == idx)
+            {
+                self.release_cue()?;
+            }
+            return Ok(());
+        }
+        if self.cue_state.is_some() {
+            self.release_cue()?;
+        }
+        let target = self
+            .cue_target
+            .ok_or_else(|| Error::InvalidChannel("Cue needs a Cue/PFL target".into()))?;
+        if target == idx {
+            for output in &mut self.outputs {
+                output.cue = false;
+            }
+            return Ok(());
+        }
+        self.copy_cue_source(idx, target)?;
+        self.cue_state = Some((idx, target));
+        for output in &mut self.outputs {
+            output.cue = false;
+        }
+        if let Some(left) = self.outputs.get_mut(idx * 2) {
+            left.cue = true;
+        }
+        if let Some(right) = self.outputs.get_mut(idx * 2 + 1) {
+            right.cue = true;
         }
         Ok(())
     }
@@ -1299,6 +1386,8 @@ impl UcxAlsa {
             soloed: HashSet::new(),
             mute_saved: HashMap::new(),
             output_mute_saved: HashMap::new(),
+            cue_target: None,
+            cue_state: None,
             last_output_poll: Instant::now(),
             last_preamp_poll: Instant::now(),
             input_hold: Mutex::new(vec![(0.0, Instant::now()); profile.inputs.len()]),

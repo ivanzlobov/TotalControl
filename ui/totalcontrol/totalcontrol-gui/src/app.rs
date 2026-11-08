@@ -5883,17 +5883,22 @@ fn global_control_room_messages(
         ControlRoomControl::Talkback(on) => vec![Message::TalkbackChanged(*on)],
         ControlRoomControl::LinkAB(on) => vec![Message::SpeakerBLinked(*on)],
         ControlRoomControl::Recall => vec![Message::ControlRoomRecall],
-        ControlRoomControl::CueChannel(channel) => {
-            let pair = channel / 2;
-            state
-                .assign
-                .iter()
-                .take(OUTPUT_DESTS)
-                .position(|slot| *slot == Some(pair))
-                .filter(|dest| CUE_TARGETS.contains(dest))
-                .map(|dest| vec![Message::AssignCueTarget(dest)])
-                .unwrap_or_default()
+        ControlRoomControl::CueChannel(Some(channel)) => {
+            let pair = state
+                .device
+                .output_display_order()
+                .get(channel / 2)
+                .copied()
+                .unwrap_or(channel / 2);
+            vec![Message::CueChanged(ChannelId::Output(pair * 2), true)]
         }
+        ControlRoomControl::CueChannel(None) => state
+            .device
+            .outputs()
+            .iter()
+            .position(|output| output.cue)
+            .map(|idx| vec![Message::CueChanged(ChannelId::Output(idx), false)])
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -6244,12 +6249,15 @@ fn global_control_room_state(state: &TotalControl) -> Vec<crate::osc_global::Glo
             state.control_room.external_gain_db,
         )));
     }
-    if let Some(dest) = state.assign[CUE_DEST] {
-        if let Some(pair) = state.assign.get(dest).and_then(|slot| *slot) {
-            out.push(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
-                pair * 2,
-            )));
-        }
+    if let Some(idx) = state.device.outputs().iter().position(|output| output.cue) {
+        let display = state.device.display_pair_index(idx / 2);
+        out.push(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
+            Some(display * 2 + idx % 2),
+        )));
+    } else {
+        out.push(GlobalCommand::ControlRoom(ControlRoomControl::CueChannel(
+            None,
+        )));
     }
     out
 }
@@ -20231,6 +20239,29 @@ mod tests {
         );
         let volume = state.device.outputs()[0].volume;
         assert!((volume - 0.501).abs() < 0.01, "expected -6 dB, got {volume}");
+    }
+
+    #[test]
+    fn global_osc_cue_channel_selects_the_output_and_minus_one_clears_it() {
+        let mut state = new(true, None, None);
+        state.device = DeviceHandle::open_mock_ucx();
+        let display_pair = 1; // TotalMix output channels 2/3, AN3/4
+        let pair = state.device.output_display_order()[display_pair];
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::ControlRoom(
+                crate::osc_global::ControlRoomControl::CueChannel(Some(display_pair * 2)),
+            ),
+        );
+        assert!(state.device.outputs()[pair * 2].cue);
+        assert!(state.device.outputs()[pair * 2 + 1].cue);
+        apply_global(
+            &mut state,
+            crate::osc_global::GlobalCommand::ControlRoom(
+                crate::osc_global::ControlRoomControl::CueChannel(None),
+            ),
+        );
+        assert!(!state.device.outputs()[pair * 2].cue);
     }
 
     #[test]
