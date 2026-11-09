@@ -276,6 +276,12 @@ matches, the scene is written and startup continues; otherwise the mismatch
 dialog is shown.  The direct device handle stays in the UI until that
 comparison is resolved, then moves to the device service.
 
+A connect restore leaves output registers that match the pre-connect dump
+unchanged.  A reapply after a runtime rate change or stream restart writes the
+full scene instead: the unit may have reloaded its own state, so the startup
+dump no longer describes the registers, and skipping matching values can leave
+effects or routing from the old rate active.
+
 ## 10. Driver and latency architecture
 
 The production transport is the kernel module `snd-fireface-uc`. It owns USB

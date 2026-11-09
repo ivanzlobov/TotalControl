@@ -6591,6 +6591,7 @@ impl RmeDevice for Fireface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channel::EqBand;
     use std::sync::Arc;
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6981,6 +6982,91 @@ mod tests {
             words.iter().any(|(reg, _)| *reg == 0x1200),
             "an explicit scene recall remains authoritative"
         );
+    }
+
+    #[test]
+    fn ucx_connect_restore_still_skips_a_matching_output_eq() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut eq = InputEq::default();
+        eq.enabled = true;
+        eq.bands[1] = EqBand {
+            band_type: EqBandType::Bell,
+            freq_hz: 4_270,
+            q: 2.5,
+            gain_db: 11.6,
+        };
+        dev.set_output_eq(0, &eq).unwrap();
+        let scene = dev.capture_scene();
+        seed_pre_connect_output_state(&mut dev, &scene);
+        writes.lock().unwrap().clear();
+
+        dev.apply_scene_at_connect(&scene).unwrap();
+
+        let words = written_words(&writes);
+        for offset in [
+            ucx::offset::EQ_ON,
+            ucx::offset::EQ1_TYPE,
+            0x42,
+            0x43,
+            0x44,
+            0x45,
+            0x46,
+            0x47,
+            0x48,
+            0x49,
+            0x4a,
+            0x4b,
+        ] {
+            let reg = Fireface::ucx_output_reg(0, offset).unwrap();
+            assert!(
+                !words.iter().any(|(addr, _)| *addr == reg),
+                "connect restore rewrote an unchanged EQ register {reg:#06x}"
+            );
+        }
+    }
+
+    #[test]
+    fn ucx_scene_recall_rewrites_the_output_eq_after_a_rate_change() {
+        let (mut dev, writes) = open(Model::Ucx);
+        let mut eq = InputEq::default();
+        eq.enabled = true;
+        eq.bands[1] = EqBand {
+            band_type: EqBandType::Bell,
+            freq_hz: 4_270,
+            q: 2.5,
+            gain_db: 11.6,
+        };
+        dev.set_output_eq(0, &eq).unwrap();
+        let scene = dev.capture_scene();
+        seed_pre_connect_output_state(&mut dev, &scene);
+        writes.lock().unwrap().clear();
+
+        // A runtime reapply must write the full output state: the device
+        // may have reloaded its own effects or routing at the new rate, and
+        // the startup dump no longer describes it.
+        dev.apply_scene(&scene).unwrap();
+
+        let words = written_words(&writes);
+        for offset in [
+            ucx::offset::EQ_ON,
+            ucx::offset::EQ1_TYPE,
+            0x42,
+            0x43,
+            0x44,
+            0x45,
+            0x46,
+            0x47,
+            0x48,
+            0x49,
+            0x4a,
+            0x4b,
+        ] {
+            let reg = Fireface::ucx_output_reg(0, offset).unwrap();
+            assert!(
+                words.iter().any(|(addr, _)| *addr == reg),
+                "runtime reapply must rewrite EQ register {reg:#06x}"
+            );
+        }
     }
 
     #[test]

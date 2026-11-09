@@ -2415,6 +2415,11 @@ pub struct TotalControl {
     /// fader in the model, and the reapply then persisted the device value
     /// instead of the host scene.
     pub startup_scene: Option<Scene>,
+    /// Whether the pending reapply must write every output register.
+    /// Connect restores keep the pre-connect dump's skip rule; a runtime
+    /// rate change or stream restart does not, because the device reloads
+    /// its own state and the startup dump no longer describes it.
+    pub startup_scene_full_rewrite: bool,
     /// Previous RME sink running state, for the IDLE -> RUNNING reapply.
     pub last_sink_running: bool,
     /// Last non-idle card rate seen, kept across a brief stream close during
@@ -3076,6 +3081,7 @@ pub fn new_with_device(
         pending_device_rate: None,
         startup_scene_due: None,
         startup_scene: None,
+        startup_scene_full_rewrite: false,
         host_scene: None,
         pending_host_merge: None,
         last_sink_running: false,
@@ -3768,6 +3774,7 @@ fn apply_workspace_sample_rate(state: &mut TotalControl, scene: &Scene) {
     state.engine = pw_clock::read();
     state.card_stream = pw_clock::card_stream(state.device.card_id());
     state.startup_scene = Some(scene.clone());
+    state.startup_scene_full_rewrite = true;
     state.startup_scene_due = Some(Instant::now() + Duration::from_millis(1_500));
 }
 
@@ -4354,6 +4361,7 @@ pub fn apply_startup_sync(state: &mut TotalControl) {
                     // output fader, and capturing it would persist the
                     // device value instead of the host scene.
                     state.startup_scene = Some(scene.clone());
+                    state.startup_scene_full_rewrite = false;
                     state.startup_scene_due =
                         Some(Instant::now() + Duration::from_secs(1));
                     // The UC can deliver a front-panel move made while the
@@ -4465,6 +4473,12 @@ fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &st
         return;
     }
     state.startup_scene = Some(state.device.capture_scene());
+    // A runtime rate change or stream restart reloads the device's own
+    // state.  The pre-connect dump is stale, so write every output
+    // register rather than skipping values that matched the startup
+    // dump.  Otherwise effects or routing from the old rate can stay
+    // active and alias at the new one.
+    state.startup_scene_full_rewrite = true;
     state.startup_scene_due = Some(Instant::now() + delay);
     log::info!("{reason}; reapplying the Fireface mixer scene");
 }
@@ -7760,6 +7774,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // leave the right post-fader meter stale.  The deferred
                 // connectivity scene write covers this reapply.
                 state.startup_scene = None;
+                state.startup_scene_full_rewrite = false;
                 log::debug!(
                     "discarding a mixer reapply scheduled before the UCX startup restore"
                 );
@@ -7768,7 +7783,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 // model.  The UC may have delivered a stale front-panel event
                 // after the first write; capturing the model here would make
                 // the device value permanent.
-                if let Err(e) = state.device.apply_scene_at_connect(&scene) {
+                let result = if state.startup_scene_full_rewrite {
+                    state.device.apply_scene(&scene)
+                } else {
+                    state.device.apply_scene_at_connect(&scene)
+                };
+                state.startup_scene_full_rewrite = false;
+                if let Err(e) = result {
                     log::warn!("scene reapply failed: {e:?}");
                 } else {
                     log::info!("reapplied the Fireface mixer scene");
@@ -7998,6 +8019,7 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                                     // Reapply it once the stream and the
                                     // UC's reloaded mixer have settled.
                                     state.startup_scene = Some(scene);
+                                    state.startup_scene_full_rewrite = false;
                                     state.startup_scene_due =
                                         Some(Instant::now() + Duration::from_secs(1));
                                     state
@@ -10339,6 +10361,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.last_activity = Instant::now();
     state.startup_scene = None;
     state.startup_scene_due = None;
+    state.startup_scene_full_rewrite = false;
     state.last_sink_running = false;
     state.last_card_rate = None;
     apply_prefs(state, prefs);
@@ -19548,6 +19571,17 @@ mod tests {
         assert!(!super::first_rate_needs_reapply(None, Some(44_100), 44_100));
         // No open stream: nothing to do.
         assert!(!super::first_rate_needs_reapply(None, None, 44_100));
+    }
+
+    #[test]
+    fn a_runtime_rate_reapply_writes_the_full_scene() {
+        let mut state = new(true, None, None);
+        super::schedule_mixer_reapply(&mut state, Duration::from_millis(1), "test");
+        assert!(state.startup_scene.is_some());
+        assert!(
+            state.startup_scene_full_rewrite,
+            "the startup dump is stale after a runtime rate change"
+        );
     }
 
     #[test]
