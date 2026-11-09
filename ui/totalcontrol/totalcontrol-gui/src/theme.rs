@@ -17,12 +17,30 @@ use iced::{Background, Border, Color, Shadow};
 // see the reference-totalmix-ui-assets memory) and read as a different
 // product than the icon on the taskbar.
 pub const BG_DEEP: Color = Color::from_rgb8(0x0e, 0x0e, 0x10);
+/// The dark groove of a fader: just off the page black, so the slot reads
+/// as a channel without becoming a black cut-out.
+pub const FADER_SLOT: Color = Color::from_rgb8(0x13, 0x14, 0x17);
+/// Resting face of a black button.  One step above the page/rail black so
+/// controls read as raised without turning into grey blocks.
+pub const BUTTON_FACE: Color = Color::from_rgb8(0x19, 0x1a, 0x1e);
 /// Standard channel-strip surface.
 pub const SURFACE: Color = Color::from_rgb8(0x24, 0x25, 0x2a);
 /// Hover surface for controls and strips.
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
 /// Active input, playback, and selected output strip surface.
 pub const SUBMIX_ACTIVE: Color = Color::from_rgb8(0x3a, 0x3b, 0x42);
+/// VU well on a normal strip: one shade below `SURFACE`, not a black cut-out.
+pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
+/// VU well on an active input/playback strip: one shade below
+/// `SUBMIX_ACTIVE`.
+pub const METER_WELL_ACTIVE: Color = Color::from_rgb8(0x33, 0x34, 0x3a);
+/// Slideout-tab face when its panel is open.
+pub const SURFACE_LOW: Color = Color::from_rgb8(0x20, 0x21, 0x26);
+/// Slideout-tab face on hover: lighter than the open face, still darker
+/// than the channel surface.
+pub const TAB_FACE_HOVER: Color = Color::from_rgb8(0x22, 0x23, 0x28);
+/// VU scale labels: one step below the primary text tone.
+pub const VU_LABEL: Color = Color::from_rgb8(0xd5, 0xd6, 0xda);
 /// Hairlines and card borders.
 pub const BORDER: Color = Color::from_rgb8(0x36, 0x37, 0x3d);
 /// The mark's white, softened a touch for body text.
@@ -40,6 +58,17 @@ pub const ACCENT_DIM: Color = Color::from_rgb8(0x37, 0x38, 0x3e);
 /// Fader cap and rail silver, from the icon's highlight (#d9d9d9
 /// family): the brightest neutral in the chrome.
 pub const FADER: Color = Color::from_rgb8(0xc9, 0xcb, 0xd1);
+
+/// The filled part of a channel fader slot: only a little lighter than the
+/// channel card, so the level is visible without a bright white rail.
+pub fn fader_fill(active_surface: bool) -> Color {
+    let base = if active_surface {
+        SUBMIX_ACTIVE
+    } else {
+        SURFACE
+    };
+    blend(base, FADER, 0.12)
+}
 pub const MGREEN: Color = Color::from_rgb8(0x3d, 0xd6, 0x8c);
 pub const MRED: Color = Color::from_rgb8(0xe5, 0x48, 0x4d);
 /// 48V uses its own orange so phantom power is distinct from the
@@ -63,6 +92,8 @@ pub const KNOB_GREEN: Color = Color::from_rgb8(0x2f, 0xa8, 0x6e);
 /// azure, but inside the EQ they mean band 1/2/3, not clip/signal/mute.
 pub const EQ_BAND: [Color; 3] = [MRED, MGREEN, MUTE_COLOR];
 pub const SOLO_COLOR: Color = Color::from_rgb8(0xf0, 0xb4, 0x29);
+/// Cue is the green member of the M/S/CUE outline family.
+pub const CUE_COLOR: Color = MGREEN;
 /// Text on an engaged (white) toggle and on the active nav pill: the
 /// near-black of the tile behind the mark.
 pub const ON_ACTIVE: Color = Color::from_rgb8(0x10, 0x10, 0x12);
@@ -201,6 +232,34 @@ pub fn panel(_theme: &iced::Theme) -> container::Style {
         text_color: Some(TEXT_PRIMARY),
         shadow: Shadow::default(),
         snap: false,
+    }
+}
+
+/// The inert dark face at the foot of a collapsed strip.  It uses the
+/// normal button face and shape so future footer content has a defined
+/// surface without adding a control today.
+pub fn display_face(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(BUTTON_FACE)),
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+/// A reserved but currently inactive tab slot.
+pub fn empty_slot(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: None,
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
     }
 }
 
@@ -458,7 +517,7 @@ fn outline_toggle(
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let pressed = matches!(status, button::Status::Pressed);
-        let mut background = if hovered { SURFACE_HI } else { BG_DEEP };
+        let mut background = if hovered { SURFACE_HI } else { BUTTON_FACE };
         if pressed {
             background = blend(background, Color::BLACK, PRESS_DARKEN);
         }
@@ -508,6 +567,11 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     outline_toggle(active, PHANTOM)
 }
 
+/// CUE uses the same outline language as Stereo, in green.
+pub fn cue_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    outline_toggle(active, CUE_COLOR)
+}
+
 /// `stereo_button` with a locked form.  A Control Room channel's pair is
 /// always stereo, so its control is permanently engaged and not pressable;
 /// the locked style ignores the disabled state so the orange outline and
@@ -540,10 +604,12 @@ pub fn stereo_button_state(
 pub fn panel_tab(active: bool, lit: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        // The rectangle is the tab of the open slideout: show it only while
-        // that slideout is visible.  Hover changes the glyph, not the box.
-        let background = if active {
-            Some(Background::Color(SURFACE))
+        // At rest the tab is only its glyph.  Hover gives it a light face;
+        // an open panel keeps the darker face that reaches the strip edge.
+        let background = if hovered {
+            Some(Background::Color(TAB_FACE_HOVER))
+        } else if active {
+            Some(Background::Color(SURFACE_LOW))
         } else {
             None
         };
@@ -601,6 +667,39 @@ pub fn armed_toggle_button(
     }
 }
 
+/// The channel M/S/CUE family: an engaged button is an outline like the
+/// Stereo switch, not a filled pill.  `armed` keeps the dim tint used when
+/// a sidebar master has switched the function off.
+pub fn armed_outline_toggle(
+    active: bool,
+    armed: bool,
+    active_color: Color,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    let outline = outline_toggle(active, active_color);
+    move |theme, status| {
+        if armed && !active {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let mut background =
+                blend(BUTTON_FACE, active_color, if hovered { 0.28 } else { 0.18 });
+            if matches!(status, button::Status::Pressed) {
+                background = blend(background, Color::BLACK, PRESS_DARKEN);
+            }
+            return button::Style {
+                background: Some(Background::Color(background)),
+                text_color: blend(TEXT_SEC, active_color, 0.65),
+                border: Border {
+                    color: blend(BORDER, active_color, 0.6),
+                    width: 1.0,
+                    radius: RADIUS_SM.into(),
+                },
+                shadow: Shadow::default(),
+                snap: false,
+            };
+        }
+        outline(theme, status)
+    }
+}
+
 fn plain_toggle(
     active: bool,
     active_color: Color,
@@ -615,7 +714,7 @@ fn plain_toggle(
     } else if hovered {
         SURFACE_HI
     } else {
-        BG_DEEP
+        BUTTON_FACE
     };
     if pressed {
         background = blend(background, Color::BLACK, PRESS_DARKEN);
@@ -731,7 +830,7 @@ pub fn segment_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
         } else if hovered {
             SURFACE
         } else {
-            BG_DEEP
+            BUTTON_FACE
         };
         let border_color = if active || hovered { FADER } else { BORDER };
 
@@ -851,9 +950,9 @@ pub fn chip_button(open: bool) -> impl Fn(&iced::Theme, button::Status) -> butto
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let background = match status {
-            button::Status::Pressed => blend(BG_DEEP, Color::BLACK, PRESS_DARKEN),
-            button::Status::Hovered => blend(BG_DEEP, SURFACE_HI, 0.5),
-            _ => BG_DEEP,
+            button::Status::Pressed => blend(BUTTON_FACE, Color::BLACK, PRESS_DARKEN),
+            button::Status::Hovered => blend(BUTTON_FACE, SURFACE_HI, 0.5),
+            _ => BUTTON_FACE,
         };
         button::Style {
             background: Some(Background::Color(background)),

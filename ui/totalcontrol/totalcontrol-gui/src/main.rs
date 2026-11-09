@@ -65,18 +65,17 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
-/// `--view quick|mixer|matrix`: the page the window opens on. `Quick` is
-/// the default (the landing view), but the Mixer is where the full work
-/// happens and where the device panel lives, so the caller can land there
-/// directly. Unknown values fall back to the default, the same way
-/// `--backend` falls back to auto-detect instead of opening nothing.
+/// `--view quick|mixer|matrix`: the page the window opens on.  Mixer is
+/// the default; the flag can still land directly on Quick or Matrix.
+/// Unknown values fall back to the default, the same way `--backend`
+/// falls back to auto-detect instead of opening nothing.
 fn parse_view(args: &[String]) -> Option<app::View> {
     match arg_value(args, "--view").as_deref() {
         Some("quick") => Some(app::View::Quick),
         Some("mixer") => Some(app::View::Mixer),
         Some("matrix") => Some(app::View::Matrix),
         Some(other) => {
-            eprintln!("Unknown --view value {other:?} (use quick|mixer|matrix), starting on Quick");
+            eprintln!("Unknown --view value {other:?} (use quick|mixer|matrix), starting on Mixer");
             None
         }
         None => None,

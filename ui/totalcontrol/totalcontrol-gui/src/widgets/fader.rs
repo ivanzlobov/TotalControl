@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::device_service::MeterSnapshot;
 use crate::theme;
+use crate::widgets::layout::MIDDLE_H;
 
 fn trim_factor(db: f32) -> f32 {
     10f32.powf(db.clamp(-65.0, 0.0) / 20.0)
@@ -139,20 +140,14 @@ impl MeterFrame {
 /// goes before clipping a 2-digit label at `theme::TEXT_MICRO`, checked
 /// via a live screenshot rather than guessed.
 ///
-/// 2026-10-20: the numbers left the meter for a lane of their own. Printed
-/// on the wash they collided with the fill (and, on a linked pair, with the
-/// gap between the two bars), and the wash had to stay translucent just so
-/// they could be read through it. The column is now `[meter][ruler lane]`,
-/// the meter fully opaque; `METER_RULER_W` is still the whole column, so
-/// `layout_x` and the collapsed `vu_meter` keep sizing against one number.
-/// Width of the coloured VU wash.  Kept a little wider than the minimum
-/// needed for the ruler labels so the stereo bars in a linked pair and the
-/// meter against a busy fader remain easy to read at normal zoom.
+/// Width of the VU column.  The level text is printed inside it, so this
+/// is also the full ruler width; the space to the track is left to the
+/// level marks, which run from this column's right edge.
 const METER_W: f32 = 13.0;
-const LANE_GAP: f32 = 1.0;
-const RULER_LANE_W: f32 = 14.0;
-const METER_RULER_W: f32 = METER_W + LANE_GAP + RULER_LANE_W;
-const GAP: f32 = 2.0;
+const METER_RULER_W: f32 = METER_W;
+/// Space between the VU column and the fader track.  The horizontal level
+/// marks cross it; a narrower VU therefore gives longer marks.
+const GAP: f32 = 13.0;
 const TRACK_W: f32 = 26.0;
 /// Width a strip fader canvas needs to show the full meter/track group.
 /// `strip::STRIP_W` and the compact tab column are sized against this.
@@ -186,21 +181,36 @@ const SNAP_PX: f32 = 2.0;
 /// the sharp knee a two-segment mapping produces (which crowded the
 /// 0/-6/-10 ruler ticks together). The track spans FLOOR_DB .. +6 dB
 /// (TOP_DB), TotalMix's fader range.
-const FLOOR_DB: f32 = -60.0;
+const FLOOR_DB: f32 = -65.0;
+/// The cap has a physical half-height, so its centre cannot travel all the
+/// way to the track end.  This fraction is reserved at each end; the bottom
+/// 0.5 dB is remapped into it so the lowest cap position reads -64.5 dB,
+/// with -65 dB reserved for the `inf` value below that.
+const CAP_T: f32 = (CAP_H / 2.0) / MIDDLE_H;
+const FADER_BOTTOM_DB: f32 = -64.5;
 /// The fader's top: +6 dB (2.0 linear) like TotalMix, not 0 dB.
 const TOP_DB: f32 = 6.0;
 const TAPER_K: f32 = 0.6;
 
 fn db_to_t(db: f32) -> f32 {
     let db = db.clamp(FLOOR_DB, TOP_DB);
-    let x = ((db - TOP_DB) / (FLOOR_DB - TOP_DB)).clamp(0.0, 1.0);
-    (1.0 - x.powf(TAPER_K)).clamp(0.0, 1.0)
+    if db <= FADER_BOTTOM_DB {
+        // The short cap-hidden segment below the last visible position.
+        let x = (db - FLOOR_DB) / (FADER_BOTTOM_DB - FLOOR_DB);
+        return (x * CAP_T).clamp(0.0, CAP_T);
+    }
+    let x = ((db - TOP_DB) / (FADER_BOTTOM_DB - TOP_DB)).clamp(0.0, 1.0);
+    let t = (1.0 - x.powf(TAPER_K)).clamp(0.0, 1.0);
+    CAP_T + (1.0 - CAP_T) * t
 }
 
 fn t_to_db(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
-    let x = (1.0 - t).powf(1.0 / TAPER_K);
-    (TOP_DB + x * (FLOOR_DB - TOP_DB)).clamp(FLOOR_DB, TOP_DB)
+    if t <= CAP_T {
+        return FLOOR_DB + (t / CAP_T) * (FADER_BOTTOM_DB - FLOOR_DB);
+    }
+    let x = (1.0 - (t - CAP_T) / (1.0 - CAP_T)).powf(1.0 / TAPER_K);
+    (TOP_DB + x * (FADER_BOTTOM_DB - TOP_DB)).clamp(FADER_BOTTOM_DB, TOP_DB)
 }
 
 pub(crate) fn vol_to_t(vol: f32) -> f32 {
@@ -245,6 +255,14 @@ pub(crate) fn t_to_vol(t: f32) -> f32 {
     }
 }
 
+/// Logical (unscaled) left edge of the meter and fader track inside the
+/// fader canvas.
+#[derive(Clone, Copy, Debug)]
+pub struct FaderColumns {
+    pub meter_x: f32,
+    pub track_x: f32,
+}
+
 pub struct Fader<Message> {
     pub value: f32,
     pub range: (f32, f32),
@@ -275,6 +293,13 @@ pub struct Fader<Message> {
     /// main fader uses the default light `FADER`; the thin FX fader uses the
     /// send/return colour, so raising it colours the channel itself.
     pub fill: Color,
+    /// Width of the dark fader slot in canvas-local logical units.  The
+    /// channel fader and the thin FX fader use the same effective width.
+    pub slot_w: f32,
+    /// Background of the VU well.  The strip passes a tone slightly darker
+    /// than its own card, so the meter reads as part of the channel rather
+    /// than as a black cut-out.
+    pub meter_bg: Color,
     /// Extra width (at `scale == 1.0`... no, already-scaled pixels, same
     /// as every other field here) that exists *outside* this canvas's own
     /// bounds but should still count when centering the track — the strip
@@ -285,6 +310,9 @@ pub struct Fader<Message> {
     /// `0.0` from that call site). See `layout_x`'s own doc comment for
     /// why this is needed at all, not just cosmetic tuning.
     pub reserved_right: f32,
+    /// Explicit meter/track columns for the strip layout.  `None` keeps the
+    /// derived layout used by the compact/matrix fader.
+    pub columns: Option<FaderColumns>,
     pub modifiers: Modifiers,
     pub scale: f32,
     /// `false` skips drawing the groove/cap entirely — the click/drag/
@@ -348,6 +376,9 @@ impl<Message> Fader<Message> {
     /// negative-x fix this replaced (never let the meter go negative;
     /// shift the whole group right instead of letting it clip).
     fn layout_x(&self, bounds_width: f32) -> (f32, f32) {
+        if let Some(columns) = self.columns {
+            return (columns.track_x * self.scale, columns.meter_x * self.scale);
+        }
         let true_center = (bounds_width + self.reserved_right) / 2.0;
         let track_x = true_center - (TRACK_W * self.scale) / 2.0;
         if !self.show_meter {
@@ -434,8 +465,6 @@ pub struct State {
     /// only) and the rail with its cap (value, default, range, drag). A
     /// mixer has ~70 faders and nearly all of them sit still, yet each
     /// re-tessellated its ruler text and rail on every redraw.
-    ruler_cache: canvas::Cache,
-    ruler_key: std::cell::Cell<u64>,
     track_cache: canvas::Cache,
     track_key: std::cell::Cell<u64>,
     /// The meter's static chrome: the dark well behind the level and the
@@ -763,9 +792,11 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     frame,
                     meter_rect,
                     self.scale,
+                    self.meter_bg,
                     available,
                     meter2.map(|_| meter2_available),
                 );
+                draw_level_text(frame, meter_rect, self.scale);
             }));
         }
 
@@ -799,27 +830,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         }
         layers.push(frame.into_geometry());
 
-        // Static layer 1: the ruler's ticks and numbers.
-        if self.show_meter {
-            let key = hash_of(|h| {
-                (
-                    bounds.width.to_bits(),
-                    bounds.height.to_bits(),
-                    self.scale.to_bits(),
-                )
-                    .hash(h);
-                meter_x.to_bits().hash(h);
-            });
-            if state.ruler_key.replace(key) != key {
-                state.ruler_cache.clear();
-            }
-            layers.push(state.ruler_cache.draw(renderer, bounds.size(), |frame| {
-                let (_, ruler_rect) = meter_column(meter_x, bounds.height, self.scale);
-                draw_ruler(frame, ruler_rect, self.scale);
-            }));
-        }
-
-        // Static layer 2: the rail and its cap, which only move with the
+        // Static layer 1: the rail and its cap, which only move with the
         // value.
         if self.show_track {
             let display_value = if state.dragging {
@@ -830,6 +841,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     .map(|d| d.at(Instant::now()))
                     .unwrap_or(self.value)
             };
+            let marks_left = meter_x + METER_W * self.scale;
             let key = hash_of(|h| {
                 (
                     bounds.width.to_bits(),
@@ -839,7 +851,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     .hash(h);
                 (display_value.to_bits(), self.default_value.to_bits()).hash(h);
                 (self.range.0.to_bits(), self.range.1.to_bits()).hash(h);
-                (state.dragging, track_x.to_bits()).hash(h);
+                (state.dragging, track_x.to_bits(), marks_left.to_bits()).hash(h);
             });
             if state.track_key.replace(key) != key {
                 state.track_cache.clear();
@@ -863,6 +875,8 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     self.scale,
                     self.fill,
                     self.show_meter,
+                    self.slot_w,
+                    marks_left,
                 );
             }));
         }
@@ -885,26 +899,20 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
 /// Splits the meter/ruler column starting at `x` into the bar itself and
 /// the lane the dB numbers sit in, right of it (next to the fader track).
 fn meter_column(x: f32, height: f32, scale: f32) -> (Rectangle, Rectangle) {
-    // Reserve the top strip for the separate OVR LEDs.  The VU itself starts
-    // below that gap, so its +6 dB top is below the LEDs rather than under
-    // them.
+    // The VU element spans its complete height.  The OVR segment is drawn
+    // inside the top of the same column, not above it.
     let top = meter_top_reserve(scale);
     let height = (height - top).max(0.0);
     let meter = Rectangle::new(Point::new(x, top), Size::new(METER_W * scale, height));
-    let ruler = Rectangle::new(
-        Point::new(x + (METER_W + LANE_GAP) * scale, top),
-        Size::new(RULER_LANE_W * scale, height),
-    );
-    (meter, ruler)
+    (meter, meter)
 }
 
 const METER_RADIUS: f32 = 2.0;
 const CLIP_H: f32 = 6.0;
 /// Space between the top of the VU scale and the separate OVR LEDs.
-const OVR_GAP: f32 = 2.0;
 
-pub(crate) fn meter_top_reserve(scale: f32) -> f32 {
-    (CLIP_H + OVR_GAP) * scale
+pub(crate) fn meter_top_reserve(_scale: f32) -> f32 {
+    0.0
 }
 /// TotalMix's peak/over meter extends 6 dB above full scale.  The +3 dB
 /// mark is the red ruler tick between the 0 dB and +6 dB ends.
@@ -924,7 +932,7 @@ const RULER_TICKS: [f32; 8] = [
     0.0,
     METER_RED_DB,
 ];
-const RULER_LABEL_TICKS: [f32; 7] = [-60.0, -40.0, -20.0, -10.0, -6.0, 0.0, METER_RED_DB];
+const RULER_LABEL_TICKS: [f32; 6] = [-60.0, -40.0, -20.0, -10.0, -6.0, 0.0];
 
 /// `f32::clamp` panics if `lo > hi` — which a plain `min - margin, max -
 /// margin` pair can produce for a single bad frame: iced 0.14 has a layout
@@ -955,11 +963,9 @@ const METER_ZONES: [(f32, Color); 3] = [
     (TOP_DB, theme::MRED),
 ];
 
-/// Fill opacity. It used to be 0.55 so the ruler's numbers could be read
-/// *through* the wash; they have their own lane now (`RULER_LANE_W`), so
-/// the fill is all but solid, with just enough give to sit in the dark
-/// well instead of glaring.
-const FILL_ALPHA: f32 = 0.92;
+/// The bars are opaque; the scale labels are drawn underneath and may be
+/// hidden by a raised bar, exactly like printed marks behind a moving meter.
+const FILL_ALPHA: f32 = 1.0;
 
 /// A full-width wash spanning the whole ruler column — not a slim pill
 /// off to one side — precisely so `draw_ruler`'s numbers can be
@@ -988,15 +994,15 @@ const FILL_ALPHA: f32 = 0.92;
 /// Splits the meter column into one full-width bar, or two thin bars for a
 /// linked stereo pair.
 fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
-    // Every bar is half the wash column, whether the channel is mono or
-    // stereo.  A mono channel shows one left-aligned bar, not a full-width
-    // bar that reads as two stereo bars merged together.
+    // A mono channel uses the whole VU element; a linked pair splits it
+    // into two bars with a small gap.  The labels are centred in `r` in
+    // both cases, so the mono bar and its labels share the same centre.
+    if !second {
+        return (r, None);
+    }
     let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
     let left = Rectangle::new(r.position(), Size::new(half_w, r.height));
-    if !second {
-        return (left, None);
-    }
     (
         left,
         Some(Rectangle::new(
@@ -1013,24 +1019,31 @@ fn draw_meter_chrome(
     frame: &mut Frame,
     r: Rectangle,
     scale: f32,
+    meter_bg: Color,
     available: bool,
     second_available: Option<bool>,
 ) {
     let (left, right) = meter_split(r, scale, second_available.is_some());
-    draw_meter_bar_chrome(frame, left, scale, available);
+    draw_meter_bar_chrome(frame, left, scale, meter_bg, available);
     if let (Some(r2), Some(available2)) = (right, second_available) {
-        draw_meter_bar_chrome(frame, r2, scale, available2);
+        draw_meter_bar_chrome(frame, r2, scale, meter_bg, available2);
     }
 }
 
-fn draw_meter_bar_chrome(frame: &mut Frame, r: Rectangle, scale: f32, available: bool) {
+fn draw_meter_bar_chrome(
+    frame: &mut Frame,
+    r: Rectangle,
+    scale: f32,
+    meter_bg: Color,
+    available: bool,
+) {
     // The VU well starts level with the fader channel; the OVR LEDs sit
     // above it inside the strip rather than extending the well upward.
     frame.fill(
         &Path::new(|b| {
             b.rounded_rectangle(r.position(), r.size(), (METER_RADIUS * scale).into())
         }),
-        Color::from_rgb8(0x08, 0x08, 0x0a),
+        meter_bg,
     );
     if !available {
         let dash_w = r.width * 0.5;
@@ -1195,6 +1208,12 @@ const SLOT_W: f32 = 7.0;
 const CAP_W: f32 = 22.0;
 const CAP_H: f32 = 15.0;
 const CAP_RADIUS: f32 = 3.0;
+/// The FX fader draws its slot and cap at this fraction of the channel
+/// fader's scale.  The channel fader uses only the same slot width, not a
+/// smaller cap or track.
+pub(crate) const FX_FADER_SCALE: f32 = 0.62;
+pub(crate) const FX_SLOT_W: f32 = SLOT_W;
+pub(crate) const CHANNEL_SLOT_W: f32 = SLOT_W * FX_FADER_SCALE;
 /// Right-side length of the 0 dB reference mark, beyond the fader track.
 const REF_RIGHT_W: f32 = 5.0;
 
@@ -1219,10 +1238,12 @@ fn draw_track(
     scale: f32,
     fill_color: Color,
     show_scale: bool,
+    slot_w: f32,
+    marks_left: f32,
 ) {
     // One line per fader: the slot *is* the rail, for the main fader and the
     // thin FX fader alike. There is no second, thinner rail inside it.
-    let rail_w = SLOT_W * scale;
+    let rail_w = slot_w * scale;
     let cap_w = CAP_W * scale;
     let cap_h = CAP_H * scale;
     let cap_radius = CAP_RADIUS * scale;
@@ -1238,10 +1259,10 @@ fn draw_track(
     // above the cap — the main fader and the thin FX fader look like the
     // same piece of hardware at two sizes.
     let slot = Path::rectangle(
-        Point::new(cx - (SLOT_W * scale) / 2.0, r.y),
-        Size::new(SLOT_W * scale, r.height),
+        Point::new(cx - (slot_w * scale) / 2.0, r.y),
+        Size::new(slot_w * scale, r.height),
     );
-    frame.fill(&slot, theme::BG_DEEP);
+    frame.fill(&slot, theme::FADER_SLOT);
 
     // Filled portion of the rail, from the bottom up to the cap.
     if raw_y < r.y + r.height {
@@ -1257,8 +1278,11 @@ fn draw_track(
     // green -3 marks remain ruler-only; the cap is painted over them.
     if show_scale {
         let line_h = (1.0 * scale).max(1.0);
-        let margin = (1.0 * scale).max(1.0);
         let under = (5.0 * scale).max(2.0);
+        // Keep the right end anchored under the cap and shorten the mark
+        // to 60% of the VU-to-cap span, so it stays clear of the VU text.
+        let full_w = (r.x + under - marks_left).max(1.0 * scale);
+        let mark_w = full_w * 0.60;
         for db in RULER_TICKS {
             let value = 10f32.powf(db / 20.0);
             let y = track_value_y(r, value, range);
@@ -1266,12 +1290,21 @@ fn draw_track(
                 theme::MRED
             } else if db == -3.0 {
                 theme::MGREEN
+            } else if db == 0.0 {
+                Color::from_rgba8(0xff, 0xff, 0xff, 0.82)
             } else {
                 Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
             };
+            // The +3 and -3 marks are half length and right-aligned; all
+            // other graduations keep the full length.
+            let w = if db == METER_RED_DB || db == -3.0 {
+                mark_w * 0.5
+            } else {
+                mark_w
+            };
             frame.fill_rectangle(
-                Point::new(r.x - margin, y - line_h / 2.0),
-                Size::new(margin + under, line_h),
+                Point::new(r.x + under - w, y - line_h / 2.0),
+                Size::new(w, line_h),
                 color,
             );
         }
@@ -1279,18 +1312,23 @@ fn draw_track(
 
     // The fader's own centre line is the alignment mark; it is drawn as
     // part of the cap below.  Keep a fixed 0 dB reference tick on the right
-    // side of the channel as well, matching the ruler's 0 dB tick.
-    let ref_y = safe_clamp(pos_of(default_value), r.y, r.y + r.height);
-    let guide_h = (1.0 * scale).max(1.0);
-    let right_x = r.x + r.width + (2.0 * scale).max(1.0);
-    frame.fill_rectangle(
-        Point::new(right_x, ref_y - guide_h / 2.0),
-        Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
-        Color {
-            a: 0.62,
-            ..theme::TEXT_SEC
-        },
-    );
+    // side of the channel as well, matching the ruler's 0 dB tick.  The FX
+    // fader has no marks at all, so this is gated by `show_scale`.
+    if show_scale {
+        let ref_y = safe_clamp(pos_of(default_value), r.y, r.y + r.height);
+        let guide_h = (1.0 * scale).max(1.0);
+        // Repeat the brighter 0 dB line just outside the fader slot's right
+        // edge, still inside the track.
+        let right_x = cx + (slot_w * scale) / 2.0 + (1.0 * scale).max(1.0);
+        frame.fill_rectangle(
+            Point::new(right_x, ref_y - guide_h / 2.0),
+            Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
+            Color {
+                a: 0.85,
+                ..theme::TEXT_PRIMARY
+            },
+        );
+    }
 
     // Cap — flat + ridged, like a real fader cap grip, no heavy bevel.
     let cap_left = cx - cap_w / 2.0;
@@ -1314,18 +1352,27 @@ fn draw_track(
     // position marker (thin bright line, like the reference line on some
     // analog console fader caps) rather than a fourth separate line drawn
     // on top of it at the same y.
-    for i in 1..=3 {
-        let y = cap_top + (cap_h / 4.0) * i as f32;
-        let ridge = Path::rectangle(
-            Point::new(cap_left + 3.0 * scale, y - 0.5),
-            Size::new(cap_w - 6.0 * scale, 1.0),
-        );
-        let color = if i == 2 {
-            Color::from_rgba8(0xff, 0xff, 0xff, 0.65)
-        } else {
-            Color::from_rgba8(0x00, 0x00, 0x00, 0.25)
-        };
-        frame.fill(&ridge, color);
+    if show_scale {
+        for i in 1..=3 {
+            let y = cap_top + (cap_h / 4.0) * i as f32;
+            let (x, w, h) = if i == 2 {
+                // Centre line: twice the thickness, full cap width.
+                (cap_left, cap_w, (2.0 * scale).max(2.0))
+            } else {
+                (
+                    cap_left + 3.0 * scale,
+                    cap_w - 6.0 * scale,
+                    (1.0 * scale).max(1.0),
+                )
+            };
+            let ridge = Path::rectangle(Point::new(x, y - h / 2.0), Size::new(w, h));
+            let color = if i == 2 {
+                Color::from_rgb8(0x4a, 0x4c, 0x52)
+            } else {
+                Color::from_rgba8(0x00, 0x00, 0x00, 0.25)
+            };
+            frame.fill(&ridge, color);
+        }
     }
 
     frame.stroke(
@@ -1334,51 +1381,10 @@ fn draw_track(
     );
 }
 
-/// Drawn on top of the (translucent, see `FILL_ALPHA`) meter wash, so it
-/// needs to stay legible against whatever color is lit behind it —
-/// numbers centered in the same rect `draw_meter` just filled, TotalMix-
-/// style, rather than pushed into their own lane to one side of it. The
-/// tick dash sits at the rect's own right edge — right where the fader
-/// track begins right after it (see `Fader::layout_x`), the same
-/// "shared between the meter and the fader" position the reference uses.
-fn draw_ruler(frame: &mut Frame, r: Rectangle, scale: f32) {
-    // Keep the tick's right edge fixed and shorten its left end by a
-    // further 20% from the previous width (22% of the original length).
-    let full_line_w = (8.0 * scale).max(3.0);
-    let previous_line_w = full_line_w * 0.2744;
-    let line_w = previous_line_w * 0.8;
-    let line_h = (1.0 * scale).max(1.0);
-    let margin = (1.0 * scale).max(1.0);
-    // Centre the tick in the free space between the number and the fader
-    // track.  The track begins one `GAP` after the ruler lane.
-    let track_start = r.x + r.width + GAP * scale;
-    let line_right = track_start - margin;
-    let line_x = line_right - line_w;
-    // Keep the number at the previous position, leaving more space between
-    // the number and the shorter tick.
-    let label_x = line_right - previous_line_w - margin;
-    // Measured against the *full* height, matching `draw_track`'s own
-    // `pos_of` (the fader cap) and `draw_meter`'s fill: all three agree on
-    // where a given dB value sits.
-    for db in RULER_TICKS {
-        let y = safe_clamp(
-            meter_y(r, db),
-            r.y + 4.0 * scale,
-            r.y + r.height - 4.0 * scale,
-        );
-        let color = if db == METER_RED_DB {
-            theme::MRED
-        } else if db == -3.0 {
-            theme::MGREEN
-        } else {
-            Color::from_rgba8(0xff, 0xff, 0xff, 0.24)
-        };
-        frame.fill_rectangle(
-            Point::new(line_x, y - line_h / 2.0),
-            Size::new(line_w, line_h),
-            color,
-        );
-    }
+/// The VU level text, centred inside the meter column.  It is drawn before
+/// the dynamic level bar, so the bar covers it as it rises.  There are no
+/// tick marks inside the VU element.
+fn draw_level_text(frame: &mut Frame, r: Rectangle, scale: f32) {
     for db in RULER_LABEL_TICKS {
         let y = safe_clamp(
             meter_y(r, db),
@@ -1387,25 +1393,15 @@ fn draw_ruler(frame: &mut Frame, r: Rectangle, scale: f32) {
         );
         let label = if db == 0.0 {
             "0".to_string()
-        } else if db == METER_RED_DB {
-            format!("+{}", db as i32)
         } else {
             format!("{}", -db as i32)
         };
         frame.fill_text(canvas::Text {
             content: label,
-            position: Point::new(label_x, y),
-            // 0 dB is the reference the cap rests on: one step brighter.
-            color: if db == 0.0 {
-                theme::TEXT_PRIMARY
-            } else {
-                Color {
-                    a: 0.85,
-                    ..theme::TEXT_SEC
-                }
-            },
+            position: Point::new(r.x + r.width / 2.0, y),
+            color: theme::VU_LABEL,
             size: (theme::TEXT_MICRO * scale).into(),
-            align_x: advanced_text::Alignment::Right,
+            align_x: advanced_text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,
             ..canvas::Text::default()
         });
@@ -1439,10 +1435,13 @@ where
 /// (fader, mute/solo, pan) for a glance-only level readout.
 struct VuMeter {
     level: MeterFrame,
+    meter2: Option<MeterFrame>,
+    meter2_available: bool,
     scale: f32,
     available: bool,
     bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
     meter_trim: f32,
+    meter_bg: Color,
 }
 
 impl<Message> canvas::Program<Message> for VuMeter {
@@ -1493,44 +1492,58 @@ impl<Message> canvas::Program<Message> for VuMeter {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let (meter_rect, ruler_rect) = meter_column(0.0, bounds.height, self.scale);
+        let (meter_rect, _) = meter_column(0.0, bounds.height, self.scale);
         let level = if self.bus.is_some() {
             state.as_ref().map(|s| s.left).unwrap_or(self.level)
         } else {
             self.level
         };
         let (top, peak) = (level.shown(Instant::now()), level.peak);
+        let available = self.available || self.bus.is_some();
+        draw_meter_chrome(
+            &mut frame,
+            meter_rect,
+            self.scale,
+            self.meter_bg,
+            available,
+            self.meter2.map(|_| self.meter2_available),
+        );
+        draw_level_text(&mut frame, meter_rect, self.scale);
         draw_meter(
             &mut frame,
             meter_rect,
             top,
             peak,
             self.scale,
-            self.available || self.bus.is_some(),
-            // Collapsed strips are a glance-only view with no room for a
-            // second bar even if this were a linked pair — out of scope
-            // for this pass, single-bar only here.
-            None,
+            available,
+            self.meter2
+                .map(|m| (m.shown(Instant::now()), m.peak, self.meter2_available)),
         );
-        draw_ruler(&mut frame, ruler_rect, self.scale);
         vec![frame.into_geometry()]
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn vu_meter<'a, Message: 'a>(
     level: MeterFrame,
+    meter2: Option<MeterFrame>,
+    meter2_available: bool,
     height: f32,
     scale: f32,
     available: bool,
     bus: Option<(Arc<Mutex<MeterSnapshot>>, BusSlot)>,
     meter_trim: f32,
+    meter_bg: Color,
 ) -> Element<'a, Message> {
     Canvas::new(VuMeter {
         level,
+        meter2,
+        meter2_available,
         scale,
         available,
         bus,
         meter_trim,
+        meter_bg,
     })
     .width(Length::Fixed(METER_RULER_W * scale))
     .height(Length::Fixed(height))
@@ -1696,10 +1709,13 @@ mod tests {
         let bus = Arc::new(Mutex::new(MeterSnapshot::default()));
         let meter = VuMeter {
             level: MeterFrame::still(0.0),
+            meter2: None,
+            meter2_available: false,
             scale: 1.0,
             available: true,
             bus: Some((Arc::clone(&bus), BusSlot::Input(0))),
             meter_trim: 0.0,
+            meter_bg: theme::METER_WELL,
         };
         let mut state = None;
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(20.0, 100.0));
@@ -1792,12 +1808,23 @@ mod tests {
     }
 
     #[test]
-    fn mono_meter_bar_has_one_stereo_bar_width() {
+    fn mono_meter_bar_fills_the_vu_element() {
         let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
         let (mono, _) = meter_split(r, 1.0, false);
-        let (stereo_left, _) = meter_split(r, 1.0, true);
-        assert!((mono.width - stereo_left.width).abs() < f32::EPSILON);
-        assert!((mono.height - r.height).abs() < f32::EPSILON);
+        assert_eq!(mono, r);
+        let (stereo_left, stereo_right) = meter_split(r, 1.0, true);
+        let stereo_right = stereo_right.expect("a stereo meter has a right bar");
+        assert!(stereo_left.width < mono.width);
+        assert!((stereo_left.width - stereo_right.width).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_lowest_cap_position_is_minus_64_5_db() {
+        assert!((t_to_db(CAP_T) + 64.5).abs() < 1e-4);
+        assert!((t_to_db(0.0) + 65.0).abs() < 1e-4);
+        let lowest = 10f32.powf(-64.5 / 20.0);
+        assert!((vol_to_t(lowest) - CAP_T).abs() < 1e-4);
+        assert!((db_to_t(-64.5) - CAP_T).abs() < 1e-4);
     }
 
     #[test]

@@ -191,8 +191,7 @@ from a terminal:
 totalcontrol
 ```
 
-The window opens on the Quick view. The Mixer and Matrix views are in the top
-bar.
+The window opens on the Mixer view. Quick and Matrix are in the top bar.
 
 ### Desktop menu entry
 
@@ -301,24 +300,43 @@ A channel strip shows, left to right:
 - a **submix label box** on inputs and playback channels; it selects the bus
   being written (see [section 4](#4-how-the-mixer-works-submixes));
 - **mute** and **solo** (outputs use mute and **cue**);
+- two **strength readouts** showing the current left and right channel level;
 - a **level fader** with a meter beside it;
-
-Mute silences a channel without moving its fader; unmuting restores the same
-level. Solo silences the other inputs and software playbacks while the soloed
-channel keeps its fader; releasing the last solo restores the others.
-The Cue button on a hardware output copies that output's submix into the
-selected `Cue/PFL to` target, so you can listen to any hardware output through
-the monitor output. Cue is exclusive; releasing it restores the target mix.
 - a column of small buttons: `T` (trim), the settings gear, `EQ` and `D`
   (dynamics), when the unit provides them;
 - a **thin FX fader** at the top of that column, when the unit has an FX bus.
 
+The `T`, gear, `EQ` and `D` tabs show only their glyphs at rest. Hovering
+gives them a slightly darker face; an open slideout keeps a dark face behind
+its tab.
+
+The strength readouts refresh four times a second; the meter bars keep moving
+smoothly. Mute silences a channel without moving its fader; unmuting restores
+the same level. Solo silences the other inputs and software playbacks while
+the soloed channel keeps its fader; releasing the last solo restores the
+others. The Cue button on a hardware output copies that output's submix into
+the selected `Cue/PFL to` target, so you can listen to any hardware output
+through the monitor output. Cue is exclusive; releasing it restores the target
+mix. An engaged Mute button is outlined blue, Solo yellow and Cue green; the
+button face stays dark.
+
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
-meter grows to fill the space.
+meter grows to fill the space. If a slideout is open on that channel, it
+closes first; the strip narrows after the panel has slid away. The collapsed
+meter keeps the normal VU well colour: a linked pair shows two bars, a mono
+channel shows one full-width bar. A dark display face spans the bottom, so
+the `+` button sits at the same height as the full strip's collapse button;
+the face is reserved for future information.
 
-The fader range is -60 to +6 dB. Its value is shown in a dB readout under
-the fader, without a unit suffix. Double-clicking that readout opens a
+The fader range is -65 to +6 dB. The lowest cap position is -64.5 dB; the
+position below it is -65 dB and reads as inf. The narrow dark channel under
+the cap is the **fader slot**. The channel fader and the thin FX fader use
+the same slot width; the slot is slightly lighter than the page black. The
+fill below the cap is only a little lighter than the channel surface, so it
+shows the level without a bright white rail; the cap stays light. Its value
+is shown in a dB readout
+under the fader, without a unit suffix. Double-clicking that readout opens a
 numeric entry field.
 
 Output strips also carry a **balance** knob that pans the output pair
@@ -338,13 +356,15 @@ Each meter has two indicators, following TotalMix FX:
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
 following the RMS signal. Falling levels use a 20 dB/s release.
 
-The meter scale runs from -60 dB at the bottom to +6 dB at the top. The
+The meter scale runs from -65 dB at the bottom to +6 dB at the top. The
 whole area above 0 dB is red. The ruler has an unlabelled green tick at
 -3 dB, the full-scale-sine RMS target, and a red tick beside the +3 dB
-label. Each tick is one colour and extends a little under the fader cap;
-the cap covers the line at its current level. The cap's centre line aligns
-with the ticks, and a fixed 0 dB tick is also on the right side of the
-fader. A level below -60 dB reads as silence and does not draw a peak line.
+label. The green and red ticks are half the length of the other
+graduations. Each tick extends a little under the fader cap; the cap covers
+the line at its current level. The 0 dB tick is slightly brighter and is
+repeated just to the right of the fader slot. The cap's centre line aligns
+with the ticks. A level below -65 dB reads as silence and does not draw a
+peak line.
 If the device disconnects, the meters fall to silence instead of freezing.
 
 Input and playback meters are pre-fader and post-trim: they show the signal
@@ -475,7 +495,8 @@ into. The tab lights while trim is active, and its tooltip shows the value.
 
 EQ is available on every hardware input and hardware output. The panel shows
 the response plot with three coloured segments — red low, green mid, blue
-high — built from the three band frequencies.
+high — built from the three band frequencies. The panel's EQ button is
+orange while EQ is enabled.
 
 Three bands, each with gain, frequency and width:
 
@@ -513,7 +534,8 @@ The panel has:
 - an **auto level** row: on/off, maximum gain 0–18 dB, headroom 3–12 dB and
   rise time 0.1–9.9 s.
 
-A change to any knob updates the whole dynamics block of that channel.
+The ON button at the top is orange while dynamics is on. A change to any
+knob updates the whole dynamics block of that channel.
 
 ## 9. FX: sends, reverb and echo
 
@@ -522,9 +544,9 @@ FX bus. It lights while the column is out. Every input and playback strip can
 send to it:
 
 - the thin fader at the top of the strip (or `send FX` in the Settings
-  panel) is the send level; its rail fills orange when raised;
+  panel) is the send level; its fader slot fills orange when raised;
 - an output strip's thin fader (or `return FX`) is how loud the FX return
-  plays on that output; its rail fills green when raised.
+  plays on that output; its fader slot fills green when raised.
 
 The column holds **Reverb** and **Echo**, each with an on/off switch and a
 type menu. Both carry the controls TotalMix FX provides: predelay, room

@@ -2316,6 +2316,14 @@ pub struct TotalControl {
     /// Host-computed output levels (power sum of routed sources ×
     /// faders) — same ballistics as the input/playback meters.
     pub output_meters: Vec<MeterAnim>,
+    /// Snapshot of the two M1 strength readouts per channel, refreshed at
+    /// `STRENGTH_READOUT_MS` instead of at the meter tick rate.  Indexing
+    /// matches the meter vectors; `[0]` is the left channel and `[1]` the
+    /// right channel of a linked pair.
+    pub strength_inputs: Vec<[Option<f32>; 2]>,
+    pub strength_playbacks: Vec<[Option<f32>; 2]>,
+    pub strength_outputs: Vec<[Option<f32>; 2]>,
+    pub strength_at: Instant,
     /// UCX FX bus meters: send and return.
     pub fx_meters: [MeterAnim; 2],
     /// UCX FX bus overload indicators: send and return.
@@ -2360,6 +2368,10 @@ pub struct TotalControl {
     /// one is still sliding out.  It opens after that shrink finishes, so
     /// switching Settings ↔ EQ ↔ Trim never snaps the old panel away.
     pending_flyout: Option<(ChannelId, strip::FlyoutKind)>,
+    /// Channels queued to collapse after their open slideouts finish
+    /// closing.  Collapsing a strip with a panel first slides the panel
+    /// away, then starts the width tween.
+    pending_collapse: Option<Vec<ChannelId>>,
     /// Manual UI zoom for the mixer/matrix views — every text size and
     /// widget dimension there is multiplied by this. Changed only by
     /// `ZoomIn`/`ZoomOut`/`ZoomReset`/Ctrl+molette (`zoom`); it is NOT tied
@@ -2835,6 +2847,10 @@ const OSC_LOG_MAX: usize = 500;
 /// timed in real milliseconds rather than "per tick" so it stays correct if
 /// that interval ever changes.
 const METER_TICK_MS: f32 = 50.0;
+/// Refresh interval for the numerical strength fields.  The meters keep
+/// animating at the fast tick, but the numbers are easier to read when
+/// they move four times a second.
+const STRENGTH_READOUT_MS: u64 = 250;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
@@ -2850,6 +2866,28 @@ const METER_PEAK_HOLD_MS: f32 = 2000.0;
 const PEAK_RELEASE_START: f32 = 0.26;
 const PEAK_RELEASE_END: f32 = 0.06;
 const PEAK_RELEASE_MS: f32 = 260.0;
+
+/// Copy the current meter values into the slow M1 readout layout.  A linked
+/// pair carries its right-hand value in the left channel's `[1]` slot; split
+/// channels leave it empty.
+fn strength_snapshot(
+    meters: &[MeterAnim],
+    linked: impl Fn(usize) -> bool,
+) -> Vec<[Option<f32>; 2]> {
+    meters
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let left = Some(m.frame().value);
+            let right = if i % 2 == 0 && linked(i / 2) {
+                meters.get(i + 1).map(|r| r.frame().value)
+            } else {
+                None
+            };
+            [left, right]
+        })
+        .collect()
+}
 
 /// Per-channel VU ballistics state.
 #[derive(Clone, Copy, Debug)]
@@ -3052,7 +3090,7 @@ pub fn new_with_device(
         sel_out: 0,
         sel_out_side: 0,
         last_panel_out: None,
-        view: View::Quick,
+        view: View::Mixer,
         quick_channel: ChannelId::Input(0),
         editing: None,
         edit_buf: String::new(),
@@ -3063,6 +3101,10 @@ pub fn new_with_device(
         playback_tap,
         playback_tap_channels: 0,
         output_meters: vec![MeterAnim::new(); n_outputs],
+        strength_inputs: vec![[None, None]; n_inputs],
+        strength_playbacks: vec![[None, None]; n_playbacks],
+        strength_outputs: vec![[None, None]; n_outputs],
+        strength_at: Instant::now(),
         fx_meters: [MeterAnim::new(), MeterAnim::new()],
         fx_overload: [false, false],
         collapsed: HashSet::new(),
@@ -3071,6 +3113,7 @@ pub fn new_with_device(
         flyout_anim: HashMap::new(),
         stereo_anim: HashMap::new(),
         pending_flyout: None,
+        pending_collapse: None,
         ui_scale: theme::SCALE_DEFAULT,
         fullscreen: false,
         // Matches `window::Settings::size` in main.rs — updated for real
@@ -7133,6 +7176,15 @@ fn open_flyout(
     kind: strip::FlyoutKind,
     now: Instant,
 ) -> bool {
+    // Opening a panel on a strip that is waiting to collapse cancels the
+    // queued collapse; the user's latest action wins.
+    if state
+        .pending_collapse
+        .as_ref()
+        .is_some_and(|group| group.contains(&cid))
+    {
+        state.pending_collapse = None;
+    }
     if kind == strip::FlyoutKind::Route {
         let old_routes: Vec<_> = state
             .flyout_open
@@ -8153,6 +8205,20 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 m.step_elapsed(fx_levels[i]);
             }
             state.fx_overload = state.device.fx_overload().unwrap_or([false, false]);
+            // The numerical strength fields read a slower snapshot than the
+            // meters: 250 ms keeps them legible while the bars stay smooth.
+            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_MS) {
+                state.strength_at = Instant::now();
+                state.strength_inputs = strength_snapshot(&state.input_meters, |pair| {
+                    state.device.input_pair_linked(pair)
+                });
+                state.strength_playbacks = strength_snapshot(&state.playback_meters, |pair| {
+                    state.device.playback_linked(pair)
+                });
+                state.strength_outputs = strength_snapshot(&state.output_meters, |pair| {
+                    state.device.output_linked(pair)
+                });
+            }
             // Meter motion does not need the whole view rebuilt: the
             // fader canvases interpolate between these keyframes and ask
             // for their own redraws (see `widgets::fader`).  The idle tick
@@ -9259,16 +9325,47 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::ToggleCollapse(cid) => {
             select_strip(state, cid);
             let target = !state.collapsed.contains(&cid);
-            if state.selected.len() > 1 && state.selected.contains(&cid) {
+            let group: Vec<ChannelId> =
+                if state.selected.len() > 1 && state.selected.contains(&cid) {
+                    state.selected.iter().copied().collect()
+                } else {
+                    vec![cid]
+                };
+            if target {
+                let now = Instant::now();
+                let open: Vec<_> = state
+                    .flyout_open
+                    .iter()
+                    .filter(|&&(c, _)| group.contains(&c))
+                    .copied()
+                    .collect();
+                let closing = state
+                    .flyout_anim
+                    .iter()
+                    .any(|(&(c, _), a)| group.contains(&c) && a.is_settling(now));
+                if !open.is_empty() || closing {
+                    // Let every panel finish sliding out before narrowing
+                    // the strips it belonged to.
+                    state.pending_flyout = None;
+                    for (c, kind) in open {
+                        begin_flyout_close(state, c, kind, now);
+                    }
+                    state.pending_collapse = Some(group);
+                } else {
+                    state.pending_collapse = None;
+                    for sel in group {
+                        set_collapsed(state, sel, target);
+                    }
+                }
+            } else {
+                state.pending_collapse = None;
                 // Uniform target for the whole group — the opposite of
                 // what the clicked strip currently is — rather than each
                 // toggling its own state independently, which would leave
                 // them out of sync with each other.
-                for sel in state.selected.clone() {
+                for sel in group {
                     set_collapsed(state, sel, target);
                 }
-            } else {
-                set_collapsed(state, cid, target);
             }
         }
         Message::ToggleFlyout(cid, kind) => {
@@ -9298,6 +9395,21 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 .is_some_and(|a| a.elapsed_ms(now) >= a.max_ms)
             {
                 state.assign_anim = None;
+            }
+            if let Some(group) = state.pending_collapse.clone() {
+                let waiting = group.iter().any(|cid| {
+                    state.flyout_open.iter().any(|(c, _)| c == cid)
+                        || state
+                            .flyout_anim
+                            .iter()
+                            .any(|(&(c, _), a)| c == *cid && a.is_settling(now))
+                });
+                if !waiting {
+                    state.pending_collapse = None;
+                    for cid in group {
+                        set_collapsed(state, cid, true);
+                    }
+                }
             }
             if let Some((cid, kind)) = state.pending_flyout {
                 let still_closing = state.flyout_anim.iter().any(|(&(c, k), a)| {
@@ -10325,6 +10437,7 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.hovered_strip = None;
     state.matrix_hover = None;
     state.pending_flyout = None;
+    state.pending_collapse = None;
     state.flyout_anim.clear();
     state.collapse_anim.clear();
     state.stereo_anim.clear();
@@ -10342,6 +10455,10 @@ fn switch_device(state: &mut TotalControl, target: DeviceTarget) -> Result<(), S
     state.input_meters = vec![MeterAnim::new(); state.device.inputs().len()];
     state.playback_meters = vec![MeterAnim::new(); state.device.playbacks().len()];
     state.output_meters = vec![MeterAnim::new(); state.device.outputs().len()];
+    state.strength_inputs = vec![[None, None]; state.device.inputs().len()];
+    state.strength_playbacks = vec![[None, None]; state.device.playbacks().len()];
+    state.strength_outputs = vec![[None, None]; state.device.outputs().len()];
+    state.strength_at = Instant::now();
     state.fx_meters = [MeterAnim::new(), MeterAnim::new()];
     state.fx_overload = [false, false];
     state.playback_tap = if state.device.is_mock() || state.device.has_device_playback_meters() {
@@ -10559,6 +10676,7 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     if !state.collapse_anim.is_empty()
         || !state.flyout_anim.is_empty()
         || !state.stereo_anim.is_empty()
+        || state.pending_collapse.is_some()
         || state.fx_anim.is_some()
         || state.assign_anim.is_some()
     {
@@ -12761,6 +12879,7 @@ fn strip_params<'a>(
         meter_available: false,
         meter2: None,
         meter2_available: false,
+        readout: [None, None],
         meter_bus,
         meter_slot,
         meter_trim: 0.0,
@@ -12788,9 +12907,6 @@ fn strip_params<'a>(
         has_trim: false,
         trim: 0.0,
         trim_tip: String::new(),
-        slot_trim: true,
-        slot_eq: false,
-        slot_dyn: false,
         has_phase: false,
         phase: false,
         loopback: false,
@@ -12896,6 +13012,11 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: state.device.has_input_meter(i),
+                readout: state
+                    .strength_inputs
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 meter_trim: ch.trim,
                 has_48v,
                 has_pad: caps.input_pad && ch.has_pad,
@@ -12984,6 +13105,11 @@ fn strip_params<'a>(
                     .map(MeterAnim::frame)
                     .unwrap_or_else(|| fader::MeterFrame::still(0.0)),
                 meter_available: playback_meter_available(state, i),
+                readout: state
+                    .strength_playbacks
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 meter_trim: ch.trim,
                 stereo_linked: state.device.playback_linked(i / 2),
                 mute: ch.mute,
@@ -13050,6 +13176,11 @@ fn strip_params<'a>(
                 // when every nonzero crosspoint feeding this pair has
                 // a real meter (see `output_meter_available`).
                 meter_available: output_meter_available(state, i),
+                readout: state
+                    .strength_outputs
+                    .get(i)
+                    .copied()
+                    .unwrap_or([None, None]),
                 has_eq: ch.eq.is_some(),
                 eq_enabled: ch.eq.is_some_and(|e| e.enabled),
                 has_dynamics: caps.dynamics && ch.dynamics.is_some(),
@@ -14285,7 +14416,7 @@ fn dynamics_popover(
     let toggle = |on: bool, msg: Message| -> Element<'static, Message> {
         button(text(if on { "ON" } else { "OFF" }).size(theme::TEXT_XS * scale))
             .padding([0.0, theme::SPACE_SM * scale])
-            .style(theme::toggle_button(on, theme::ACCENT))
+            .style(theme::toggle_button(on, theme::PHANTOM))
             .on_press(msg)
             .into()
     };
@@ -14596,7 +14727,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
         row![
             button(text("EQ").size(theme::TEXT_XS * scale))
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
-                .style(theme::toggle_button(eq.enabled, theme::ACCENT))
+                .style(theme::toggle_button(eq.enabled, theme::PHANTOM))
                 .on_press(Message::EqEnabled(cid, !eq.enabled)),
             text(if eq.enabled { "enabled" } else { "bypassed" })
                 .size(theme::TEXT_XS * scale)
@@ -17635,7 +17766,7 @@ mod tests {
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, MeterAnim, Message, PwClock,
-        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices,
+        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices, strength_snapshot,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
@@ -18412,6 +18543,21 @@ mod tests {
             "one attack tick should jump most of the way: {}",
             m.frame().value
         );
+    }
+
+    #[test]
+    fn strength_snapshot_links_pairs_and_leaves_split_empty() {
+        let mut m = vec![MeterAnim::new(); 3];
+        m[0].step(0.5);
+        m[1].step(0.25);
+        m[2].step(0.1);
+        let v: Vec<f32> = m.iter().map(|m| m.frame().value).collect();
+        let snap = strength_snapshot(&m, |pair| pair == 0);
+        assert_eq!(snap[0], [Some(v[0]), Some(v[1])]);
+        assert_eq!(snap[1], [Some(v[1]), None]);
+        assert_eq!(snap[2], [Some(v[2]), None]);
+        let split = strength_snapshot(&m, |_| false);
+        assert_eq!(split[0], [Some(v[0]), None]);
     }
 
     #[test]
@@ -20066,6 +20212,41 @@ mod tests {
         assert_eq!(state.device.inputs()[4].trim, 0.0, "no boost");
         let _ = update(&mut state, Message::TrimChanged(ChannelId::Input(4), -99.0));
         assert_eq!(state.device.inputs()[4].trim, -65.0, "floor");
+    }
+
+    #[test]
+    fn a_fresh_state_opens_on_the_mixer() {
+        let state = new(true, None, None);
+        assert_eq!(state.view, View::Mixer);
+    }
+
+    #[test]
+    fn collapsing_a_channel_closes_its_slideout_first() {
+        let mut state = new(true, None, None);
+        let cid = ChannelId::Input(0);
+        let _ = update(
+            &mut state,
+            Message::ToggleFlyout(cid, strip::FlyoutKind::Settings),
+        );
+        assert!(state
+            .flyout_open
+            .contains(&(cid, strip::FlyoutKind::Settings)));
+
+        let _ = update(&mut state, Message::ToggleCollapse(cid));
+        assert!(!state.collapsed.contains(&cid));
+        assert!(!state
+            .flyout_open
+            .contains(&(cid, strip::FlyoutKind::Settings)));
+        assert!(state
+            .pending_collapse
+            .as_ref()
+            .is_some_and(|group| group.contains(&cid)));
+
+        // The flyout has finished sliding away.
+        state.flyout_anim.clear();
+        let _ = update(&mut state, Message::CollapseTick);
+        assert!(state.collapsed.contains(&cid));
+        assert_eq!(state.pending_collapse, None);
     }
 
     #[test]
