@@ -15,7 +15,7 @@ use crate::widgets::fader::{
     fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame, CHANNEL_SLOT_W, FX_FADER_SCALE,
     FX_SLOT_W,
 };
-use crate::widgets::layout::{ChannelKind, Features, StripLayout, SUBMIX_H};
+use crate::widgets::layout::{ChannelKind, Features, Rect, StripLayout, SUBMIX_H};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -372,8 +372,8 @@ pub(crate) fn hint<'a>(
 /// Place one element at a slot from `StripLayout`.
 fn pinned<'a>(
     content: impl Into<Element<'a, Message>>,
-    rect: Rectangle,
-    card: Rectangle,
+    rect: Rect,
+    card: Rect,
 ) -> Element<'a, Message> {
     Pin::new(
         container(content.into())
@@ -871,6 +871,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         scale,
         Features {
             fx: p.fx_level.is_some(),
+            ..Features::default()
         },
     );
     let card = layout.card;
@@ -1317,6 +1318,36 @@ mod tests {
     fn collapsed_strip_fills_the_standard_strip_height() {
         assert!((COLLAPSED_METER_H + COLLAPSED_CHROME_H - STRIP_H).abs() < f32::EPSILON);
         assert!(COLLAPSED_METER_H > 0.0);
+    }
+
+    #[test]
+    fn preview_visual_tokens_match_the_gui() {
+        let visual = totalcontrol_layout::VISUAL;
+        assert_eq!(theme::TEXT_MD, visual.name_size);
+        assert_eq!(theme::TEXT_SM, visual.button_text_size);
+        assert_eq!(theme::TEXT_XS, visual.readout_size);
+        assert_eq!(theme::TEXT_MICRO, visual.micro_size);
+        assert_eq!(SETTINGS_GLYPH, visual.gear_glyph_size);
+        let close = |a: f32, b: f32| assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        close(crate::widgets::fader::CHANNEL_SLOT_W, visual.fader_slot_w);
+        close(
+            crate::widgets::fader::FX_SLOT_W * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fader_slot_w,
+        );
+        close(crate::widgets::fader::CAP_W, visual.fader_cap_w);
+        close(crate::widgets::fader::CAP_H, visual.fader_cap_h);
+        close(
+            crate::widgets::fader::CAP_W * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fx_cap_w,
+        );
+        close(
+            crate::widgets::fader::CAP_H * crate::widgets::fader::FX_FADER_SCALE,
+            visual.fx_cap_h,
+        );
+        close(
+            crate::widgets::knob::DIAMETER,
+            visual.knob_diameter,
+        );
     }
 
     #[test]

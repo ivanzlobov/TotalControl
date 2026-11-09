@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::device_service::MeterSnapshot;
 use crate::theme;
-use crate::widgets::layout::MIDDLE_H;
+use crate::widgets::layout::{MIDDLE_H, MONO_BAR_RATIO};
 
 fn trim_factor(db: f32) -> f32 {
     10f32.powf(db.clamp(-65.0, 0.0) / 20.0)
@@ -994,11 +994,15 @@ const FILL_ALPHA: f32 = 1.0;
 /// Splits the meter column into one full-width bar, or two thin bars for a
 /// linked stereo pair.
 fn meter_split(r: Rectangle, scale: f32, second: bool) -> (Rectangle, Option<Rectangle>) {
-    // A mono channel uses the whole VU element; a linked pair splits it
-    // into two bars with a small gap.  The labels are centred in `r` in
-    // both cases, so the mono bar and its labels share the same centre.
+    // A mono bar is centred and just covers the level text; a linked pair
+    // uses the full VU width split into two bars with a small gap.
     if !second {
-        return (r, None);
+        let width = r.width * MONO_BAR_RATIO;
+        let left = Rectangle::new(
+            Point::new(r.x + (r.width - width) / 2.0, r.y),
+            Size::new(width, r.height),
+        );
+        return (left, None);
     }
     let gap = 2.0 * scale;
     let half_w = ((r.width - gap) / 2.0).max(0.0);
@@ -1205,8 +1209,8 @@ fn draw_meter_bar(
 /// The narrow recessed channel a compact (no-meter) fader slides in — one
 /// dark strip, not a wide slot.
 const SLOT_W: f32 = 7.0;
-const CAP_W: f32 = 22.0;
-const CAP_H: f32 = 15.0;
+pub(crate) const CAP_W: f32 = 22.0;
+pub(crate) const CAP_H: f32 = 15.0;
 const CAP_RADIUS: f32 = 3.0;
 /// The FX fader draws its slot and cap at this fraction of the channel
 /// fader's scale.  The channel fader uses only the same slot width, not a
@@ -1808,10 +1812,11 @@ mod tests {
     }
 
     #[test]
-    fn mono_meter_bar_fills_the_vu_element() {
+    fn mono_meter_bar_is_centred_and_text_sized() {
         let r = Rectangle::new(Point::new(10.0, 20.0), Size::new(METER_W, 200.0));
         let (mono, _) = meter_split(r, 1.0, false);
-        assert_eq!(mono, r);
+        assert!((mono.width - r.width * MONO_BAR_RATIO).abs() < 0.01);
+        assert!((mono.center_x() - r.center_x()).abs() < 0.01);
         let (stereo_left, stereo_right) = meter_split(r, 1.0, true);
         let stereo_right = stereo_right.expect("a stereo meter has a right bar");
         assert!(stereo_left.width < mono.width);

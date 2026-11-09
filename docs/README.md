@@ -1,7 +1,8 @@
 # Documentation
 
-TotalControl has one architecture document, a GUI specification, one protocol
-specification per device, an OSC specification and a user manual.
+TotalControl has one architecture document, a GUI specification, a shared
+channel-template schema, one protocol specification per device, an OSC
+specification and a user manual.
 
 ## Core documents
 
@@ -9,6 +10,7 @@ specification per device, an OSC specification and a user manual.
 |---|---|
 | [`TOTALCONTROL-ARCHITECTURE.md`](TOTALCONTROL-ARCHITECTURE.md) | runtime layers, device service, data flow, state ownership, driver and latency model |
 | [`spec/TOTALCONTROL-GUI-SPEC.md`](spec/TOTALCONTROL-GUI-SPEC.md) | layout, controls, panels, gestures and motion |
+| [`spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) | shared channel-template schema, invariants and layout preview |
 | [`spec/TOTALCONTROL-OSC-SPEC.md`](spec/TOTALCONTROL-OSC-SPEC.md) | TotalMix FX OSC transport, pages, scales and feedback |
 | [`TOTALCONTROL-Manual.md`](TOTALCONTROL-Manual.md) | installation, setup, use and troubleshooting |
 | [`DEVELOPMENT-TOOLS.md`](DEVELOPMENT-TOOLS.md) | development backends, capture and probe tools |

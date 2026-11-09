@@ -4,6 +4,7 @@ members = [
     "totalcontrol-core",
     "totalcontrol-tui",
     "totalcontrol-gui",
+    "totalcontrol-layout",
     "totalcontrol-usb",
     "totalcontrol-sys",
 ]

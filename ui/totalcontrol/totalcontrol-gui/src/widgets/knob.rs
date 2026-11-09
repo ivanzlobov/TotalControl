@@ -21,7 +21,7 @@ use crate::theme;
 /// — see `Bus_design.png`. Sized to read as a real focal point on the
 /// strip (roughly what the reference shows relative to the card width),
 /// not a small accent.
-const DIAMETER: f32 = 42.0;
+pub(crate) const DIAMETER: f32 = 42.0;
 const BORDER_WIDTH: f32 = 1.5;
 const TICK_LEN: f32 = 5.0;
 /// The tick extends past `DIAMETER`'s own edge (see `draw`); the canvas

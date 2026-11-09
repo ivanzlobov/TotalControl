@@ -1,0 +1,8 @@
+[package]
+name = "totalcontrol-layout"
+version = "0.1.0"
+edition = "2021"
+description = "Channel template schema and layout preview for TotalControl"
+license = "GPL-3.0-only"
+
+[dependencies]

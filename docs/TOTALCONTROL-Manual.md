@@ -325,7 +325,7 @@ the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space. If a slideout is open on that channel, it
 closes first; the strip narrows after the panel has slid away. The collapsed
 meter keeps the normal VU well colour: a linked pair shows two bars, a mono
-channel shows one full-width bar. A dark display face spans the bottom, so
+channel shows one centred bar covering the level text. A dark display face spans the bottom, so
 the `+` button sits at the same height as the full strip's collapse button;
 the face is reserved for future information.
 
@@ -363,8 +363,9 @@ label. The green and red ticks are half the length of the other
 graduations. Each tick extends a little under the fader cap; the cap covers
 the line at its current level. The 0 dB tick is slightly brighter and is
 repeated just to the right of the fader slot. The cap's centre line aligns
-with the ticks. A level below -65 dB reads as silence and does not draw a
-peak line.
+with the ticks; the two outer cap ridges are inset and lighter than the
+centre line. A level below -65 dB reads as silence and does not draw a peak
+line.
 If the device disconnects, the meters fall to silence instead of freezing.
 
 Input and playback meters are pre-fader and post-trim: they show the signal

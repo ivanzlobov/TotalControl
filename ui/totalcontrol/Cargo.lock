@@ -3869,7 +3869,12 @@ dependencies = [
  "serde_json",
  "tokio",
  "totalcontrol-core",
+ "totalcontrol-layout",
 ]
+
+[[package]]
+name = "totalcontrol-layout"
+version = "0.1.0"
 
 [[package]]
 name = "totalcontrol-sys"

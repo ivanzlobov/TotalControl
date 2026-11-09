@@ -150,8 +150,31 @@ From `ui/totalcontrol`:
 ```sh
 cargo test -p totalcontrol-core --lib --features alsa
 cargo test -p totalcontrol-gui
+cargo test -p totalcontrol-layout
 cargo build --workspace
 ```
+
+## Channel layout preview
+
+`totalcontrol-layout` owns the shared channel template schema and produces
+the preview used to review channel layout changes without launching the GUI:
+
+```sh
+cd ui/totalcontrol
+cargo run -p totalcontrol-layout --bin channel-preview -- /tmp/channel-preview.svg 2
+```
+
+The second argument is the zoom.  Open the SVG directly or convert it for a
+quick raster review:
+
+```sh
+magick /tmp/channel-preview.svg /tmp/channel-preview.png
+```
+
+The command renders the standard template set and the semantic preview
+colour categories.  See
+[`spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md)
+for the schema and the change workflow.
 
 `scripts/audio-health.sh` and `scripts/reload-kernel.sh` are transport and
 driver helpers. `scripts/install-dkms.sh` is the supported driver installer;
@@ -166,7 +189,7 @@ entry can point at it so a menu launch never starts a stale build.
 The application license split is described in `ui/totalcontrol/LICENSE`:
 
 - `totalcontrol-core`: MIT
-- `totalcontrol-gui` and `totalcontrol-tui`: GPL-3.0-only
+- `totalcontrol-gui`, `totalcontrol-layout` and `totalcontrol-tui`: GPL-3.0-only
 - `totalcontrol-usb`: GPL-3.0-or-later
 - `totalcontrol-sys`: GPL-3.0
 
