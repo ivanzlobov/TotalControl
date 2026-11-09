@@ -450,7 +450,10 @@ fn advance_bus(
     let peak = peak.max(value);
     let peak_since = if peak > old.peak { now } else { old.peak_since };
     MeterFrame {
-        prev: current,
+        // The bus already runs at the device rate; a second 120 ms
+        // interpolation here only delayed the visible rise.  Falling
+        // levels still use the release computed above.
+        prev: value,
         value,
         peak,
         peak_since,
@@ -833,12 +836,22 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
         // Static layer 1: the rail and its cap, which only move with the
         // value.
         if self.show_track {
+            let now = Instant::now();
+            let scroll_value = state
+                .last_scroll
+                .filter(|t| t.elapsed() < SCROLL_IDLE)
+                .and_then(|_| state.scroll_t)
+                .map(t_to_vol);
             let display_value = if state.dragging {
                 state.drag_t.map(t_to_vol).unwrap_or(self.value)
+            } else if let Some(value) = scroll_value {
+                // The service round-trip can lag the wheel by a snapshot;
+                // show the accumulated wheel target immediately.
+                value
             } else {
                 state
                     .display
-                    .map(|d| d.at(Instant::now()))
+                    .map(|d| d.at(now))
                     .unwrap_or(self.value)
             };
             let marks_left = meter_x + METER_W * self.scale;
@@ -1816,6 +1829,13 @@ mod tests {
         let stereo_right = stereo_right.expect("a stereo meter has a right bar");
         assert!(stereo_left.width < mono.width);
         assert!((stereo_left.width - stereo_right.width).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_rising_bus_meter_shows_the_new_level_on_the_same_frame() {
+        let now = Instant::now();
+        let frame = advance_bus(MeterFrame::still(0.0), 1.0, 1.0, true, now);
+        assert!((frame.shown(now) - 1.0).abs() < 1e-6);
     }
 
     #[test]

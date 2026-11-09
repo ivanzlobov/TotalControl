@@ -10670,9 +10670,9 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
     }
     // Only running while a collapse/expand transition is actually in
     // flight — plain `column`/`container` widgets can't self-request a
-    // redraw the way the canvas-based fader/meter animations do, so a
-    // much faster timer stands in for that during the ~160ms transition,
-    // then switches itself back off once `collapse_anim` empties out.
+    // redraw the way the canvas-based fader/meter animations do. 16 ms
+    // gives a stable 60 Hz; the former 8 ms rate asked for 120 layout
+    // passes a second and made the width tween stutter on a dense mixer.
     if !state.collapse_anim.is_empty()
         || !state.flyout_anim.is_empty()
         || !state.stereo_anim.is_empty()
@@ -10680,7 +10680,7 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         || state.fx_anim.is_some()
         || state.assign_anim.is_some()
     {
-        subs.push(iced::time::every(Duration::from_millis(8)).map(|_| Message::CollapseTick));
+        subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::CollapseTick));
     }
     // The notification-area icon and second launches, see `tray`.
     subs.push(crate::tray::subscription().map(Message::Tray));

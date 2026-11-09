@@ -275,13 +275,23 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        let now = Instant::now();
+        let scroll_value = state
+            .last_scroll
+            .filter(|t| t.elapsed() < SCROLL_IDLE)
+            .and_then(|_| state.scroll_t)
+            .map(|t| self.t_to_value(t));
         let display_value = if state.dragging {
             state
                 .drag_t
                 .map(|t| self.t_to_value(t))
                 .unwrap_or(self.value)
+        } else if let Some(value) = scroll_value {
+            // Show the accumulated wheel target before the command round
+            // trip confirms it in the model.
+            value
         } else {
-            state.display.map(|d| d.at(Instant::now())).unwrap_or(self.value)
+            state.display.map(|d| d.at(now)).unwrap_or(self.value)
         };
         // Everything below is a pure function of these: so the geometry is
         // built once and reused until one of them changes. A mixer has
