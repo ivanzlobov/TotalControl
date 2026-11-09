@@ -34,6 +34,12 @@
  *   interface 0 has the ISO endpoints 0x0e OUT / 0x8f IN; interface 5 has
  *   the Windows interrupt endpoints 0x01/0x82.  The module parameter
  *   ucx_if5 chooses which personality binds (default ISO IF0).
+ *
+ * Babyface (2a39:3fc7):
+ *   UCX-family layout.  Interface 0 has the ISO endpoints 0x03 OUT /
+ *   0x84 IN with the UCX packet format; capture carries 12/8/6 words and
+ *   playback 14/10/8 words at 1x/2x/4x.  Interface 1 bulk IN 0x85 streams
+ *   the DSP meter packets.  USB-MIDI is on interface 2.
  */
 #ifndef FFUC_H
 #define FFUC_H
@@ -57,6 +63,7 @@
 #define FFUC_PRODUCT_UC_PC	0x3fc5
 #define FFUC_PRODUCT_UC_MAC	0x3fc6
 #define FFUC_PRODUCT_UCX	0x3fc9
+#define FFUC_PRODUCT_BABYFACE	0x3fc7
 
 #define FFUC_IFACE_NONE		0xff
 
@@ -128,12 +135,18 @@ struct ffuc_mode {
 	unsigned int alt;
 	unsigned int neps;		/* endpoints per direction */
 	unsigned int words;		/* channels (32-bit words) per endpoint */
+	unsigned int out_words;		/* playback words; 0 = same as words */
 	unsigned int pkt_frames;	/* interrupt: frames in one max packet */
 	/* ISO only */
 	unsigned int in_mps;
 	unsigned int out_mps;
 	unsigned int max_frames;
 };
+
+static inline unsigned int ffuc_mode_out_words(const struct ffuc_mode *m)
+{
+	return m->out_words ? m->out_words : m->words;
+}
 
 struct ffuc_urb {
 	struct urb *urb;
@@ -194,11 +207,18 @@ struct ffuc_device_desc {
 	u8 midi_iface;
 	u8 midi_out_ep;
 	u8 midi_in_ep;
-	unsigned int max_channels;
+	unsigned int max_channels;	/* capture channels */
+	unsigned int max_playback;	/* playback channels; 0 = max_channels */
 	unsigned int max_rate;
 	unsigned int meter_len;
 	const struct ffuc_ops *ops;
 };
+
+static inline unsigned int
+ffuc_desc_playback(const struct ffuc_device_desc *d)
+{
+	return d->max_playback ? d->max_playback : d->max_channels;
+}
 
 /* USB-MIDI output parser state, kept across rawmidi chunks. */
 struct ffuc_midi_tx {

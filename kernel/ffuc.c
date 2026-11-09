@@ -91,6 +91,15 @@ static const struct ffuc_mode ffuc_ucx_modes[] = {
 	{ .alt = 3, .neps = 1, .words = 12, .in_mps = 1208, .out_mps = 1304, .max_frames = 25 },
 };
 
+/* Babyface ISO interface 0.  Same packet format as the UCX; the counts
+ * follow from wMaxPacketSize: IN = 4 + frames * words * 4,
+ * OUT = frames * (1 + out_words) * 4. */
+static const struct ffuc_mode ffuc_babyface_modes[] = {
+	{ .alt = 1, .neps = 1, .words = 12, .out_words = 14, .in_mps = 340, .out_mps = 420, .max_frames = 7 },
+	{ .alt = 2, .neps = 1, .words = 8, .out_words = 10, .in_mps = 420, .out_mps = 572, .max_frames = 13 },
+	{ .alt = 3, .neps = 1, .words = 6, .out_words = 8, .in_mps = 604, .out_mps = 900, .max_frames = 25 },
+};
+
 static const unsigned int ffuc_rates[] = {
 	32000, 44100, 48000, 64000, 88200, 96000, 128000, 176400, 192000,
 	352800, 384000, 705600, 768000,
@@ -126,7 +135,9 @@ static unsigned int ffuc_mode_channels(struct ffuc *chip, unsigned int rate)
 {
 	const struct ffuc_mode *m = &chip->modes[ffuc_mode_index(rate)];
 
-	return m->neps * m->words;
+	/* Playback words: the stream open/close words mute and unmute
+	 * playback channels. */
+	return m->neps * ffuc_mode_out_words(m);
 }
 
 /*
@@ -135,18 +146,23 @@ static unsigned int ffuc_mode_channels(struct ffuc *chip, unsigned int rate)
  * 14/12 words and the remaining channels stay silent.  This lets PipeWire
  * keep one 18-channel node while the card runs at every supported rate.
  */
-static unsigned int ffuc_max_channels(struct ffuc *chip, unsigned int rate)
+static unsigned int ffuc_max_channels(struct ffuc *chip, int stream,
+				      unsigned int rate)
 {
 	(void)rate;
-	return chip->desc->max_channels;
+	return stream == SNDRV_PCM_STREAM_PLAYBACK ?
+	       ffuc_desc_playback(chip->desc) : chip->desc->max_channels;
 }
 
 static unsigned int ffuc_max_words(struct ffuc *chip)
 {
 	unsigned int i, n = 0;
 
-	for (i = 0; i < chip->desc->n_modes; i++)
-		n = max(n, chip->modes[i].neps * chip->modes[i].words);
+	for (i = 0; i < chip->desc->n_modes; i++) {
+		const struct ffuc_mode *m = &chip->modes[i];
+
+		n = max(n, m->neps * max(m->words, ffuc_mode_out_words(m)));
+	}
 	return n;
 }
 
@@ -285,6 +301,7 @@ static int ffuc_uc_init(struct ffuc *chip)
 {
 	int i, ret;
 
+	/* The vendor driver sends 18 slot pairs for every model. */
 	for (i = 0; i < FFUC_MAX_CHANNELS; i++) {
 		ret = ffuc_vendor_send(chip, FFUC_REQ_CHAN_INIT, 0x0001, i,
 				       NULL, 0);
@@ -383,19 +400,29 @@ static int ffuc_uc_hw_mute(struct ffuc *chip, bool mute)
 				0xffff, 0xc000, NULL, 0);
 }
 
-/* Requests 19/20 mute/unmute playback channels by mask: channel n is bit
- * n + 2, high half in wValue, low half in wIndex. */
+/* Requests 19/20 mute/unmute playback channels by mask.  UC/UCX: channel
+ * n is bit n + 2, high half in wValue, low half in wIndex.  Babyface: see
+ * below. */
 static int ffuc_playback_mask(struct ffuc *chip, bool mute,
 			      unsigned int channels)
 {
 	u32 mask;
 	u16 idx, val;
 
-	if (channels > 30)
-		channels = 30;
-	mask = ((1u << channels) - 1) << 2;
-	val = mask >> 16;
-	idx = mask & 0xffff;
+	if (chip->desc->model == FFUC_MODEL_BABYFACE) {
+		/* The Babyface reads an 18-bit mask packed like a 0x12 level:
+		 * channel n is bit n, wValue = mask >> 2, wIndex bits 14-15 =
+		 * mask bits 0-1.  The vendor driver sends all 18 bits. */
+		mask = (1u << FFUC_MAX_CHANNELS) - 1;
+		val = mask >> 2;
+		idx = (mask & 3) << 14;
+	} else {
+		if (channels > 30)
+			channels = 30;
+		mask = ((1u << channels) - 1) << 2;
+		val = mask >> 16;
+		idx = mask & 0xffff;
+	}
 	return ffuc_vendor_send(chip,
 				mute ? FFUC_REQ_UCX_MUTE :
 				       FFUC_REQ_UCX_UNMUTE,
@@ -693,6 +720,38 @@ static const struct ffuc_device_desc ffuc_devices[] = {
 		.max_rate = 192000,
 		.meter_len = 244,
 		.ops = &ffuc_ucx_ops,
+	}, {
+		/* ISO audio, MIDI and the IF1 0x85 DSP meter read-back.  The
+		 * IF1 bulk OUT 0x0a carries EQ blocks and is not exposed yet;
+		 * the roles of interfaces 3 (0x09/0x88) and 4 (0x8b) are not
+		 * mapped.  The meter packet length is not known, so the URB
+		 * takes a full 512-byte bulk packet and passes the actual
+		 * length on. */
+		.name = "Babyface",
+		.shortname = "Babyface",
+		.card_id = "Babyface",
+		.vendor = FFUC_VENDOR_RME,
+		.product = FFUC_PRODUCT_BABYFACE,
+		.iface = 0,
+		.transport = FFUC_XPORT_ISO,
+		.quirks = 0,
+		.model = FFUC_MODEL_BABYFACE,
+		.modes = ffuc_babyface_modes,
+		.n_modes = ARRAY_SIZE(ffuc_babyface_modes),
+		.audio_iface = 0,
+		.out_ep = 0x03,
+		.in_ep = 0x84,
+		.status_iface = FFUC_IFACE_NONE,
+		.state_iface = 1,
+		.meter_in_ep = 0x85,
+		.meter_len = 512,
+		.midi_iface = 2,
+		.midi_out_ep = 0x07,
+		.midi_in_ep = 0x86,
+		.max_channels = 12,
+		.max_playback = 14,
+		.max_rate = 192000,
+		.ops = &ffuc_ucx_ops,
 	},
 };
 
@@ -711,6 +770,8 @@ static const struct usb_device_id ffuc_ids[] = {
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[5] },
 	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_UCX, 5),
 	  .driver_info = (kernel_ulong_t)&ffuc_devices[6] },
+	{ USB_DEVICE_INTERFACE_NUMBER(FFUC_VENDOR_RME, FFUC_PRODUCT_BABYFACE, 0),
+	  .driver_info = (kernel_ulong_t)&ffuc_devices[7] },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ffuc_ids);
@@ -933,7 +994,7 @@ static void ffuc_playback_urb(struct ffuc_ep *ep, struct urb *urb)
 	struct ffuc *chip = ep->chip;
 	struct ffuc_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct snd_pcm_substream *subs = s->substream;
-	const unsigned int words = chip->mode->words;
+	const unsigned int words = ffuc_mode_out_words(chip->mode);
 	const unsigned int frames = chip->urb_frames;
 	unsigned long flags;
 
@@ -1073,7 +1134,7 @@ static void ffuc_iso_playback_fill(struct ffuc_ep *ep, struct urb *urb)
 	struct ffuc_stream *s = &chip->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	struct snd_pcm_substream *subs = s->substream;
 	const struct ffuc_mode *m = chip->mode;
-	const unsigned int nch = m->words;
+	const unsigned int nch = ffuc_mode_out_words(m);
 	const unsigned int fwords = nch + 1;
 	unsigned int frames[FFUC_MAX_ISO_PACKETS], pos[FFUC_MAX_ISO_PACKETS];
 	unsigned int phase[FFUC_MAX_ISO_PACKETS];
@@ -1549,7 +1610,9 @@ static int ffuc_engine_start(struct ffuc *chip)
 	if (chip->iso)
 		bytes = chip->iso_packets * max(m->in_mps, m->out_mps);
 	else
-		bytes = chip->urb_frames * m->words * FFUC_SAMPLE_BYTES;
+		bytes = chip->urb_frames *
+			max(m->words, ffuc_mode_out_words(m)) *
+			FFUC_SAMPLE_BYTES;
 	if (WARN_ON(bytes > chip->urb_bytes_max))
 		return -EINVAL;
 
@@ -1722,11 +1785,12 @@ static const struct snd_pcm_hardware ffuc_pcm_hw = {
 static int ffuc_rule_channels(struct snd_pcm_hw_params *params,
 			      struct snd_pcm_hw_rule *rule)
 {
-	struct ffuc *chip = rule->private;
+	struct snd_pcm_substream *subs = rule->private;
+	struct ffuc *chip = snd_pcm_substream_chip(subs);
 	struct snd_interval *r = hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval t = {
 		.min = 1,
-		.max = ffuc_max_channels(chip, r->min),
+		.max = ffuc_max_channels(chip, subs->stream, r->min),
 		.integer = 1,
 	};
 
@@ -1828,7 +1892,7 @@ static int ffuc_pcm_open(struct snd_pcm_substream *subs)
 	if (ret < 0)
 		return ret;
 	ret = snd_pcm_hw_rule_add(rt, 0, SNDRV_PCM_HW_PARAM_CHANNELS,
-				  ffuc_rule_channels, chip,
+				  ffuc_rule_channels, subs,
 				  SNDRV_PCM_HW_PARAM_RATE, -1);
 	if (ret < 0)
 		return ret;
@@ -1863,7 +1927,7 @@ static int ffuc_pcm_hw_params(struct snd_pcm_substream *subs,
 	unsigned int self = 1 << subs->stream;
 	int ret = 0;
 
-	if (params_channels(params) > ffuc_max_channels(chip, rate))
+	if (params_channels(params) > ffuc_max_channels(chip, subs->stream, rate))
 		return -EINVAL;
 
 	mutex_lock(&chip->mutex);
@@ -2195,7 +2259,10 @@ static int ffuc_probe(struct usb_interface *intf,
 	chip->desc = desc;
 	chip->model = desc->model;
 	chip->iso = desc->transport == FFUC_XPORT_ISO;
-	chip->ucx = desc->model == FFUC_MODEL_UCX;
+	/* The Babyface uses the UCX transport (ISO format, wrap, stream
+	 * open/close words). */
+	chip->ucx = desc->model == FFUC_MODEL_UCX ||
+		    desc->model == FFUC_MODEL_BABYFACE;
 	chip->dev_idx = dev_idx;
 	chip->audio_iface = desc->audio_iface;
 	chip->out_ep = desc->out_ep;
@@ -2250,7 +2317,9 @@ static int ffuc_probe(struct usb_interface *intf,
 				chip->base_urb_frames :
 				chip->base_urb_frames << i;
 
-			span = max(span, frames * chip->modes[i].words);
+			span = max(span, frames *
+				   max(chip->modes[i].words,
+				       ffuc_mode_out_words(&chip->modes[i])));
 		}
 		chip->urb_bytes_max = span * FFUC_SAMPLE_BYTES;
 	}

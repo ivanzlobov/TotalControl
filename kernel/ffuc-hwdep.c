@@ -179,9 +179,10 @@ static int ffuc_hwdep_info(struct ffuc *chip,
 	info.caps = caps;
 	info.channels = chip->desc->max_channels;
 	info.inputs = chip->desc->max_channels;
-	info.outputs = chip->desc->max_channels;
-	info.playback = chip->desc->max_channels;
-	info.matrix_sources = chip->desc->max_channels * 2;
+	info.outputs = ffuc_desc_playback(chip->desc);
+	info.playback = ffuc_desc_playback(chip->desc);
+	info.matrix_sources = chip->desc->max_channels +
+			      ffuc_desc_playback(chip->desc);
 	info.meter_bytes = chip->desc->meter_len;
 	info.state_ep = chip->desc->state_in_ep;
 	info.meter_ep = chip->desc->meter_in_ep;
