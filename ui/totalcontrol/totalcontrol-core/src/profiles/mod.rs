@@ -6,6 +6,7 @@
 //! against real `amixer scontents` output for your device — that naming
 //! grammar is only confirmed for the Babyface Pro so far.
 
+pub mod babyface;
 pub mod babyface_pro;
 pub mod uc;
 pub mod ucx;

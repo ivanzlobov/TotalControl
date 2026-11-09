@@ -15,6 +15,7 @@ pub const EVENT_MAX: usize = 512;
 pub const MODEL_UNKNOWN: u32 = 0;
 pub const MODEL_UC: u32 = 1;
 pub const MODEL_UCX: u32 = 2;
+pub const MODEL_BABYFACE: u32 = 3;
 
 pub const XPORT_INTERRUPT: u32 = 0;
 pub const XPORT_ISO: u32 = 1;

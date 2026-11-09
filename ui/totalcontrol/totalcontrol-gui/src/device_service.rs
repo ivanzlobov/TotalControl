@@ -88,6 +88,7 @@ pub struct DeviceInfo {
     pub sample_rates: &'static [u32],
     pub capabilities: totalcontrol_core::DeviceCapabilities,
     pub protocol_features: bool,
+    pub class_compliant: bool,
     pub low_cut_supported: bool,
     pub phase_supported: bool,
     pub output_balance_supported: bool,
@@ -403,6 +404,10 @@ impl RmeDevice for Mirror {
 
     fn protocol_features(&self) -> bool {
         self.info.protocol_features
+    }
+
+    fn class_compliant(&self) -> bool {
+        self.info.class_compliant
     }
 
     fn canonical_model(&self) -> &str {
@@ -1366,6 +1371,7 @@ fn capture_info(device: &DeviceHandle) -> DeviceInfo {
         sample_rates: device.sample_rates(),
         capabilities: device.capabilities(),
         protocol_features: device.protocol_features(),
+        class_compliant: device.class_compliant(),
         low_cut_supported: device.low_cut_supported(),
         phase_supported: device.phase_supported(),
         output_balance_supported: device.output_balance_supported(),

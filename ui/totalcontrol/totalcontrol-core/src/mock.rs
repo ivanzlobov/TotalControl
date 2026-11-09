@@ -127,7 +127,7 @@ impl MockBabyfacePro {
         Self::open_with(&UC_PROFILE, "Fireface UC", uc_capabilities())
     }
 
-    fn open_with(
+    pub(crate) fn open_with(
         profile: &'static crate::profile::DeviceProfile,
         model_name: &str,
         capabilities: DeviceCapabilities,

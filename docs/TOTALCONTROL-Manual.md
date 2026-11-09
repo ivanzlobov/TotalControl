@@ -55,6 +55,8 @@ reduced control set.
 
 The supported devices are the Fireface UC and Fireface UCX. The Babyface Pro
 FS backend is present but is not part of the supported installation path yet.
+The first-generation Babyface is supported in its native (vendor) mode; it
+appears as **Babyface (1st gen)** in the device menu.
 
 The source and RPM paths below are alternatives.  Use the source path to work
 from a checkout; use the RPM path when you want packages that can be installed
@@ -1147,6 +1149,16 @@ See [`ui/totalcontrol/docs/guide.md`](../ui/totalcontrol/docs/guide.md) for the 
 audio stack, building from source and project status.
 
 ## 17. Device settings at startup
+
+The first-generation Babyface has no mixer readback, so no dialog appears:
+TotalControl writes the saved mix to the unit at connect. Without a saved
+mix, each playback pair goes to the output pair of the same number at 0 dB
+and every input send is off. The saved `48 V` and mic gain are written at
+connect too: if the saved mix has `48 V` on, it switches on when the unit
+connects. The mic gain moves in 3 dB steps, from 6 to 60 dB. The sample
+rate follows the system audio stream; the shown rate is the one the driver
+runs at. Controls TotalControl does not implement for this unit yet, such
+as Dim, Mono or EQ, have no effect.
 
 At connect TotalControl compares the device state with the saved mix and
 lets you choose, with a dialog:

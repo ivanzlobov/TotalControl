@@ -16,6 +16,8 @@
 #[cfg(feature = "alsa")]
 pub mod babyface;
 #[cfg(feature = "alsa")]
+pub mod babyface_gen1;
+#[cfg(feature = "alsa")]
 pub mod fireface;
 #[cfg(feature = "alsa")]
 pub(crate) mod capture_meter;
@@ -40,6 +42,8 @@ pub mod usb;
 
 #[cfg(feature = "alsa")]
 pub use babyface::BabyfacePro;
+#[cfg(feature = "alsa")]
+pub use babyface_gen1::BabyfaceGen1;
 #[cfg(feature = "alsa")]
 pub use fireface::{DeviceIdentity as FirefaceIdentity, DeviceInfo as FirefaceInfo, Fireface, Model as FirefaceModel};
 pub use capabilities::DeviceCapabilities;

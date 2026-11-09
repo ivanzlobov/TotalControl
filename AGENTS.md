@@ -46,6 +46,8 @@ Authoritative files:
 - `docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md` — UC protocol and controls.
 - `docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md` — Babyface Pro FS channel model,
   ALSA surface, vendor USB protocol, DSP EQ blocks and metering.
+- `docs/spec/BABYFACE-PROTOCOL-SPEC.md` — first-generation Babyface
+  transport, mixer writes, preamps and DSP metering.
 - `docs/DEVELOPMENT-TOOLS.md` — development-only backends and tools.
 
 ## UI rules
