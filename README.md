@@ -2,11 +2,7 @@
 
 Native Linux support for the RME Fireface UC and UCX in normal RME vendor
 mode: a kernel transport module (`snd-fireface-uc`) and the TotalControl mixer.
-
-This tree is based on [TuxMix](https://github.com/ismail-bahloul/TuxMix) by
-Ismaïl Bahloul — his Babyface Pro FS mixer — and extends it into a full
-control surface for the Fireface UC family. His commit history is preserved on
-the `archive/tuxmix-upstream` branch.
+TotalControl: give linux users back the control of their RME devices
 
 ![The TotalControl mixer and Control Room driving a Fireface UCX, with the EQ and dynamics panels, sends, and the reverb and echo panels open](ui/totalcontrol/docs/screenshots/mixer-ucx-2026-11.png)
 
@@ -23,9 +19,12 @@ the `archive/tuxmix-upstream` branch.
 - **Full OSC support.**  The complete RME OSC dialect: per-channel
   parameters, streamed meter peaks and remote control of the whole mixer
   and control room from any OSC client.
-- **A much improved GUI.**  Near-complete mixer and Control Room
+- **A much improved GUI.**  Complete mixer and Control Room
   functionality, with channel strips that slide their panels in and out —
   EQ, dynamics, sends and settings live next to their own strip.
+- Automatic rate switching based on the media playser's requested bitrate. Allowing you to listen to high res audio at different bitrates without manual rate switching
+- Easy configuration for surround audio - we create a virtual device that you select in your media player and TotalControl is configured automatically
+- Completely documented: end user manual, installation and build, architecture, protocols
 
 ## Architecture
 
@@ -44,7 +43,7 @@ that connection can actually drive.
 
 - `kernel/` — the kernel transport module.
 - `ui/totalcontrol/` — TotalControl core, GUI and TUI.
-- `docs/spec/` — authoritative, present-tense specifications.
+- `docs/spec/` — authoritative specifications.
 
 ## Devices
 
@@ -55,10 +54,8 @@ that connection can actually drive.
 | Fireface UCX | `0424:3fc9`, `2a39:3fc9` | isochronous IF0 (default) or interrupt IF5 |
 
 The UCX uses the isochronous interface by default (`ucx_if5=0`); set
-`ucx_if5=1` for the interrupt interface.  The UC uses the personality selected
-on the unit (PC or AP).
-
-Normal RME vendor mode uses RME's proprietary protocol over USB.
+`ucx_if5=1` for the interrupt interface (this is experimental - we use
+the better isochronous interface that is also used by the Apple RME driver.
 
 One module instance handles several units.  TotalControl identifies each unit by
 its serial number, remembers the selected unit across restarts, and opens that
