@@ -528,7 +528,7 @@ fn linear_db(v: f32) -> f32 {
 }
 
 fn pan_split(volume: f32, pan: i8) -> (f32, f32) {
-    let v = volume.clamp(0.0, 1.0);
+    let v = volume.clamp(0.0, 2.0);
     let p = pan.clamp(-100, 100) as f32 / 100.0;
     let l = v * if p > 0.0 { 1.0 - p } else { 1.0 };
     let r = v * if p < 0.0 { 1.0 + p } else { 1.0 };
@@ -3384,7 +3384,7 @@ impl Fireface {
         if idx >= self.inputs.len() || output >= PAIRS {
             return Err(Error::InvalidChannel(format!("input {idx}/{output}")));
         }
-        let volume = volume.clamp(0.0, 1.0);
+        let volume = volume.clamp(0.0, 2.0);
         self.inputs[idx].volumes[output] = volume;
         self.clear_mono_input_cells(idx);
         self.clear_pair_overrides(ChannelId::Input(idx), output);
@@ -3408,7 +3408,7 @@ impl Fireface {
         if idx >= self.playbacks.len() || output >= PAIRS {
             return Err(Error::InvalidChannel(format!("playback {idx}/{output}")));
         }
-        let volume = volume.clamp(0.0, 1.0);
+        let volume = volume.clamp(0.0, 2.0);
         self.playbacks[idx].volumes[output] = volume;
         self.clear_pair_overrides(ChannelId::Playback(idx), output);
         if self.muted.contains(&ChannelId::Playback(idx)) {
@@ -3850,12 +3850,8 @@ impl RmeDevice for Fireface {
         volume: f32,
     ) -> Result<(), Error> {
         let batch = self.begin_write_batch();
-        // Hardware outputs run to +6 dB, like TotalMix's output faders.
-        // Crosspoints and software playback stay at or below 0 dB.
-        let v = match channel {
-            ChannelId::Output(_) => volume.clamp(0.0, 2.0),
-            _ => volume.clamp(0.0, 1.0),
-        };
+        // Every fader runs to +6 dB, like TotalMix.
+        let v = volume.clamp(0.0, 2.0);
         match channel {
             ChannelId::Output(idx) => {
                 if idx >= BLOCKS {
@@ -3939,7 +3935,7 @@ impl RmeDevice for Fireface {
         if block >= BLOCKS {
             return Err(Error::InvalidChannel(format!("output block {block}")));
         }
-        let gain = gain.clamp(0.0, 1.0);
+        let gain = gain.clamp(0.0, 2.0);
         let source = Self::matrix_source_index(channel)
             .ok_or_else(|| Error::InvalidChannel("output is not a matrix source".into()))?;
         if !self.is_uc() {
@@ -8604,6 +8600,25 @@ mod tests {
         // internal pair 2.
         assert_eq!(dev.volume(ChannelId::Playback(0), 2).unwrap(), 0.25);
         assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 2), Some(0.25));
+    }
+
+    #[test]
+    fn ucx_input_fader_and_matrix_cell_reach_plus_six_db() {
+        let (mut dev, writes) = open(Model::Ucx);
+        dev.set_volume(ChannelId::Input(0), 0, 2.0).unwrap();
+        assert_eq!(dev.volume(ChannelId::Input(0), 0).unwrap(), 2.0);
+        let dsp = ucx::output_pair_dsp(0).unwrap();
+        let reg = ucx::matrix_reg(dsp as u8, Source::Input(0));
+        let value = ucx::matrix_gain((2.0 * dev.trim_gain(ChannelId::Input(0))) as f64);
+        assert!(writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, Write::Words(words) if words.contains(&(reg, value)))));
+
+        dev.set_matrix_cell(ChannelId::Playback(0), 3, 2.0)
+            .unwrap();
+        assert_eq!(dev.matrix_cell(ChannelId::Playback(0), 3), Some(2.0));
     }
 
     #[test]

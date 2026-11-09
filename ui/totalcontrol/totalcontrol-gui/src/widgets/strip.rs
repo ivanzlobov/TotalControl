@@ -951,6 +951,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         bus: p.meter_bus.clone().zip(p.meter_slot),
         meter_trim: p.meter_trim,
         height: fader_h,
+        top_inset: 0.0,
         show_meter: true,
         fill: theme::FADER,
         // The icon column (`icon_col`, built below) is this canvas's
@@ -1098,6 +1099,7 @@ fn full_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
             // unit grows by the same amount, so the symbol grid below it
             // keeps its shared height.
             height: ((fader_h - 150.0 * scale).max(48.0 * scale) * 1.2),
+            top_inset: crate::widgets::fader::meter_top_reserve(scale),
             show_meter: false,
             // Same dark slot as the main fader, but a smaller body.
                 fill: match cid {

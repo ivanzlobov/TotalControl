@@ -1167,7 +1167,7 @@ impl DeviceHandle {
                 *level = if ch.mute {
                     0.0
                 } else {
-                    *level * ch.volume.clamp(0.0, 1.0)
+                    *level * ch.volume.clamp(0.0, 2.0)
                 };
             }
         }
@@ -2833,8 +2833,10 @@ const METER_TICK_MS: f32 = 50.0;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
-/// Fast fall: more than four times quicker than the old 300 ms ease-out.
-const METER_RELEASE: f32 = 0.9;
+/// TotalMix's peak meter release is 20 dB/s.  Use a real dB/s fall rather
+/// than a per-tick easing factor so the same ballistics hold when the UI
+/// tick or meter canvas frame rate changes.
+const METER_RELEASE_DB_S: f32 = 20.0;
 /// TotalMix's default peak-hold time.  The visible peak marker stays put
 /// for this long after the last peak, then falls with a short ease-out
 /// (the bar itself falls fast).  The 260 ms tail is deliberately a little
@@ -2909,7 +2911,8 @@ impl MeterAnim {
         if target >= self.value {
             self.value += (target - self.value) * eff(METER_ATTACK);
         } else {
-            self.value += (target - self.value) * eff(METER_RELEASE);
+            let fall = 10f32.powf(-METER_RELEASE_DB_S * (dt_ms / 1000.0) / 20.0);
+            self.value = (self.value * fall).max(target);
         }
 
         if target >= self.peak {
@@ -17540,7 +17543,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
 
         let blocks = row![source_block, connector, dest_block]
             .spacing(theme::SPACE_XL * big_scale)
-            .align_y(iced::Alignment::Center);
+            .align_y(iced::Alignment::Start);
 
         column![
             section_header("QUICK CONTROL", scale),
@@ -17609,7 +17612,7 @@ mod tests {
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
         ucx_urb_frames, ucx_usb_frames, RtlEstimate, update, zoom, ChannelId, DeviceHandle,
         DeviceKind, DeviceTarget, EditField, EngineRateMode, MeterAnim, Message, PwClock,
-        RateChoice, RowMode, View, rate_choices,
+        METER_RELEASE_DB_S, RateChoice, RowMode, View, rate_choices,
         ZOOM_STEP, AssignMenu, CUE_DEST, CONTROL_ROOM_W, control_room_width,
         control_room_visual_width,
         is_control_room_cid, strip_params, ResetMix, OptionsMenu, WorkspaceMenu,
@@ -18389,16 +18392,16 @@ mod tests {
     }
 
     #[test]
-    fn release_falls_at_least_four_times_faster() {
+    fn release_falls_at_twenty_db_per_second() {
         let mut m = MeterAnim::new();
         m.step(1.0); // reach a peak first
         let peak = m.frame().value;
         m.step(0.0);
-        let drop = peak - m.frame().value;
-        let old_first_drop = peak * 0.22;
+        let expected = peak * 10f32.powf(-METER_RELEASE_DB_S * 0.05 / 20.0);
         assert!(
-            drop >= old_first_drop * 4.0,
-            "one release tick should drop at least 4x the old first tick: {drop} vs {old_first_drop}"
+            (m.frame().value - expected).abs() < 1e-4,
+            "one 50 ms release tick should fall 20 dB/s: {} vs {expected}",
+            m.frame().value
         );
     }
 
@@ -18450,8 +18453,9 @@ mod tests {
             "peak marker should glide down, not snap: {peak_drop} of {before_peak}"
         );
         assert!(
-            m.frame().value < 0.001,
-            "the bar itself should already have snapped to zero"
+            m.frame().value > 0.0 && m.frame().value < 0.05,
+            "the bar should be falling at 20 dB/s, not frozen or snapped: {}",
+            m.frame().value
         );
     }
 

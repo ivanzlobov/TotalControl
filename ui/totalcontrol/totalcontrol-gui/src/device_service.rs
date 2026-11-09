@@ -1208,6 +1208,9 @@ pub struct MeterSnapshot {
     pub output_peaks: [f32; 18],
     pub fx: [f32; 2],
     pub fx_overload: [bool; 2],
+    /// Whether the device is still connected.  A disconnected device has no
+    /// signal: canvases fall to zero instead of freezing the last frame.
+    pub connected: bool,
     /// Driver transport health, when the backend exposes it.
     pub counters: Option<HwdepCounters>,
     /// Whether anything is visibly moving.  The service derives this from
@@ -1429,20 +1432,53 @@ fn run(
         // the UI's view tick.
         {
             let now = Instant::now();
-            let inputs = device.input_meters();
-            let playbacks = device
-                .device_playback_meters()
-                .unwrap_or_else(|| device.playback_meters());
-            let outputs = device.device_output_meters().unwrap_or_default();
-            let input_peaks = device.input_peaks().unwrap_or_else(|| inputs.clone());
-            let playback_peaks = device
-                .device_playback_peaks()
-                .unwrap_or_else(|| playbacks.clone());
-            let output_peaks = device
-                .device_output_peaks()
-                .unwrap_or_else(|| outputs.clone());
-            let fx = device.fx_meters().unwrap_or([0.0, 0.0]);
-            let overload = device.fx_overload().unwrap_or([false, false]);
+            let connected = device.is_connected();
+            let inputs = if connected {
+                device.input_meters()
+            } else {
+                vec![0.0; 18]
+            };
+            let playbacks = if connected {
+                device
+                    .device_playback_meters()
+                    .unwrap_or_else(|| device.playback_meters())
+            } else {
+                vec![0.0; 18]
+            };
+            let outputs = if connected {
+                device.device_output_meters().unwrap_or_default()
+            } else {
+                vec![0.0; 18]
+            };
+            let input_peaks = if connected {
+                device.input_peaks().unwrap_or_else(|| inputs.clone())
+            } else {
+                vec![0.0; 18]
+            };
+            let playback_peaks = if connected {
+                device
+                    .device_playback_peaks()
+                    .unwrap_or_else(|| playbacks.clone())
+            } else {
+                vec![0.0; 18]
+            };
+            let output_peaks = if connected {
+                device
+                    .device_output_peaks()
+                    .unwrap_or_else(|| outputs.clone())
+            } else {
+                vec![0.0; 18]
+            };
+            let fx = if connected {
+                device.fx_meters().unwrap_or([0.0, 0.0])
+            } else {
+                [0.0, 0.0]
+            };
+            let overload = if connected {
+                device.fx_overload().unwrap_or([false, false])
+            } else {
+                [false, false]
+            };
             let mut m = meters.lock().unwrap();
             for (slot, value) in m.inputs.iter_mut().zip(inputs) {
                 *slot = value;
@@ -1458,6 +1494,7 @@ fn run(
             hold_peaks(&mut m.output_peaks, &output_peaks, &mut peak_at[2], now);
             m.fx = fx;
             m.fx_overload = overload;
+            m.connected = connected;
             m.at = Some(now);
             // The transport counters are cumulative and change slowly; a
             // quarter-second poll is enough for the device sheet.

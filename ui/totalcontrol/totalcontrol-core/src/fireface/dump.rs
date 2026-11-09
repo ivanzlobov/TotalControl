@@ -74,7 +74,7 @@ impl UcxDump {
     }
 
     fn pan_split(volume: f32, pan: i8) -> (f32, f32) {
-        let v = volume.clamp(0.0, 1.0);
+        let v = volume.clamp(0.0, 2.0);
         let p = pan.clamp(-100, 100) as f32 / 100.0;
         (
             v * if p > 0.0 { 1.0 - p } else { 1.0 },

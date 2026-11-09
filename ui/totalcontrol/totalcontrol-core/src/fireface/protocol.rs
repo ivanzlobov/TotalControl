@@ -220,9 +220,9 @@ pub mod uc {
         10f32.powf(db / 20.0)
     }
 
-    /// Linear 0..1 -> (`wValue`, matrix address) for one crosspoint.
+    /// Linear 0..2 (+6 dB) -> (`wValue`, matrix address) for one crosspoint.
     pub fn matrix_word(linear: f32, address: u16) -> (u16, u16) {
-        let level14 = (linear.clamp(0.0, 1.0) * UC_UNITY_LEVEL14 as f32)
+        let level14 = (linear.clamp(0.0, 2.0) * UC_UNITY_LEVEL14 as f32)
             .round()
             .clamp(0.0, 65535.0) as u32;
         let value = (level14 >> 2) as u16;

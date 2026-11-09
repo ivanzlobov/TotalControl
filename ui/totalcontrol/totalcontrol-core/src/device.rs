@@ -1014,7 +1014,7 @@ pub trait RmeDevice {
     ) -> Result<(), Error> {
         let (l, r) = (pair * 2, pair * 2 + 1);
         if self.input_pair_linked(pair) {
-            let target = volume.clamp(0.0, 1.0);
+            let target = volume.clamp(0.0, 2.0);
             let left = self.volume(ChannelId::Input(l), output)?;
             let right = self.volume(ChannelId::Input(r), output)?;
             let peak = left.max(right);
@@ -1137,7 +1137,7 @@ pub trait RmeDevice {
     ) -> Result<(), Error> {
         let (l, r) = (pair * 2, pair * 2 + 1);
         if self.playback_linked(pair) {
-            let target = volume.clamp(0.0, 1.0);
+            let target = volume.clamp(0.0, 2.0);
             let left = self.volume(ChannelId::Playback(l), output)?;
             let right = self.volume(ChannelId::Playback(r), output)?;
             let peak = left.max(right);

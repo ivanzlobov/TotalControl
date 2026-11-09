@@ -457,7 +457,7 @@ impl RmeDevice for MockBabyfacePro {
     }
 
     fn set_volume(&mut self, channel: ChannelId, output: usize, volume: f32) -> Result<(), Error> {
-        let vol = volume.clamp(0.0, 1.0);
+        let vol = volume.clamp(0.0, 2.0);
         match channel {
             ChannelId::Input(idx) => {
                 let ch = self
@@ -1256,8 +1256,10 @@ mod tests {
     #[test]
     fn test_volume_clamps_to_range() {
         let mut dev = MockBabyfacePro::open().unwrap();
-        dev.set_volume(ChannelId::Input(0), 0, 1.5).unwrap();
-        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 1.0).abs() < 1e-6);
+        dev.set_volume(ChannelId::Input(0), 0, 2.0).unwrap();
+        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 2.0).abs() < 1e-6);
+        dev.set_volume(ChannelId::Input(0), 0, 2.5).unwrap();
+        assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 2.0).abs() < 1e-6);
         dev.set_volume(ChannelId::Input(0), 0, -0.5).unwrap();
         assert!((dev.volume(ChannelId::Input(0), 0).unwrap() - 0.0).abs() < 1e-6);
     }

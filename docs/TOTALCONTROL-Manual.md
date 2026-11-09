@@ -317,8 +317,9 @@ Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
 meter grows to fill the space.
 
-The fader value is shown in a dB readout under the fader, without a unit
-suffix. Double-clicking that readout opens a numeric entry field.
+The fader range is -60 to +6 dB. Its value is shown in a dB readout under
+the fader, without a unit suffix. Double-clicking that readout opens a
+numeric entry field.
 
 Output strips also carry a **balance** knob that pans the output pair
 between its two channels; it appears only while the pair is linked.
@@ -331,15 +332,20 @@ Each meter has two indicators, following TotalMix FX:
 - the **peak line** has zero attack so a single full-scale sample is
   visible; it is held for a fixed two seconds and then decays. Its colour
   follows the same green/yellow/red bands;
-- **overload is the red OVR block** above the bar. It lights when a
-  full-scale sample is detected.
+- **overload is the red OVR block** at the top of the meter channel. It
+  lights from -0.1 dBFS.
 
 Peak hold applies only to the peak line. The RMS bar is not held and keeps
-following the RMS signal.
+following the RMS signal. Falling levels use a 20 dB/s release.
 
-The meter scale runs from -60 dB at the bottom to +6 dB at the top, leaving
-about 6 dB of headroom above 0 dB for the red band. A level below -60 dB
-reads as silence and does not draw a peak line.
+The meter scale runs from -60 dB at the bottom to +6 dB at the top. The
+whole area above 0 dB is red. The ruler has an unlabelled green tick at
+-3 dB, the full-scale-sine RMS target, and a red tick beside the +3 dB
+label. Each tick is one colour and extends a little under the fader cap;
+the cap covers the line at its current level. The cap's centre line aligns
+with the ticks, and a fixed 0 dB tick is also on the right side of the
+fader. A level below -60 dB reads as silence and does not draw a peak line.
+If the device disconnects, the meters fall to silence instead of freezing.
 
 Input and playback meters are pre-fader and post-trim: they show the signal
 after the channel trim but before its send fader, so moving a send or
@@ -354,7 +360,7 @@ sine; TotalControl does not apply that shift.
 TotalControl uses a fixed two-second peak hold. TotalMix FX makes the hold
 time (0.1–9.9 s) and the number of consecutive full-scale samples that
 trigger OVR configurable; TotalControl uses the two-second hold and a
-full-scale OVR block instead.
+-0.1 dBFS OVR threshold instead.
 
 The meters show the level as it arrives at the interface. If the host
 (PipeWire) volume is below 0 dB, a full-scale recording reaches the

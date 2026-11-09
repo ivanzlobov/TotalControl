@@ -318,18 +318,25 @@ Each channel meter has the two TotalMix indicators:
   below -3 dB, yellow from -3 dB to 0 dB and red above 0 dB;
 - a **peak line** with zero attack, held for a fixed two seconds and then
   decaying; its colour follows the same green/yellow/red bands;
-- a **fixed red OVR block** at the top, which lights when a full-scale
-  sample is detected.
+- a **fixed red OVR block** at the top of the meter channel, which lights
+  from -0.1 dBFS.
 
 Peak hold applies only to the peak line. The RMS bar is never held; it
 continues to follow the RMS value. The meter scale runs from -60 dB at the
-bottom to +6 dB at the top; below -60 dB reads as silence. About 6 dB of
-headroom above 0 dB is visible as the red band before the OVR block lights.
+bottom to +6 dB at the top; below -60 dB reads as silence. The whole region
+above 0 dB is red. The ruler has an unlabelled green tick at -3 dB, the
+full-scale-sine RMS target, and a red tick beside the +3 dB label. Each
+tick is one colour and continues a little way under the fader cap; the cap
+covers the line at its current level. The cap centre line aligns with the
+tick, and a fixed 0 dB tick also sits on the right side of the fader. There
+is no separate red guide across the meter bar.
 The bar is mathematically correct RMS, so a full-scale sine reads about
 -3 dB; no RMS +3 dB shift is applied.
 
-The peak hold is fixed at two seconds. The OVR block lights on a full-scale
-peak; there is no configurable hold time or OVR sample count.
+Falling levels use a 20 dB/s release. The peak hold is fixed at two seconds.
+The OVR block lights from -0.1 dBFS; there is no configurable hold time or
+OVR sample count. If the device disconnects, the meters fall to silence with
+the normal release instead of freezing at their last reading.
 
 Input and playback meters are pre-fader and post-trim: the trim changes the
 reading, the send fader and selected submix do not. Hardware output meters
@@ -759,9 +766,9 @@ It is not a pre-gain and does not move the input VU. TotalMix therefore has
 an input VU after the preamp and optional FX, not “before trim”.
 
 In TotalControl, T is a true pre-fader trim. The send fader displays the post-trim
-level, so its maximum is the trim value at 0 dB send. An analog desk changes
-the meter and signal with trim but leaves the channel fader in place; TotalControl
-moves the send fader so the post-trim level is visible.
+level, so its maximum is +6 dB plus the trim value at the +6 dB send limit. An
+analog desk changes the meter and signal with trim but leaves the channel fader
+in place; TotalControl moves the send fader so the post-trim level is visible.
 
 For an analog input, the signal paths are:
 
@@ -1123,9 +1130,10 @@ beyond the window.
   playbacks; it lights while trim is below 0 dB, and its tooltip states the
   applied value.
 - The fader displays the post-trim level: `displayed = send × trim`. With
-  the send limited to 0 dB, the fader's maximum is the trim value, and
-  moving trim moves the fader cap with it. The send written to the device is
-  `displayed / trim`, so the audible level remains the fader value.
+  the send limited to +6 dB, the fader's maximum is +6 dB plus the trim
+  value, and moving trim moves the fader cap with it. The send written to
+  the device is `displayed / trim`, so the audible level remains the fader
+  value.
 - Input and playback meters are post-trim: a constant input tone falls and
   rises with the trim value. Output meters remain post-fader.
 - Width is host-side and has no width register: it rewrites the pair's
