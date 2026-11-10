@@ -326,7 +326,6 @@ pub struct StripParams<'a> {
     pub collapsed: bool,
     pub collapse_anim: Option<CollapseAnim>,
     pub scale: f32,
-    pub selected: bool,
     pub hovered: bool,
     /// This output strip is the current submix destination (TotalMix's
     /// lighter active-output card).
@@ -879,7 +878,6 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
     mouse_area(
         container(card)
             .style(theme::strip_panel(
-                p.selected,
                 p.hovered,
                 p.type_tag.map(|(_, c)| c),
                 p.active_surface,
@@ -1361,9 +1359,8 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     // double-click for reset-to-default, the dB readout for its edit
     // field, buttons for their own press) collapses the strip — a bigger,
     // more discoverable target than the tiny "-" button alone. A plain
-    // click there is a no-op; Ctrl/Shift+click toggles multi-selection
-    // (see `Message::StripClicked`) — mute/solo/collapse on any selected
-    // strip then apply to the whole selection at once.
+    // click selects the strip for editing; Shift+click adds or removes it
+    // in the global fader group (see `Message::StripClicked`).
     let left_strength = p.meter_available.then_some(p.readout[0]).flatten();
     let right_strength = p
         .meter2_available
@@ -1429,7 +1426,6 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     mouse_area(
         container(stack)
             .style(theme::strip_panel(
-                p.selected,
                 p.hovered,
                 p.type_tag.map(|(_, c)| c),
                 p.active_surface,

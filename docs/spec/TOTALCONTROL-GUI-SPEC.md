@@ -1403,6 +1403,17 @@ other output does, which is how the manual describes every hardware output
 it is selected as current submix"). The Main output is a submix like any
 other; FX Send can follow it.
 
+Only the current submix takes the brighter card. Selecting a channel for
+editing — with the mouse, the unit's front panel or a remote — draws no border
+or tint on the strip; the front panel and the remote show their own selection.
+The selected channel is the target for cursor-key nudges and typed values, and
+it never joins or clears the global fader group.
+
+Hovering a strip draws its 1 px silver outline and soft glow, so the click
+target is clear before the click. The outline follows the pointer and is not a
+persistent selection. The meaningful multi-channel selection is the global
+fader group, shown by its members' cap colour.
+
 Every click on a hardware output counts, not only the strip's empty surface:
 its mute and cue switches, its slideout buttons (gear, EQ, D), its fader and
 its name field select that output the same way, and the visible submix

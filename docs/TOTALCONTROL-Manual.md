@@ -879,12 +879,15 @@ front-panel equivalent controls of the unit.
   readout to type a value; double-click a strip's background to collapse
   it.
 - Ordinary buttons act once per click.
+- **Hover** a strip to outline it in silver. The outline follows the pointer
+  and is not a persistent selection; it just shows where the next click lands.
 - **Shift+click** a strip or its fader adds or removes it from the global
   fader group. The first member turns `F` on and the members' caps take the
   group colour; Shift+drag still fine-adjusts. Press `F` to ungang the members
   and hide the colour without forgetting them, and press it again to bring
-  both back. A plain click focuses one strip and leaves the group untouched;
-  there is no Ctrl+click.
+  both back. A plain click selects one strip for editing (the cursor keys and
+  typed values follow it) and leaves the group untouched; there is no
+  Ctrl+click.
 
 ## 12. Workspace and Options menus
 

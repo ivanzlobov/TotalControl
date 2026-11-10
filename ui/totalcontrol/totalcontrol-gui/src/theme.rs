@@ -11,8 +11,8 @@ use totalcontrol_layout::ColorScheme;
 // Identity: the app icon is a pure-black tile with a monochrome silver
 // mark, so the UI is built from those same three ingredients and nothing
 // else - graphite surfaces, silver text, white for anything that is
-// "on" (engaged toggles, the selected strip, the active nav pill, the
-// section ticks). Hue is information, not decoration: green = signal and
+// "on" (engaged toggles, the current-submix strip, the active nav pill,
+// the section ticks). Hue is information, not decoration: green = signal and
 // connection, red = clip, amber = attention (solo, simulated/class
 // compliant), azure = mute. Before this pass the palette was sampled 1:1
 // from RME TotalMix FX (cool blue-gray cards, orange accent, cyan mute,
@@ -196,8 +196,7 @@ pub const METER_WELL_ACTIVE: Color = Color::from_rgb8(0x33, 0x34, 0x3a);
 pub const TAB_FACE_HOVER: Color = Color::from_rgb8(0x22, 0x23, 0x28);
 /// VU scale labels: one step below the primary text tone.
 pub const VU_LABEL: Color = Color::from_rgb8(0xd5, 0xd6, 0xda);
-/// "Engaged": every lit toggle, the selected strip's border, the section
-/// ticks, the active nav pill.
+/// "Engaged": every lit toggle, the section ticks, the active nav pill.
 pub const ACCENT: Color = Color::from_rgb8(0xf2, 0xf3, 0xf5);
 /// Quiet selected fill (menu highlight, text selection, the lit side of
 /// a sidebar switch): a graphite step, not a hue.
@@ -462,8 +461,7 @@ pub fn dialog(_theme: &iced::Theme) -> container::Style {
 /// Linear-interpolates `base` toward `tint` by `amount` (0 = pure `base`,
 /// 1 = pure `tint`), keeping `base`'s own alpha — used to tint a strip
 /// card just enough to read as "this channel's category" at a glance
-/// without competing with the accent-colored selection border or making
-/// the card itself look like a colored badge.
+/// without making the card itself look like a colored badge.
 pub(crate) fn blend(base: Color, tint: Color, amount: f32) -> Color {
     Color {
         r: base.r + (tint.r - base.r) * amount,
@@ -485,22 +483,19 @@ pub(crate) fn blend(base: Color, tint: Color, amount: f32) -> Color {
 /// its color, so the card only needs the faintest hint.
 const STRIP_TINT_AMOUNT: f32 = 0.03;
 
-/// A strip's card — same as `panel`, but with an accent-colored border
-/// when part of the active multi-selection (Ctrl/Shift+click), so grouped
-/// mute/solo/collapse actions have a clear "this is what I'm about to
-/// affect" indicator — and, if `tint` is given, a background nudged
-/// toward that channel type's own color (the same color as its type-tag
-/// badge), so a long row of strips sorts into visual groups before you
-/// even read the labels.
-/// `hovered` is ignored whenever `selected` is true — a strip that's part
-/// of the active multi-selection already has the loudest border in the
-/// row; a hover glow on top of that would just be visual noise competing
-/// with itself. Plain `container::Style` closures don't get a `Status` the
-/// way `button`'s do, so this hover state has to be tracked explicitly
-/// (`TotalControl::hovered_strip`, driven by `mouse_area::on_enter`/`on_exit` in
-/// `widgets/strip.rs`) rather than read off the widget itself.
+/// A strip's card — same as `panel`, with a background nudged toward the
+/// channel type's own colour when `tint` is given (the same colour as its
+/// type-tag badge), so a long row of strips sorts into visual groups before
+/// you even read the labels.
+///
+/// There is deliberately no selected-channel border: TotalMix marks only the
+/// current submix (the brighter `active_surface`) and leaves the edit target
+/// undecorated. The front panel and a remote show their own selection.
+///
+/// Plain `container::Style` closures don't get a `Status` the way `button`'s
+/// do, so the hover state is tracked explicitly (`TotalControl::hovered_strip`,
+/// driven by `mouse_area::on_enter`/`on_exit` in `widgets/strip.rs`).
 pub fn strip_panel(
-    selected: bool,
     hovered: bool,
     tint: Option<Color>,
     active_surface: bool,
@@ -516,8 +511,8 @@ pub fn strip_panel(
         };
         // The selected hardware-output/submix strip sits one step lighter
         // than every other strip (TotalMix makes the current submix
-        // obvious the same way).  It is a background cue, independent of
-        // the accent border used for a Ctrl/Shift multi-selection.
+        // obvious the same way).  It is a background cue of its own; the
+        // edit target carries no border.
         let base = if active_surface {
             container::Style {
                 background: Some(Background::Color(submix_active())),
@@ -530,16 +525,7 @@ pub fn strip_panel(
         } else {
             base
         };
-        if selected {
-            container::Style {
-                border: Border {
-                    color: ACCENT,
-                    width: 2.0,
-                    ..base.border
-                },
-                ..base
-            }
-        } else if hovered {
+        if hovered {
             container::Style {
                 border: Border {
                     color: FADER,

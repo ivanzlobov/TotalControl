@@ -5021,8 +5021,8 @@ fn db_to_vol(db: f32) -> f32 {
     }
 }
 
-/// Sets `cid`'s volume to `v`. If `cid` is part of an active multi-selection,
-/// every other selected channel moves by the same *relative* amount instead
+/// Sets `cid`'s volume to `v`. If `cid` is in the ganged global fader group,
+/// every other member of its row moves by the same *relative* amount instead
 /// of jumping to the same absolute level — preserving the balance between
 /// them, the way dragging one fader in a DAW's multi-track selection moves
 /// the whole group together rather than flattening it to one value.
@@ -5333,13 +5333,12 @@ pub(crate) fn any_channel_soloed(state: &TotalControl) -> bool {
 }
 
 /// Every *other* channel that should move/mute/solo alongside `cid`
-/// right now: the active multi-selection (if `cid` is part of one, same
-/// as before the sidebar's Groups panel existed) unioned with the
+/// right now: the ganged global fader group (level only) unioned with the
 /// membership of any of `state.groups` whose `link` is engaged and that
 /// `cid` belongs to. `cid` itself is never included, so callers can
 /// `is_empty()`-check this directly instead of re-deriving "is anything
 /// else supposed to move." A `HashSet` (not `Vec`) since a channel can
-/// be both multi-selected *and* in a linked group — the union must
+/// be both ganged *and* in a linked group — the union must
 /// de-duplicate, not propagate to the same channel twice.
 fn propagation_set(
     state: &TotalControl,
@@ -8869,17 +8868,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::RmeSelect(cid, on) => {
+            // A remote's select is one edit target, not a fader group: it
+            // must never gang channels or turn the F master on.
             if on {
-                state.selected.insert(cid);
-                state.fader_ganged = true;
-                state.focus_channel = Some(cid);
-                state.select_anchor = Some(cid);
-            } else {
-                state.selected.remove(&cid);
-                state.fader_ganged = !state.selected.is_empty();
-                if state.focus_channel == Some(cid) {
-                    state.focus_channel = state.selected.iter().next().copied();
-                }
+                select_strip(state, cid);
+            } else if state.focus_channel == Some(cid) {
+                state.focus_channel = None;
             }
         }
         Message::RmeRename(cid, name) => {
@@ -13225,7 +13219,6 @@ fn strip_params<'a>(
         collapsed: state.collapsed.contains(&cid),
         collapse_anim: state.collapse_anim.get(&cid).copied(),
         scale: state.ui_scale,
-        selected: state.focus_channel == Some(cid),
         hovered: state.hovered_strip == Some(cid),
         active_surface: false,
         name_custom: false,
@@ -19892,6 +19885,22 @@ mod tests {
         state.selected.clear();
         let _ = update(&mut state, Message::FaderGroupToggle);
         assert!(!state.fader_ganged, "an empty group has nothing to gang");
+    }
+
+    #[test]
+    fn a_remote_select_moves_the_edit_target_without_ganging() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::RmeSelect(a, true));
+        let _ = update(&mut state, Message::RmeSelect(b, true));
+
+        assert!(state.selected.is_empty(), "the fader group is untouched");
+        assert!(!state.fader_ganged, "the F master stays off");
+        assert_eq!(state.focus_channel, Some(b), "the last select is the target");
+
+        let _ = update(&mut state, Message::RmeSelect(b, false));
+        assert_eq!(state.focus_channel, None);
     }
 
     #[test]
