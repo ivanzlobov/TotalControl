@@ -10787,7 +10787,36 @@ fn handle_global_event(
 
 // ── View ─────────────────────────────────────────────────────────
 
+thread_local! {
+    static VIEW_WINDOW: std::cell::RefCell<(std::time::Instant, u32)> =
+        std::cell::RefCell::new((std::time::Instant::now(), 0));
+}
+
+/// Count full view builds per second when `TOTALCONTROL_PROFILE` is set.
+fn profile_view_build() {
+    VIEW_WINDOW.with(|cell| {
+        let mut window = cell.borrow_mut();
+        window.1 += 1;
+        let elapsed = window.0.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            eprintln!(
+                "profile: view builds/s={:.1}",
+                window.1 as f32 / elapsed.as_secs_f32()
+            );
+            *window = (Instant::now(), 0);
+        }
+    });
+}
+
+fn profiling() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("TOTALCONTROL_PROFILE").is_some())
+}
+
 pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
+    if profiling() {
+        profile_view_build();
+    }
     let top = top_bar(state);
     let now = Instant::now();
     let fx_width = fx_slot(state, now);
