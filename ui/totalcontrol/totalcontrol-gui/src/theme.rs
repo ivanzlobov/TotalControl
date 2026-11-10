@@ -135,6 +135,33 @@ pub fn cue_color() -> Color {
     palette().cue
 }
 
+/// Group marks.  Muted on purpose: four fader groups, the mute and solo
+/// links and the temporary fader group share one panel and a handful of
+/// caps, and they have to stay distinguishable without turning the mixer
+/// into a colour chart.
+pub fn group_fader(index: usize) -> Color {
+    match index {
+        0 => Color::from_rgb8(0xb5, 0x6d, 0x6d),
+        1 => Color::from_rgb8(0x57, 0x84, 0xb8),
+        2 => Color::from_rgb8(0x6f, 0x93, 0x6a),
+        _ => Color::from_rgb8(0x8f, 0x74, 0xa3),
+    }
+}
+
+pub fn group_mute() -> Color {
+    Color::from_rgb8(0x6f, 0x86, 0x9e)
+}
+
+pub fn group_solo() -> Color {
+    Color::from_rgb8(0xb0, 0x95, 0x4f)
+}
+
+/// The temporary fader group: RME marks its faders yellow, and it outranks
+/// a stored group colour while it exists.
+pub fn group_temporary() -> Color {
+    Color::from_rgb8(0xc2, 0xae, 0x57)
+}
+
 pub fn mgreen() -> Color {
     palette().green
 }

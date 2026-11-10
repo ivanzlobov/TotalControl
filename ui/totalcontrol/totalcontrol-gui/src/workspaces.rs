@@ -101,6 +101,10 @@ pub struct Workspace {
     /// The eight Mix slots.
     pub snapshots: [WorkspaceSnapshot; 8],
     pub groups: [Group; 4],
+    /// The temporary fader group (the strip selection), stored so a
+    /// workspace restores the whole working set, not only the four
+    /// permanent groups.
+    pub temporary_group: Vec<ChannelId>,
     /// The six Mixer Layout slots.
     pub layouts: [Option<HashSet<ChannelId>>; 6],
     pub labels: Vec<(ChannelId, String)>,
@@ -122,6 +126,7 @@ impl Default for Workspace {
             scene,
             snapshots: Default::default(),
             groups: Default::default(),
+            temporary_group: Vec::new(),
             layouts: Default::default(),
             labels: Vec::new(),
             view: WorkspaceView::default(),

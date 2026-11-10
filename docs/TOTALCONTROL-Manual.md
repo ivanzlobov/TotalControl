@@ -831,6 +831,10 @@ front-panel equivalent controls of the unit.
   readout to type a value; double-click a strip's background to collapse
   it.
 - Ordinary buttons act once per click.
+- **Shift+click** a strip or its fader adds or removes it from the temporary
+  fader group; those faders move together relatively and their caps turn
+  yellow. Shift+drag still fine-adjusts. The `F` button above the fader
+  clears the group. A plain click selects one strip; there is no Ctrl+click.
 
 ## 12. Workspace and Options menus
 
@@ -870,12 +874,12 @@ term for a mixer state; the interface uses the terms below.
 |---|---|
 | **Current mix** | The live mixer state: routing, faders, EQ, dynamics and FX. It is saved continuously for recovery. |
 | **Snapshot** | One named, saved current mix inside a workspace. |
-| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups, layouts, view state and Control Room state. |
+| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups — including the temporary fader group — layouts, view state and Control Room state. |
 | **Device setup** | One of the unit's own six states, separate from host files. |
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups, layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the temporary fader group), layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
 | **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -949,7 +953,7 @@ A workspace contains:
 - the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
-- the four mute/solo/fader groups;
+- the four mute/solo/fader groups and the temporary fader group;
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
 - Control Room assignments and monitoring settings;
@@ -992,6 +996,39 @@ of the current workspace, not separate mixer states.
 Undo restores the mix as it was before your last mix-changing step; every
 continuous drag of one control counts as a single step. Redo reapplies what
 you undid. Device settings and window layout are not part of undo.
+
+### Groups
+
+Four groups, each with its own membership and three independent links: mute,
+solo and fader. They are part of the workspace.
+
+To build one:
+
+1. Press `edit` in the `groups` card. All twelve storage places — `M1`–`M4`,
+   `S1`–`S4` and `1`–`4` — flash.
+2. Click the place to fill, for example `1` for fader group 1. Only that place
+   keeps flashing, its current members are pre-selected, and the button reads
+   `end edit`.
+3. Click strips to add or remove them. The session is modal, so a plain click
+   is enough; Shift+click also works anywhere on a strip, including its fader.
+4. Press `end edit` to store. The place stops flashing and keeps its colour,
+   and the fader caps of the members take the same colour.
+
+Clicking another storage place stores the current one and starts the next, so
+`1`, `M1` and `S1` can be filled in one session. Esc leaves the session
+without storing what was just built.
+
+With the fader link engaged, moving one member applies the same dB change to
+the others, so their relative balance is preserved. Do not add faders parked
+at the very top or bottom unless the whole group is there: a relative move
+cannot go further in that direction. Mute and solo propagate the same way.
+`clear` empties all four groups.
+
+The fader groups carry red, blue, green and violet, on their cells and on the
+caps of their members; mute cells are steel blue and solo cells amber.
+Shift+click on a strip or its fader builds the **temporary fader group**,
+whose members' caps turn yellow; the `F` button clears it. The temporary
+group outranks a stored colour while it exists.
 
 Groups are saved in a workspace. Loading a workspace replaces the current
 groups with the stored ones.

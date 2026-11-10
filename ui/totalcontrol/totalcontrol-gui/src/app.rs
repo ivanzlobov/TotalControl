@@ -2158,13 +2158,16 @@ pub enum Message {
     SnapshotStore,
     /// Rename the selected snapshot slot.
     SnapshotNameChanged(String),
-    /// Enters/exits group-assignment mode — while active, clicking a
-    /// group's mute/solo/fader cell assigns the current multi-selection
-    /// (`state.selected`) as that group's membership.
+    /// Opens or commits a group-assignment session. Opening one flashes
+    /// every storage place; choosing a cell (`GroupLinkToggle`) keeps that
+    /// one flashing and seeds its membership; strip clicks then toggle
+    /// membership; a second press commits it.
     GroupEditToggle,
     GroupLinkToggle(usize, sidebar::GroupLink),
-    /// Clears the group currently being edited (or all four, if none
-    /// is — see the handler).
+    /// Advances the flash phase of the storage places while a session is
+    /// open.  Not a workspace edit.
+    GroupFlash,
+    /// Clears all four groups (and any open session).
     GroupClear,
     /// Recalls "Layout `u8`" (1-6) and marks it as the slot
     /// `LayoutStore` will save into.
@@ -2274,6 +2277,19 @@ pub struct StartupMismatch {
     pub ucx_dump: Option<UcxDump>,
     /// Saved scene with all decoded device values applied, for "Use device".
     pub device_scene: Option<Scene>,
+}
+
+/// The storage place being filled.  `edit` opens one with no target while
+/// every cell flashes; choosing a cell sets `target`, seeds `pending` from
+/// the group's current members, and only that cell keeps flashing.  Clicks
+/// on strips then toggle membership.  A second `edit` (or choosing another
+/// cell) commits it.
+#[derive(Debug, Clone, Default)]
+pub struct GroupEdit {
+    /// `(group index, link)` once a storage place is chosen.
+    pub target: Option<(usize, sidebar::GroupLink)>,
+    /// Membership being built, only meaningful with a target.
+    pub pending: Vec<ChannelId>,
 }
 
 pub struct TotalControl {
@@ -2602,12 +2618,12 @@ pub struct TotalControl {
     pub undo_stack: Vec<Scene>,
     pub redo_stack: Vec<Scene>,
     pub groups: [Group; 4],
-    /// Whether the "edit" button is engaged — while `true`, clicking a
-    /// group's mute/solo/fader cell assigns `selected` as that group's
-    /// membership (see `Message::GroupLinkToggle`); while `false`, the
-    /// same click just flips that link type on/off for the group's
-    /// existing membership.
-    pub group_editing: bool,
+    /// The open group-edit session. `None` when the panel is idle; `Some`
+    /// while all storage places flash (no target yet) or the chosen one
+    /// flashes and accepts membership clicks.
+    pub group_edit: Option<GroupEdit>,
+    /// Flash phase of the storage places while a session is open.
+    pub group_flash: bool,
     /// `None` = that slot has never been stored to.
     pub layouts: [Option<HashSet<ChannelId>>; 6],
     pub active_layout: Option<usize>,
@@ -3209,7 +3225,8 @@ pub fn new_with_device(
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
         groups: Default::default(),
-        group_editing: false,
+        group_edit: None,
+        group_flash: false,
         layouts: std::array::from_fn(|i| crate::layouts::load_layout_file((i + 1) as u8)),
         active_layout: None,
         active_snapshot: None,
@@ -3395,9 +3412,12 @@ pub fn apply_prefs(state: &mut TotalControl, prefs: crate::prefs::Prefs) {
         .unwrap_or(0);
     state.assign[CUE_DEST] = Some(cue);
     if let Some(w) = prefs.sidebar_width {
-        // Move installs still on the old default to the new, slightly
-        // narrower default; an explicitly chosen width is left alone.
-        let w = if (w - sidebar::OLD_DEFAULT_WIDTH).abs() < 0.5 {
+        // Installs still on one of the old defaults move to the current
+        // one; an explicitly chosen width is left alone.
+        let w = if sidebar::OLD_DEFAULT_WIDTHS
+            .iter()
+            .any(|old| (w - old).abs() < 0.5)
+        {
             sidebar::DEFAULT_WIDTH
         } else {
             w
@@ -3554,6 +3574,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         scene,
         snapshots,
         groups: state.groups.clone(),
+        temporary_group: state.selected.iter().copied().collect(),
         layouts: state.layouts.clone(),
         labels: state.labels.iter().map(|(c, l)| (*c, l.clone())).collect(),
         view: WorkspaceView {
@@ -3655,7 +3676,9 @@ fn apply_workspace_state(
             .unwrap_or_else(|| format!("Mix {}", i + 1))
     });
     state.groups = workspace.groups.clone();
-    state.group_editing = false;
+    state.group_edit = None;
+    state.selected = workspace.temporary_group.iter().copied().collect();
+    state.select_anchor = None;
     state.layouts = workspace.layouts.clone();
     state.active_layout = workspace.view.active_layout;
     state.active_snapshot = workspace.view.active_snapshot;
@@ -4988,20 +5011,6 @@ fn db_to_vol(db: f32) -> f32 {
     }
 }
 
-/// Every selectable channel, in the same order they're laid out on
-/// screen (Hardware Inputs, then Software Playback, then Hardware
-/// Outputs, each in index order) — the linear ordering Shift+click range
-/// selection is measured against, so a range visually spans exactly the
-/// strips between two clicks the way it would in a file manager.
-fn channel_order(state: &TotalControl) -> Vec<ChannelId> {
-    let d = &state.device;
-    (0..d.inputs().len())
-        .map(ChannelId::Input)
-        .chain((0..d.playbacks().len()).map(ChannelId::Playback))
-        .chain((0..d.outputs().len()).map(ChannelId::Output))
-        .collect()
-}
-
 /// Sets `cid`'s volume to `v`. If `cid` is part of an active multi-selection,
 /// every other selected channel moves by the same *relative* amount instead
 /// of jumping to the same absolute level — preserving the balance between
@@ -5292,6 +5301,22 @@ fn propagation_set(
     }
     set.remove(&cid);
     set
+}
+
+fn apply_group_edit(
+    state: &mut TotalControl,
+    group: usize,
+    link: sidebar::GroupLink,
+    members: Vec<ChannelId>,
+) {
+    if let Some(g) = state.groups.get_mut(group) {
+        g.members = members;
+        match link {
+            sidebar::GroupLink::Mute => g.mute_linked = true,
+            sidebar::GroupLink::Solo => g.solo_linked = true,
+            sidebar::GroupLink::Fader => g.fader_linked = true,
+        }
+    }
 }
 
 fn apply_grouped_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v: f32) {
@@ -7469,6 +7494,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::SnapshotNameChanged(_)
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
+            | Message::GroupFlash
             | Message::GroupClear
             | Message::LayoutClicked(_)
             | Message::LayoutStore
@@ -7611,6 +7637,8 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::GroupEditToggle
             | Message::GroupLinkToggle(..)
             | Message::GroupClear
+            | Message::StripClicked(_)
+            | Message::ClearSelection
             | Message::ControlRoomMuteFx(_)
             | Message::ControlRoomMono(_)
             | Message::ControlRoomRecall
@@ -8558,7 +8586,11 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::EscapePressed => {
             // Topmost thing first: the modal outranks an in-place edit.
-            if state.workspace_pending.is_some() {
+            if state.group_edit.is_some() {
+                // Leaving without the second `edit` press discards the
+                // membership built so far; the group keeps what it had.
+                state.group_edit = None;
+            } else if state.workspace_pending.is_some() {
                 state.workspace_pending = None;
             } else if state.show_about {
                 state.show_about = false;
@@ -9489,33 +9521,36 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::StripClicked(cid) => {
+            log::debug!(
+                "strip click {cid:?} shift={} edit={:?}",
+                state.modifiers.shift(),
+                state.group_edit.as_ref().map(|e| e.target)
+            );
+            // While a storage place flashes, clicks build its membership
+            // instead of touching the selection (RME's modal setup).
+            if let Some(edit) = state.group_edit.as_mut().filter(|e| e.target.is_some()) {
+                let before = edit.pending.len();
+                if let Some(pos) = edit.pending.iter().position(|c| *c == cid) {
+                    edit.pending.remove(pos);
+                } else {
+                    edit.pending.push(cid);
+                }
+                log::debug!(
+                    "groups: click {cid:?} with target {:?}: pending {before} -> {}",
+                    edit.target,
+                    edit.pending.len()
+                );
+                return Task::none();
+            }
             state.focus_channel = Some(cid);
-            if state.modifiers.control() {
-                // Toggle just this one strip, leaving the rest of the
-                // selection untouched — the standard Ctrl+click
-                // convention. Becomes the pivot for the next Shift+click.
+            if state.modifiers.shift() {
+                // Shift+click adds or removes this strip from the temporary
+                // fader group (the selection), RME's gesture. There is no
+                // range-select and no Ctrl+click: one additive gesture.
                 if !state.selected.remove(&cid) {
                     state.selected.insert(cid);
                 }
                 state.select_anchor = Some(cid);
-            } else if state.modifiers.shift() {
-                // Select the whole visual range from the anchor through
-                // cid, replacing the current selection — the standard
-                // Shift+click convention. Doesn't move the anchor, so a
-                // second Shift+click elsewhere re-measures from the same
-                // start rather than the last endpoint.
-                let order = channel_order(state);
-                let anchor = state.select_anchor.unwrap_or(cid);
-                if let (Some(from), Some(to)) = (
-                    order.iter().position(|&c| c == anchor),
-                    order.iter().position(|&c| c == cid),
-                ) {
-                    let (lo, hi) = (from.min(to), from.max(to));
-                    state.selected = order[lo..=hi].iter().copied().collect();
-                }
-                if state.select_anchor.is_none() {
-                    state.select_anchor = Some(cid);
-                }
             } else {
                 // Plain click: this strip becomes the selection.
                 select_strip(state, cid);
@@ -10328,36 +10363,51 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::GroupEditToggle => state.group_editing = !state.group_editing,
+        Message::GroupEditToggle => match state.group_edit.take() {
+            Some(edit) => {
+                log::debug!("groups: end edit, target {:?}", edit.target);
+                if let Some((group, link)) = edit.target {
+                    apply_group_edit(state, group, link, edit.pending);
+                }
+            }
+            None => {
+                log::debug!("groups: begin edit");
+                state.group_edit = Some(GroupEdit::default());
+            }
+        },
         Message::GroupLinkToggle(idx, link) => {
-            if let Some(g) = state.groups.get_mut(idx) {
-                if state.group_editing {
-                    // Assign the current multi-selection as this
-                    // group's membership and engage this link type —
-                    // the existing Ctrl/Shift-click selection is the
-                    // whole "picker UI" here, deliberately, rather than
-                    // a bespoke channel-assignment dialog.
-                    g.members = state.selected.iter().copied().collect();
-                    match link {
-                        sidebar::GroupLink::Mute => g.mute_linked = true,
-                        sidebar::GroupLink::Solo => g.solo_linked = true,
-                        sidebar::GroupLink::Fader => g.fader_linked = true,
-                    }
-                } else {
-                    match link {
-                        sidebar::GroupLink::Mute => g.mute_linked = !g.mute_linked,
-                        sidebar::GroupLink::Solo => g.solo_linked = !g.solo_linked,
-                        sidebar::GroupLink::Fader => g.fader_linked = !g.fader_linked,
-                    }
+            log::debug!("groups: storage cell {idx} {link:?}");
+            if let Some(edit) = state.group_edit.clone() {
+                // Moving to another storage place commits the one being
+                // filled, so a session can build F1, M1 and S1 in turn.
+                if let Some((group, previous)) = edit.target {
+                    apply_group_edit(state, group, previous, edit.pending);
+                }
+                let seeded = state
+                    .groups
+                    .get(idx)
+                    .map(|g| g.members.clone())
+                    .unwrap_or_default();
+                state.group_edit = Some(GroupEdit {
+                    target: Some((idx, link)),
+                    pending: seeded,
+                });
+            } else if let Some(g) = state.groups.get_mut(idx) {
+                match link {
+                    sidebar::GroupLink::Mute => g.mute_linked = !g.mute_linked,
+                    sidebar::GroupLink::Solo => g.solo_linked = !g.solo_linked,
+                    sidebar::GroupLink::Fader => g.fader_linked = !g.fader_linked,
                 }
             }
             notify_rme_page3(state);
         }
         Message::GroupClear => {
+            log::debug!("groups: clear");
             state.groups = Default::default();
-            state.group_editing = false;
+            state.group_edit = None;
             notify_rme_page3(state);
         }
+        Message::GroupFlash => state.group_flash = !state.group_flash,
         Message::LayoutClicked(n) => {
             state.active_layout = Some(n as usize);
             if let Some(set) = state.layouts.get((n - 1) as usize).cloned().flatten() {
@@ -10734,6 +10784,11 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         || state.assign_anim.is_some()
     {
         subs.push(iced::time::every(Duration::from_millis(8)).map(|_| Message::CollapseTick));
+    }
+    // A group-assignment session flashes its storage places: one phase
+    // toggle every 500 ms while it is open, and nothing after.
+    if state.group_edit.is_some() {
+        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::GroupFlash));
     }
     // The notification-area icon and second launches, see `tray`.
     subs.push(crate::tray::subscription().map(Message::Tray));
@@ -12914,6 +12969,30 @@ fn output_meter_available(state: &TotalControl, out_idx: usize) -> bool {
 /// inline in `mixer_view`'s three loops; factored out so `quick_view` can
 /// render the exact same strip (just at a bigger `scale`) without a fourth
 /// copy of it.
+/// The colour a strip's fader cap carries.  The temporary fader group wins
+/// while it exists, then the group being edited (so the membership shows
+/// while it is built), then the first stored group whose fader link is
+/// engaged.
+fn fader_group_mark(state: &TotalControl, cid: ChannelId) -> Option<Color> {
+    // The membership being built shows live, even over a temporary group.
+    if let Some(edit) = &state.group_edit {
+        if let Some((group, sidebar::GroupLink::Fader)) = edit.target {
+            if edit.pending.contains(&cid) {
+                return Some(theme::group_fader(group));
+            }
+        }
+    }
+    if state.selected.len() > 1 && state.selected.contains(&cid) {
+        return Some(theme::group_temporary());
+    }
+    state
+        .groups
+        .iter()
+        .enumerate()
+        .find(|(_, g)| g.fader_linked && g.members.contains(&cid))
+        .map(|(i, _)| theme::group_fader(i))
+}
+
 fn strip_params<'a>(
     state: &'a TotalControl,
     cid: ChannelId,
@@ -12985,6 +13064,11 @@ fn strip_params<'a>(
         meter_bus,
         meter_slot,
         meter_trim: 0.0,
+        fader_group: fader_group_mark(state, cid),
+        fader_select_only: state
+            .group_edit
+            .as_ref()
+            .is_some_and(|edit| edit.target.is_some()),
         has_48v: false,
         has_pad: false,
         has_instrument: false,
@@ -18832,21 +18916,30 @@ mod tests {
     // mechanism was moving "b" too, for a reason that had nothing to do
     // with the group). Channels 0 and 4 are in different pairs.
 
+    /// Build `group` with `members` through the real edit flow: open the
+    /// session, choose the storage place, click the strips, close it.
+    fn assign_group(
+        state: &mut TotalControl,
+        group: usize,
+        link: sidebar::GroupLink,
+        members: &[ChannelId],
+    ) {
+        let _ = update(state, Message::GroupEditToggle);
+        let _ = update(state, Message::GroupLinkToggle(group, link));
+        for cid in members {
+            let _ = update(state, Message::StripClicked(*cid));
+        }
+        let _ = update(state, Message::GroupEditToggle);
+    }
+
     #[test]
     fn group_mute_link_propagates_to_members() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(4);
-        state.selected.insert(a);
-        state.selected.insert(b);
-        let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Mute));
+        assign_group(&mut state, 0, sidebar::GroupLink::Mute, &[a, b]);
         assert_eq!(state.groups[0].members.len(), 2);
         assert!(state.groups[0].mute_linked);
-        // Clear the selection used to assign membership — isolates
-        // group-driven propagation from the pre-existing multi-select
-        // one, which would also propagate here and mask a group-only bug.
-        state.selected.clear();
 
         let _ = update(&mut state, Message::Mute(a, true));
         assert!(state.device.inputs()[0].mute);
@@ -18863,11 +18956,7 @@ mod tests {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(4);
-        state.selected.insert(a);
-        state.selected.insert(b);
-        let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Solo));
-        state.selected.clear();
+        assign_group(&mut state, 0, sidebar::GroupLink::Solo, &[a, b]);
 
         let _ = update(&mut state, Message::Mute(a, true));
         assert!(state.device.inputs()[0].mute);
@@ -18882,11 +18971,7 @@ mod tests {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let b = ChannelId::Input(4);
-        state.selected.insert(a);
-        state.selected.insert(b);
-        let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Fader));
-        state.selected.clear();
+        assign_group(&mut state, 0, sidebar::GroupLink::Fader, &[a, b]);
 
         // Both start at the default unity volume (1.0) — an equal
         // relative move should land them at the same place.
@@ -18904,14 +18989,80 @@ mod tests {
     fn group_clear_removes_all_membership() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
-        state.selected.insert(a);
-        let _ = update(&mut state, Message::GroupEditToggle);
-        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Mute));
+        assign_group(&mut state, 0, sidebar::GroupLink::Mute, &[a]);
         assert!(!state.groups[0].members.is_empty());
 
         let _ = update(&mut state, Message::GroupClear);
         assert!(state.groups.iter().all(|g| g.members.is_empty()));
-        assert!(!state.group_editing);
+        assert!(state.group_edit.is_none());
+    }
+
+    #[test]
+    fn a_storage_place_flashes_then_seeds_and_commits() {
+        let mut state = new(true, None, None);
+        let _ = update(&mut state, Message::GroupEditToggle);
+        let edit = state.group_edit.as_ref().expect("session open");
+        assert_eq!(edit.target, None, "every place flashes until one is picked");
+
+        let _ = update(&mut state, Message::GroupLinkToggle(1, sidebar::GroupLink::Fader));
+        let edit = state.group_edit.as_ref().expect("session open");
+        assert_eq!(edit.target, Some((1, sidebar::GroupLink::Fader)));
+        assert!(edit.pending.is_empty());
+        assert!(!state.groups[1].fader_linked, "the link engages on commit");
+
+        let _ = update(&mut state, Message::GroupEditToggle);
+        assert!(state.group_edit.is_none());
+        assert!(state.groups[1].fader_linked);
+    }
+
+    #[test]
+    fn escape_discards_the_membership_of_the_open_session() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let _ = update(&mut state, Message::GroupEditToggle);
+        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Fader));
+        let _ = update(&mut state, Message::StripClicked(a));
+        let _ = update(&mut state, Message::EscapePressed);
+        assert!(state.group_edit.is_none());
+        assert!(state.groups[0].members.is_empty(), "Escape leaves the group alone");
+        assert!(!state.groups[0].fader_linked);
+    }
+
+    #[test]
+    fn the_temporary_fader_group_is_stored_in_the_workspace() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        let workspace = capture_workspace(&state);
+
+        // Through the file format, not only the struct.
+        let json = serde_json::to_string(&workspace).unwrap();
+        let back: crate::workspaces::Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.temporary_group.len(), 2, "the set is serialized");
+
+        let mut other = new(true, None, None);
+        apply_workspace(&mut other, &back, std::path::PathBuf::from("test.tcws")).unwrap();
+        assert!(other.selected.contains(&a));
+        assert!(other.selected.contains(&b));
+    }
+
+    #[test]
+    fn choosing_a_second_place_commits_the_first() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::GroupEditToggle);
+        let _ = update(&mut state, Message::GroupLinkToggle(0, sidebar::GroupLink::Fader));
+        let _ = update(&mut state, Message::StripClicked(a));
+        let _ = update(&mut state, Message::GroupLinkToggle(1, sidebar::GroupLink::Mute));
+        let _ = update(&mut state, Message::StripClicked(b));
+        let _ = update(&mut state, Message::GroupEditToggle);
+        assert_eq!(state.groups[0].members, vec![a]);
+        assert!(state.groups[0].fader_linked);
+        assert_eq!(state.groups[1].members, vec![b]);
+        assert!(state.groups[1].mute_linked);
     }
 
     /// The chip's word maps the connection state in priority order: a
@@ -19007,7 +19158,7 @@ mod tests {
         apply_prefs(
             &mut state,
             crate::prefs::Prefs {
-                sidebar_width: Some(sidebar::OLD_DEFAULT_WIDTH),
+                sidebar_width: Some(sidebar::OLD_DEFAULT_WIDTHS[0]),
                 ..Default::default()
             },
         );

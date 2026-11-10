@@ -232,6 +232,12 @@ pub struct StripParams<'a> {
     /// Trim in dB applied to the bus meter, so the strip shows the signal
     /// after trim exactly like the view-fed path.
     pub meter_trim: f32,
+    /// Colour of this strip's fader cap when it belongs to a fader group:
+    /// the temporary group, a stored group, or the group being edited.
+    pub fader_group: Option<Color>,
+    /// While a group-assignment session is open, a plain click on the fader
+    /// picks the strip instead of dragging it.
+    pub fader_select_only: bool,
     pub has_48v: bool,
     pub has_pad: bool,
     pub has_instrument: bool,
@@ -1073,6 +1079,9 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         on_drag: Box::new(move |v| Message::VolumeChanged(cid, out, v)),
         on_release: Box::new(move || Message::RangeCleared(cid)),
         on_reset: Box::new(move || Message::Reset(cid, out, default_vol)),
+        on_select: Some(Box::new(move || Message::StripClicked(cid))),
+        cap_tint: p.fader_group,
+        click_selects: p.fader_select_only,
     });
 
     // The four tab slots are fixed.  A slot with no control is still
@@ -1208,6 +1217,9 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             on_drag: Box::new(move |v| fx_message(cid, db_of(v))),
             on_release: Box::new(move || Message::RangeCleared(cid)),
             on_reset: Box::new(move || fx_message(cid, -65.0)),
+            on_select: Some(Box::new(move || Message::StripClicked(cid))),
+            cap_tint: None,
+            click_selects: p.fader_select_only,
         });
         // The fader's own coloured fill says everything; the dark channel
         // behind it is what marks the slot above the cap.

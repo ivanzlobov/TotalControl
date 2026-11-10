@@ -44,21 +44,20 @@ use crate::theme;
 /// the resize strip — wide enough for the longest label in the Options
 /// panel ("solo/pfl mode") without wrapping. Its rows act as a
 /// self-contained readout, so this is a starting point rather than
-/// something the layout negotiates with the mixer. Kept deliberately a
-/// little narrower than the original 210 px so the mixer gets the space.
-pub const DEFAULT_WIDTH: f32 = 200.0;
-/// The pre-2026-10-26 default.  Existing prefs at exactly this value are
-/// migrated to `DEFAULT_WIDTH` once; a user who deliberately chose another
-/// width keeps it.
-pub const OLD_DEFAULT_WIDTH: f32 = 210.0;
-/// Bounds on `TotalControl::sidebar_width`. The floor is set by the same
-/// measurement as `DEFAULT_WIDTH`: below roughly 200 the Options rows'
-/// two segments stop fitting their labels, and iced wraps the text onto a
-/// second line (a taller row, not a broken one) — allowed down to this
-/// because reclaiming mixer space is the point of a resize, and the drag
-/// is trivially reversible. The ceiling is where the mixer's own strips
-/// stop having room to spare on a 1920px window.
-pub const MIN_WIDTH: f32 = 170.0;
+/// something the layout negotiates with the mixer. Kept deliberately
+/// narrow: every control in it is `Fill`, so the mixer gets the space and
+/// the labels still fit.
+pub const DEFAULT_WIDTH: f32 = 140.0;
+/// Defaults from before the current one.  Existing prefs at exactly one of
+/// these are migrated to `DEFAULT_WIDTH` once; a user who deliberately
+/// chose another width keeps it.
+pub const OLD_DEFAULT_WIDTHS: [f32; 2] = [210.0, 200.0];
+/// Bounds on `TotalControl::sidebar_width`. The floor allows the Options
+/// rows to wrap onto a second line (a taller row, not a broken one), since
+/// reclaiming mixer space is the point of a resize and the drag is
+/// trivially reversible. The ceiling is where the mixer's own strips stop
+/// having room to spare on a 1920px window.
+pub const MIN_WIDTH: f32 = 130.0;
 pub const MAX_WIDTH: f32 = 420.0;
 /// Width of the collapsed rail: the panel toggle plus its padding, so
 /// collapsing reclaims most of the width for the mixer while the button
@@ -475,7 +474,7 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
     // redundant here since the state right next to it already says
     // "Simulated", and the suffix alone was enough to push
     // "Babyface Pro FS (mock)" past this chip's text budget in a
-    // 210px-wide sidebar. Strip it for display only.
+    // 140px-wide sidebar. Strip it for display only.
     let display_name = state
         .device
         .model_name()
@@ -495,7 +494,7 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                         .size(theme::TEXT_XS * scale)
                         .color(status_color),
                     text(display_name)
-                        .size(theme::TEXT_MD * scale)
+                        .size(theme::TEXT_SM * scale)
                         .color(theme::text_primary())
                         .wrapping(iced::advanced::text::Wrapping::None),
                     iced::widget::Space::new().width(Length::Fill),
@@ -601,10 +600,10 @@ fn undo_redo_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
 ///   between, it and the channels it holds show as armed (dimmed outline,
 ///   `theme::armed_toggle_button`), as TotalMix keeps them marked.
 /// * `S` is the same for solos (`Message::GlobalSoloToggle`).
-/// * `F` is TotalMix's temporary fader group, which here is the strip
-///   multi-selection (Ctrl/Shift-click): its faders already move together
-///   relatively. Lit while a selection exists, a press clears it; with
-///   nothing selected it is disabled, since there is nothing to clear.
+/// * `F` is TotalMix's temporary fader group: Shift-click a strip or its
+///   fader to add or remove it, and the members' caps turn yellow. Lit while
+///   a group exists, a press clears it; with nothing selected it is disabled,
+///   since there is nothing to clear.
 /// * `DIM` flips `RmeDevice::set_dim`, the switch the front-panel DIM
 ///   button toggles, which had no on-screen control at all. RME-protocol
 ///   only, so it is absent in Class Compliant mode.
@@ -660,9 +659,9 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         ),
         hint(
             cell("F")
-                .style(theme::toggle_button(has_group, theme::ACCENT))
+                .style(theme::toggle_button(has_group, theme::group_temporary()))
                 .on_press_maybe(has_group.then_some(Message::ClearSelection)),
-            "Fader group (Ctrl/Shift-click strips): clear it",
+            "Temporary fader group (Shift-click strips): clear it",
             scale,
         ),
     ]
@@ -1226,39 +1225,49 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         .spacing(theme::SPACE_TIGHT * scale),
     );
 
+    let target = state.group_edit.as_ref().and_then(|edit| edit.target);
     for (i, g) in state.groups.iter().enumerate() {
-        // Cells reflect the group's real link state regardless of edit
-        // mode — only the "edit" button itself (below) shows whether a
-        // click here will assign a fresh membership or just flip a link.
-        let cell = |lit: bool, label: String, link: GroupLink| -> Element<'_, Message> {
+        // While a session is open the storage places flash to say "pick
+        // me"; once one is chosen only it keeps flashing, and the others
+        // show their steady link state.
+        let cell = |linked: bool,
+                    colour: iced::Color,
+                    label: String,
+                    link: GroupLink|
+         -> Element<'_, Message> {
+            let is_target = target == Some((i, link));
+            let flashing = state.group_edit.is_some()
+                && (target.is_none() || is_target);
+            let lit = if flashing { state.group_flash } else { linked };
             button(text(label).size(theme::TEXT_XS * scale).center())
                 .padding(theme::SPACE_TIGHT * scale)
                 .width(Length::Fill)
-                .style(theme::toggle_button(lit, theme::ACCENT))
+                .style(theme::toggle_button(lit, colour))
                 .on_press(Message::GroupLinkToggle(i, link))
                 .into()
         };
         body = body.push(
             row![
-                cell(g.mute_linked, format!("M{}", i + 1), GroupLink::Mute),
-                cell(g.solo_linked, format!("S{}", i + 1), GroupLink::Solo),
-                cell(g.fader_linked, format!("{}", i + 1), GroupLink::Fader),
+                cell(g.mute_linked, theme::group_mute(), format!("M{}", i + 1), GroupLink::Mute),
+                cell(g.solo_linked, theme::group_solo(), format!("S{}", i + 1), GroupLink::Solo),
+                cell(g.fader_linked, theme::group_fader(i), format!("{}", i + 1), GroupLink::Fader),
             ]
             .spacing(theme::SPACE_TIGHT * scale),
         );
     }
 
-    // Edit mode is a switch position, not a lit channel: it says where a
-    // click on the cells above will land, so it gets the dim pill. "clear"
-    // is the pair's destructive half and stays flat — as a `plain_button`
-    // it was the lightest-colored box in the whole column, which read as
-    // the most important thing in the panel.
+    // The button says what the next press does: opening a session, or
+    // committing the storage place that is flashing.
+    let edit_label = match state.group_edit.as_ref() {
+        Some(edit) if edit.target.is_some() => "end edit",
+        _ => "edit",
+    };
     body = body.push(
         row![
-            button(text("edit").size(theme::TEXT_XS * scale).center())
+            button(text(edit_label).size(theme::TEXT_XS * scale).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])
                 .width(Length::Fill)
-                .style(theme::segment_button(state.group_editing))
+                .style(theme::segment_button(state.group_edit.is_some()))
                 .on_press(Message::GroupEditToggle),
             button(text("clear").size(theme::TEXT_XS * scale).center())
                 .padding([theme::SPACE_TIGHT * scale, theme::SPACE_MD * scale])

@@ -43,13 +43,25 @@ sits in the main area, immediately left of the right sidebar.
 
 The right sidebar contains the device card, Undo/Redo, global mute/solo, the
 FX knob, group and snapshot controls, and layout. It stays in the layout as
-the window narrows. Its default width is 200 px; it accepts resizing and has
+the window narrows. Its default width is 140 px; it accepts resizing and has
 its own collapse toggle.
 
 The global row is `M`, `S`/`F`, `F`. The left button is the Mute master. The
 middle button is the Solo master; in PFL mode it shows `F` while an input is
 listening and `S` otherwise, and it switches the active PFL inputs off and
 back on. The right `F` is the temporary fader group, not the FX panel.
+
+The `groups` card has four rows of storage places: `M1`–`M4` for the mute
+link, `S1`–`S4` for the solo link and `1`–`4` for the fader link, with `edit`
+and `clear` below.  `edit` opens a group-assignment session and every storage
+place flashes.  Choosing a place keeps only it flashing, seeds it with the
+group's current members and turns the button into `end edit`; clicks on
+strips then add or remove members.  `end edit` stores the membership and
+engages the chosen link, choosing another place stores the current one and
+starts the next, and Esc cancels the session.  A linked place keeps its
+steady colour: fader groups red, blue, green and violet, mute steel blue,
+solo amber.  A fader-linked group tints the caps of its members with its
+colour; the temporary fader group tints them yellow.
 
 The Control Room closes the Hardware Outputs row, flush with the mixer's right
 edge.
@@ -146,7 +158,8 @@ of the chosen output pairs are cleared. A factory workspace has no file:
 `Save` opens Save As so the user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
-groups, six layout slots, collapsed/expanded strips, view and sidebar state,
+groups (including the temporary fader group), six layout slots,
+collapsed/expanded strips, view and sidebar state,
 Control Room settings and assignments, virtual-surround settings and window
 size. It stores the sample rate, pitch/varispeed and active Dim, Speaker B,
 Cue, External Input and PFL states, plus each output's Talkback receive flag
