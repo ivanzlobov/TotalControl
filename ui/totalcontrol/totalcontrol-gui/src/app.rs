@@ -7699,7 +7699,30 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     }
 }
 
+/// Count handled messages by variant when `TOTALCONTROL_PROFILE` is set.
+fn profile_message(message: &Message) {
+    static COUNTS: std::sync::OnceLock<
+        std::sync::Mutex<(std::time::Instant, std::collections::HashMap<String, u32>)>,
+    > = std::sync::OnceLock::new();
+    let counts = COUNTS.get_or_init(|| {
+        std::sync::Mutex::new((std::time::Instant::now(), std::collections::HashMap::new()))
+    });
+    let mut guard = counts.lock().expect("profile counts");
+    let key = format!("{:?}", std::mem::discriminant(message));
+    *guard.1.entry(key).or_default() += 1;
+    if guard.0.elapsed() >= std::time::Duration::from_secs(1) {
+        let mut items: Vec<(String, u32)> = guard.1.drain().collect();
+        items.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        let top: Vec<String> = items.iter().take(4).map(|(k, n)| format!("{k}={n}")).collect();
+        eprintln!("profile: messages/s {}", top.join(" "));
+        guard.0 = std::time::Instant::now();
+    }
+}
+
 pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
+    if profiling() {
+        profile_message(&message);
+    }
     // A host change whose confirming snapshot never arrived (a rejected
     // command, or a stopped service) must not capture a later snapshot.
     if state
