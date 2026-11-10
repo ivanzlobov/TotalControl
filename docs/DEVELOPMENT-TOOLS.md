@@ -209,9 +209,11 @@ for the field reference, the validation rules and the change workflow.
 driver helpers. `scripts/install-dkms.sh` is the supported driver installer;
 `scripts/install-kernel.sh` is its compatibility wrapper.
 
-`scripts/run-totalcontrol.sh` builds the current GUI sources, stops a running
-debug instance and starts the freshly built binary. A local development desktop
-entry can point at it so a menu launch never starts a stale build.
+`scripts/run-totalcontrol.sh` builds the current GUI sources in the release
+profile, stops a running instance of any profile and starts the freshly built
+binary. `TOTALCONTROL_BUILD_PROFILE=dev` builds the development binary instead.
+A local development desktop entry can point at it so a menu launch never starts
+a stale build.
 
 ## Licensing
 
