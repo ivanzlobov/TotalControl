@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TotalControl GUI layout (prototype)",
-  "description": "Complete GUI layout document for TotalControl: channel-strip geometry at zoom 1.0, visual tokens, the semantic colour scheme and the channel templates. Prototype schema, version 1: it describes one global rule set for every channel and is consumed by the layout preview only. Reference: docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md.",
+  "description": "Complete GUI layout document for TotalControl: channel-strip geometry at zoom 1.0, visual tokens, the semantic colour scheme and the channel templates. Prototype schema, version 2: each template declares its elements and their grid placements; the document is consumed by the layout preview only. Reference: docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -10,9 +10,9 @@
       "description": "Optional path or URI of this schema file. Ignored by TotalControl; used by editors for validation and completion."
     },
     "schema": {
-      "const": 1,
-      "default": 1,
-      "description": "Document schema version. Must be 1."
+      "const": 2,
+      "default": 2,
+      "description": "Document schema version. Must be 2."
     },
     "geometry": {
       "type": "object",
@@ -469,12 +469,12 @@
     },
     "templates": {
       "type": "array",
-      "description": "Channel templates rendered by the preview, in sheet order. At least one entry; ids must be unique.",
+      "description": "Channel templates rendered by the preview, in sheet order. At least one entry; ids and placements must be unique within a template.",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "kind", "features", "stereo"],
+        "required": ["id", "kind", "stereo", "elements"],
         "properties": {
           "id": {
             "enum": [
@@ -492,31 +492,58 @@
             "enum": ["Input", "Playback", "Output"],
             "description": "Channel row. Input and Playback have a B2 submix bar; Output does not."
           },
-          "features": {
-            "type": "object",
-            "description": "Optional controls that exist for this template. An absent feature keeps its slot, so elements below it do not move.",
-            "additionalProperties": false,
-            "required": ["fx", "trim", "eq", "dynamics"],
-            "properties": {
-              "fx": {
-                "type": "boolean",
-                "default": true,
-                "description": "The thin FX fader exists in the tab column."
-              },
-              "trim": {
-                "type": "boolean",
-                "default": true,
-                "description": "The Trim tab exists in the MR2 slot."
-              },
-              "eq": {
-                "type": "boolean",
-                "default": true,
-                "description": "The EQ tab exists in the MR4 slot."
-              },
-              "dynamics": {
-                "type": "boolean",
-                "default": true,
-                "description": "The Dynamics tab exists in the MR5 slot."
+          "elements": {
+            "type": "array",
+            "minItems": 1,
+            "description": "The channel elements of this template. An omitted element leaves its row empty; the rows below keep their position. Each kind belongs at one placement: name T1, pan T2, mute TL3, solo or cue TR3, readout_left M1L, readout_right M1R, meter ML, fader MC, fx_fader MR1, trim_tab MR2, settings_tab MR3, eq_tab MR4, dynamics_tab MR5, level_readout B1, minimize B1R, submix B2.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "at"],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "name",
+                    "pan",
+                    "mute",
+                    "solo",
+                    "cue",
+                    "readout_left",
+                    "readout_right",
+                    "meter",
+                    "fader",
+                    "fx_fader",
+                    "trim_tab",
+                    "settings_tab",
+                    "eq_tab",
+                    "dynamics_tab",
+                    "level_readout",
+                    "minimize",
+                    "submix"
+                  ],
+                  "description": "What the element is and what it is bound to."
+                },
+                "at": {
+                  "enum": [
+                    "T1",
+                    "T2",
+                    "TL3",
+                    "TR3",
+                    "M1L",
+                    "M1R",
+                    "ML",
+                    "MC",
+                    "MR1",
+                    "MR2",
+                    "MR3",
+                    "MR4",
+                    "MR5",
+                    "B1",
+                    "B1R",
+                    "B2"
+                  ],
+                  "description": "The grid placement from the GUI specification: T rows on top, M in the middle, B at the bottom; L, C and R the columns."
+                }
               }
             }
           },

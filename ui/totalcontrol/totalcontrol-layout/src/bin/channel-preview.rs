@@ -8,9 +8,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use totalcontrol_layout::{
-    Action, ChannelKind, ChannelSide, ChannelTemplate, ColorScheme, ElementKind, ElementPlacement,
-    GuiLayoutConfig, Panel, Rect, StripLayout, TemplateSpec, VisualTokens, MONO_BAR_RATIO,
-    VU_LABELS,
+    Action, ChannelKind, ChannelSide, ColorScheme, ElementKind, ElementPlacement, GuiLayoutConfig,
+    LayoutTemplate, Panel, Rect, TemplateId, VisualTokens, MONO_BAR_RATIO, VU_LABELS,
 };
 
 fn main() {
@@ -106,18 +105,18 @@ fn sheet(scale: f32, config: &GuiLayoutConfig) -> String {
         size = 15.0 * scale,
     );
 
-    for (index, spec) in templates.iter().enumerate() {
+    for (index, template) in templates.iter().enumerate() {
         let x = margin + index as f32 * (card_w + gutter);
         let y = margin + header;
         let _ = write!(
             svg,
             r#"<text x="{x:.1}" y="{label_y:.1}" fill="{}" font-family="sans-serif" font-size="{size:.1}">{}</text>"#,
             colors.text.secondary,
-            spec.id.label(),
+            template.id.label(),
             label_y = y - 8.0 * scale,
             size = 9.0 * scale,
         );
-        draw_template(&mut svg, *spec, x, y, scale, config);
+        draw_template(&mut svg, template, x, y, scale, config);
     }
 
     let footer_y = margin + header + card_h + 16.0 * scale;
@@ -135,19 +134,19 @@ fn sheet(scale: f32, config: &GuiLayoutConfig) -> String {
 
 fn draw_template(
     svg: &mut String,
-    spec: TemplateSpec,
+    template: &LayoutTemplate,
     ox: f32,
     oy: f32,
     scale: f32,
     config: &GuiLayoutConfig,
 ) {
-    let template = ChannelTemplate::of(spec);
-    let layout = StripLayout::for_template(&template, &config.geometry, scale)
-        .unwrap_or_else(|error| panic!("preview template {:?}: {error}", spec.id));
+    let layout = config
+        .layout(template, scale)
+        .unwrap_or_else(|error| panic!("preview template {:?}: {error}", template.id));
     let c = &config.colors;
     let v = &config.visual;
     let card = translated(layout.card, ox, oy);
-    let active = matches!(spec.kind, ChannelKind::Input | ChannelKind::Playback);
+    let active = matches!(template.kind, ChannelKind::Input | ChannelKind::Playback);
     fill_rect(
         svg,
         card,
@@ -169,7 +168,7 @@ fn draw_template(
             ElementKind::Name => draw_text(
                 svg,
                 rect,
-                sample_name(spec),
+                sample_name(template.id),
                 &c.text.primary,
                 v.name_size * scale,
             ),
@@ -196,13 +195,13 @@ fn draw_template(
                     "end",
                 );
             }
-            ElementKind::Meter => draw_meter(svg, rect, spec.stereo, c, v, scale),
+            ElementKind::Meter => draw_meter(svg, rect, template.stereo, c, v, scale),
             ElementKind::Fader => {
                 if let Some(vu) = vu {
                     draw_fader(svg, rect, vu, c, v, scale);
                 }
             }
-            ElementKind::FxFader => draw_fx(svg, rect, spec.kind, c, v, scale),
+            ElementKind::FxFader => draw_fx(svg, rect, template.kind, c, v, scale),
             ElementKind::Tab(panel) => draw_tab(svg, rect, panel, c, v, scale),
             ElementKind::Level => {
                 draw_text(svg, rect, "0.0", &c.text.primary, v.readout_size * scale)
@@ -536,15 +535,15 @@ fn draw_submix(svg: &mut String, bar: Rect, c: &ColorScheme, v: &VisualTokens, s
     );
 }
 
-fn sample_name(spec: TemplateSpec) -> &'static str {
-    match spec.id {
-        totalcontrol_layout::TemplateId::InputMono => "AN1",
-        totalcontrol_layout::TemplateId::InputStereo => "AN1/2",
-        totalcontrol_layout::TemplateId::InputMonoNoFx => "AN3",
-        totalcontrol_layout::TemplateId::PlaybackStereo => "SW1/2",
-        totalcontrol_layout::TemplateId::OutputStereo => "OUT1/2",
-        totalcontrol_layout::TemplateId::OutputMono => "OUT3",
-        totalcontrol_layout::TemplateId::ControlRoom => "MAIN",
+fn sample_name(id: TemplateId) -> &'static str {
+    match id {
+        TemplateId::InputMono => "AN1",
+        TemplateId::InputStereo => "AN1/2",
+        TemplateId::InputMonoNoFx => "AN3",
+        TemplateId::PlaybackStereo => "SW1/2",
+        TemplateId::OutputStereo => "OUT1/2",
+        TemplateId::OutputMono => "OUT3",
+        TemplateId::ControlRoom => "MAIN",
     }
 }
 

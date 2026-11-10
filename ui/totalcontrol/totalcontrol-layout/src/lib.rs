@@ -13,7 +13,7 @@
 //! `docs/spec/TOTALCONTROL-GUI-SPEC.md` §2.8.  The tests here pin the
 //! invariants so documentation, preview and runtime cannot drift silently.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A rectangle in logical or scaled pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -456,6 +456,50 @@ impl ElementPlacement {
             Self::Submix => "B2",
         }
     }
+
+    pub const ALL: [Self; 16] = [
+        Self::Name,
+        Self::Pan,
+        Self::ButtonLeft,
+        Self::ButtonRight,
+        Self::ReadoutLeft,
+        Self::ReadoutRight,
+        Self::Meter,
+        Self::Fader,
+        Self::Fx,
+        Self::Stack(Panel::Trim),
+        Self::Stack(Panel::Settings),
+        Self::Stack(Panel::Eq),
+        Self::Stack(Panel::Dynamics),
+        Self::Level,
+        Self::Minimize,
+        Self::Submix,
+    ];
+
+    /// Parse the token used by the layout document.
+    pub fn parse(token: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|placement| placement.label() == token)
+    }
+}
+
+impl Serialize for ElementPlacement {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.label())
+    }
+}
+
+impl<'de> Deserialize<'de> for ElementPlacement {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let token = String::deserialize(deserializer)?;
+        Self::parse(&token).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown placement {token:?}; expected one of {}",
+                Self::ALL.map(|placement| placement.label()).join(", ")
+            ))
+        })
+    }
 }
 
 /// A channel side, for the two-segment readouts.
@@ -518,6 +562,7 @@ impl ElementKind {
         }
     }
 
+    /// The token used by the layout document.
     pub fn label(self) -> &'static str {
         match self {
             Self::Name => "name",
@@ -525,15 +570,62 @@ impl ElementKind {
             Self::Button(Action::Mute) => "mute",
             Self::Button(Action::Solo) => "solo",
             Self::Button(Action::Cue) => "cue",
-            Self::Readout(_) => "readout",
+            Self::Readout(ChannelSide::Left) => "readout_left",
+            Self::Readout(ChannelSide::Right) => "readout_right",
             Self::Meter => "meter",
             Self::Fader => "fader",
-            Self::FxFader => "FX fader",
-            Self::Tab(panel) => panel.label(),
-            Self::Level => "level readout",
+            Self::FxFader => "fx_fader",
+            Self::Tab(Panel::Trim) => "trim_tab",
+            Self::Tab(Panel::Settings) => "settings_tab",
+            Self::Tab(Panel::Eq) => "eq_tab",
+            Self::Tab(Panel::Dynamics) => "dynamics_tab",
+            Self::Level => "level_readout",
             Self::Minimize => "minimize",
             Self::Submix => "submix",
         }
+    }
+
+    pub const ALL: [Self; 17] = [
+        Self::Name,
+        Self::Pan,
+        Self::Button(Action::Mute),
+        Self::Button(Action::Solo),
+        Self::Button(Action::Cue),
+        Self::Readout(ChannelSide::Left),
+        Self::Readout(ChannelSide::Right),
+        Self::Meter,
+        Self::Fader,
+        Self::FxFader,
+        Self::Tab(Panel::Trim),
+        Self::Tab(Panel::Settings),
+        Self::Tab(Panel::Eq),
+        Self::Tab(Panel::Dynamics),
+        Self::Level,
+        Self::Minimize,
+        Self::Submix,
+    ];
+
+    /// Parse the token used by the layout document.
+    pub fn parse(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.label() == token)
+    }
+}
+
+impl Serialize for ElementKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.label())
+    }
+}
+
+impl<'de> Deserialize<'de> for ElementKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let token = String::deserialize(deserializer)?;
+        Self::parse(&token).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown element kind {token:?}; expected one of {}",
+                Self::ALL.map(|kind| kind.label()).join(", ")
+            ))
+        })
     }
 }
 
@@ -565,15 +657,42 @@ pub enum Binding {
 }
 
 /// One element of a channel template.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChannelElement {
     pub kind: ElementKind,
+    #[serde(rename = "at")]
     pub placement: ElementPlacement,
 }
 
 impl ChannelElement {
     pub const fn new(kind: ElementKind, placement: ElementPlacement) -> Self {
         Self { kind, placement }
+    }
+
+    /// Whether the kind belongs at this placement.  `TR3` accepts solo and
+    /// cue; every other placement has exactly one kind.
+    pub fn is_coherent(self) -> bool {
+        use ElementKind as K;
+        use ElementPlacement as P;
+        if let (P::Stack(placed), K::Tab(panel)) = (self.placement, self.kind) {
+            return placed == panel;
+        }
+        matches!(
+            (self.placement, self.kind),
+            (P::Name, K::Name)
+                | (P::Pan, K::Pan)
+                | (P::ButtonLeft, K::Button(Action::Mute))
+                | (P::ButtonRight, K::Button(Action::Solo | Action::Cue))
+                | (P::ReadoutLeft, K::Readout(ChannelSide::Left))
+                | (P::ReadoutRight, K::Readout(ChannelSide::Right))
+                | (P::Meter, K::Meter)
+                | (P::Fader, K::Fader)
+                | (P::Fx, K::FxFader)
+                | (P::Level, K::Level)
+                | (P::Minimize, K::Minimize)
+                | (P::Submix, K::Submix)
+        )
     }
 
     pub fn binding(self) -> Binding {
@@ -655,6 +774,51 @@ pub fn standard_elements(kind: ChannelKind, features: Features) -> Vec<ChannelEl
         elements.push(ChannelElement::new(K::Submix, P::Submix));
     }
     elements
+}
+
+/// A template in the layout document: its identity and its elements.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutTemplate {
+    pub id: TemplateId,
+    pub kind: ChannelKind,
+    pub stereo: bool,
+    pub elements: Vec<ChannelElement>,
+}
+
+impl LayoutTemplate {
+    /// The document form of a standard template.
+    pub fn from_spec(spec: TemplateSpec) -> Self {
+        Self {
+            id: spec.id,
+            kind: spec.kind,
+            stereo: spec.stereo,
+            elements: standard_elements(spec.kind, spec.features),
+        }
+    }
+
+    /// The optional controls that the element list provides.
+    pub fn features(&self) -> Features {
+        let has = |kind: ElementKind| self.elements.iter().any(|element| element.kind == kind);
+        Features {
+            fx: has(ElementKind::FxFader),
+            trim: has(ElementKind::Tab(Panel::Trim)),
+            eq: has(ElementKind::Tab(Panel::Eq)),
+            dynamics: has(ElementKind::Tab(Panel::Dynamics)),
+        }
+    }
+
+    pub fn template(&self) -> ChannelTemplate {
+        ChannelTemplate {
+            spec: TemplateSpec {
+                id: self.id,
+                kind: self.kind,
+                features: self.features(),
+                stereo: self.stereo,
+            },
+            elements: self.elements.clone(),
+        }
+    }
 }
 
 /// The resolved rectangle of one channel element at one zoom.
@@ -1389,7 +1553,7 @@ impl Default for VisualTokens {
 }
 
 /// Schema version of the shared GUI layout configuration.
-pub const CONFIG_SCHEMA: u32 = 1;
+pub const CONFIG_SCHEMA: u32 = 2;
 
 /// Name the preview uses for the schema file written beside an example
 /// document.
@@ -1404,8 +1568,11 @@ fn config_schema() -> u32 {
     CONFIG_SCHEMA
 }
 
-fn default_templates() -> Vec<TemplateSpec> {
-    TEMPLATES.to_vec()
+fn default_templates() -> Vec<LayoutTemplate> {
+    TEMPLATES
+        .iter()
+        .map(|spec| LayoutTemplate::from_spec(*spec))
+        .collect()
 }
 
 /// A `#rrggbb` colour literal; the preview writes the string straight into
@@ -1434,7 +1601,7 @@ pub struct GuiLayoutConfig {
     pub visual: VisualTokens,
     pub colors: ColorScheme,
     #[serde(default = "default_templates")]
-    pub templates: Vec<TemplateSpec>,
+    pub templates: Vec<LayoutTemplate>,
 }
 
 impl Default for GuiLayoutConfig {
@@ -1589,9 +1756,35 @@ impl GuiLayoutConfig {
             if !ids.insert(template.id) {
                 return Err(format!("duplicate template id {:?}", template.id));
             }
+            if template.elements.is_empty() {
+                return Err(format!(
+                    "template {:?} must contain at least one element",
+                    template.id
+                ));
+            }
+            let mut placements = std::collections::HashSet::new();
+            for element in &template.elements {
+                if !element.is_coherent() {
+                    return Err(format!(
+                        "template {:?}: {} is not a {} element",
+                        template.id,
+                        element.placement.label(),
+                        element.kind.label()
+                    ));
+                }
+                if !placements.insert(element.placement) {
+                    return Err(format!(
+                        "template {:?}: {} is placed twice",
+                        template.id,
+                        element.placement.label()
+                    ));
+                }
+            }
         }
         for template in &self.templates {
-            let layout = self.layout(*template, 1.0);
+            let layout = self
+                .layout(template, 1.0)
+                .map_err(|error| format!("template {:?}: {error}", template.id))?;
             for (label, rect) in layout
                 .elements
                 .iter()
@@ -1617,46 +1810,49 @@ impl GuiLayoutConfig {
                 }
                 Ok(())
             };
-            let placement = |placement: ElementPlacement| layout.rect(placement);
-            centred(
-                "geometry.pan_x and pan_w",
-                placement(ElementPlacement::Pan).expect("a standard template has a pan knob"),
-                "pan_x = (content_w - pan_w) / 2",
-            )?;
-            centred(
-                "geometry.db_x and db_w",
-                placement(ElementPlacement::Level)
-                    .expect("a standard template has a level readout"),
-                "db_x = (content_w - db_w) / 2",
-            )?;
-            centred(
-                "geometry.track_x and track_w",
-                placement(ElementPlacement::Fader).expect("a standard template has a fader"),
-                "track_x = (content_w - track_w) / 2",
-            )?;
-            let left = placement(ElementPlacement::ButtonLeft)
-                .expect("a standard template has a left button");
-            let right = placement(ElementPlacement::ButtonRight)
-                .expect("a standard template has a right button");
-            let pair = Rect::new(left.x, left.y, right.right() - left.x, left.height);
-            centred(
-                "geometry.button_w and button_gap",
-                pair,
-                "content_w = 2 * button_w + button_gap",
-            )?;
+            let rect_at = |placement: ElementPlacement| layout.rect(placement);
+            for (name, placement, hint) in [
+                (
+                    "geometry.pan_x and pan_w",
+                    ElementPlacement::Pan,
+                    "pan_x = (content_w - pan_w) / 2",
+                ),
+                (
+                    "geometry.db_x and db_w",
+                    ElementPlacement::Level,
+                    "db_x = (content_w - db_w) / 2",
+                ),
+                (
+                    "geometry.track_x and track_w",
+                    ElementPlacement::Fader,
+                    "track_x = (content_w - track_w) / 2",
+                ),
+            ] {
+                if let Some(rect) = rect_at(placement) {
+                    centred(name, rect, hint)?;
+                }
+            }
+            if let (Some(left), Some(right)) = (
+                rect_at(ElementPlacement::ButtonLeft),
+                rect_at(ElementPlacement::ButtonRight),
+            ) {
+                let pair = Rect::new(left.x, left.y, right.right() - left.x, left.height);
+                centred(
+                    "geometry.button_w and button_gap",
+                    pair,
+                    "content_w = 2 * button_w + button_gap",
+                )?;
+            }
         }
         Ok(())
     }
 
-    pub fn layout(&self, template: TemplateSpec, scale: f32) -> StripLayout {
-        StripLayout::for_metrics(template.kind, scale, template.features, &self.geometry)
+    pub fn layout(&self, template: &LayoutTemplate, scale: f32) -> Result<StripLayout, String> {
+        StripLayout::for_template(&template.template(), &self.geometry, scale)
     }
 
-    pub fn template(&self, id: TemplateId) -> Option<TemplateSpec> {
-        self.templates
-            .iter()
-            .copied()
-            .find(|template| template.id == id)
+    pub fn template(&self, id: TemplateId) -> Option<&LayoutTemplate> {
+        self.templates.iter().find(|template| template.id == id)
     }
 }
 
@@ -1672,7 +1868,16 @@ mod config_tests {
         assert_eq!(config.geometry, LayoutMetrics::default());
         assert_eq!(config.visual, VISUAL);
         assert_eq!(config.colors, ColorScheme::default());
-        assert_eq!(config.templates, TEMPLATES);
+        assert_eq!(config.templates, default_templates());
+        let ids: Vec<TemplateId> = config
+            .templates
+            .iter()
+            .map(|template| template.id)
+            .collect();
+        assert_eq!(
+            ids,
+            TEMPLATES.iter().map(|spec| spec.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1680,10 +1885,50 @@ mod config_tests {
         let mut config = GuiLayoutConfig::default();
         config.geometry.strip_w = 100.0;
         config.geometry.strip_h = 360.0;
-        let template = config.templates[0];
-        let layout = config.layout(template, 1.0);
+        let layout = config
+            .layout(&config.templates[0], 1.0)
+            .expect("standard template resolves");
         assert_eq!(layout.card.width, 100.0);
         assert_eq!(layout.card.height, 360.0);
+    }
+
+    #[test]
+    fn an_element_list_replaces_the_compiled_composition() {
+        let mut config = GuiLayoutConfig::default();
+        config.templates[0]
+            .elements
+            .retain(|element| element.kind != ElementKind::FxFader);
+        assert!(!config.templates[0].features().fx);
+        config.validate().expect("a template without FX is valid");
+        let layout = config.layout(&config.templates[0], 1.0).expect("resolves");
+        assert!(layout.rect(ElementPlacement::Fx).is_none());
+        assert!(layout.rect(ElementPlacement::Meter).is_some());
+    }
+
+    #[test]
+    fn an_element_in_the_wrong_place_is_rejected() {
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "stereo": false,
+            "elements": [{"kind": "name", "at": "TL3"}]}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("mismatched pair");
+        assert!(error.contains("TL3 is not a name element"), "{error}");
+
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "stereo": false,
+            "elements": [{"kind": "solo", "at": "TR3"}, {"kind": "cue", "at": "TR3"}]}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("duplicate placement");
+        assert!(error.contains("TR3 is placed twice"), "{error}");
+    }
+
+    #[test]
+    fn unknown_element_tokens_are_rejected() {
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "stereo": false,
+            "elements": [{"kind": "vu", "at": "ML"}]}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("unknown kind");
+        assert!(error.contains("unknown element kind"), "{error}");
+
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "stereo": false,
+            "elements": [{"kind": "meter", "at": "M9"}]}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("unknown placement");
+        assert!(error.contains("unknown placement"), "{error}");
     }
 
     #[test]
@@ -1714,7 +1959,7 @@ mod config_tests {
         assert_eq!(config.geometry, LayoutMetrics::default());
         assert_eq!(config.visual, VISUAL);
         assert_eq!(config.colors, ColorScheme::default());
-        assert_eq!(config.templates, TEMPLATES);
+        assert_eq!(config.templates, default_templates());
     }
 
     #[test]
@@ -1746,8 +1991,9 @@ mod config_tests {
         let error = GuiLayoutConfig::from_json(text).expect_err("typo is rejected");
         assert!(error.contains("stip_h"), "{error}");
 
-        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "features": {"fx": true, "trim": true, "eq": true, "dynamics": true, "extra": false}, "stereo": false}]}"#;
-        let error = GuiLayoutConfig::from_json(text).expect_err("unknown feature is rejected");
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "stereo": false,
+            "elements": [{"kind": "meter", "at": "ML", "extra": 1}]}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("unknown element field");
         assert!(error.contains("extra"), "{error}");
     }
 
@@ -1834,16 +2080,40 @@ mod config_tests {
 
         let template = value_property(property(&properties, "templates"), "items");
         let template_properties = object_property(template, "properties");
-        let features = property(&template_properties, "features");
-        let feature_properties = object_property(features, "properties");
-        let mut documented: Vec<&str> = feature_properties.keys().map(String::as_str).collect();
+        let elements = property(&template_properties, "elements");
+        let element_item = value_property(elements, "items");
+        let element_properties = object_property(element_item, "properties");
+        let mut documented: Vec<&str> = element_properties.keys().map(String::as_str).collect();
         documented.sort_unstable();
-        let mut required = string_list(value_property(features, "required"));
+        let mut required = string_list(value_property(element_item, "required"));
         required.sort_unstable();
         assert_eq!(
             documented, required,
-            "feature fields and required list differ"
+            "element fields and required list differ"
         );
+
+        for (property_name, compiled) in [
+            (
+                "kind",
+                ElementKind::ALL
+                    .iter()
+                    .map(|kind| kind.label().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "at",
+                ElementPlacement::ALL
+                    .iter()
+                    .map(|placement| placement.label().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            let mut documented = string_list(property(&element_properties, property_name));
+            documented.sort_unstable();
+            let mut compiled = compiled;
+            compiled.sort_unstable();
+            assert_eq!(documented, compiled, "{property_name} tokens differ");
+        }
 
         let mut documented = string_list(property(&template_properties, "id"));
         documented.sort_unstable();

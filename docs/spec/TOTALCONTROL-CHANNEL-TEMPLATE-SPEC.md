@@ -171,10 +171,9 @@ is the configuration form of this specification: one geometry, one visual
 token set, one colour scheme and a list of channel templates.
 
 The document describes the whole sheet: one geometry, one visual token set,
-one colour scheme and the standard templates.  It cannot yet place an
-individual channel element; the composition of a template is compiled into
-the crate (see [Elements and placement](#elements-and-placement)).  Placing
-elements and their bindings through the document is the next step.
+one colour scheme and the templates.  Each template declares the channel
+elements it contains and where each one sits; the bindings follow from the
+kinds (see [Elements and placement](#elements-and-placement)).
 
 The preview is the only consumer.  The runtime still renders the compiled
 defaults.
@@ -184,7 +183,7 @@ defaults.
 | Key | Type | Meaning |
 |---|---|---|
 | `$schema` | string | Optional path or URI of the schema file.  Ignored when rendering. |
-| `schema` | integer | Document version.  Must be `1`. |
+| `schema` | integer | Document version.  Must be `2`. |
 | `geometry` | object | Strip geometry at zoom 1.0. |
 | `visual` | object | Font sizes and control dimensions at zoom 1.0. |
 | `colors` | object | Semantic colour scheme. |
@@ -301,10 +300,23 @@ Each entry is a complete template:
 |---|---|---|
 | `id` | one of the standard templates | Template identity; must be unique in the list. |
 | `kind` | `Input`, `Playback` or `Output` | Channel row.  Inputs and playbacks have the B2 submix bar. |
-| `features` | object | `fx`, `trim`, `eq`, `dynamics` booleans; see [Standard templates](#standard-templates). |
 | `stereo` | boolean | Linked pair: the VU draws two bars and the name uses the pair form. |
+| `elements` | array | The channel elements, each `{ "kind": ..., "at": ... }`. |
 
-The list must contain at least one entry.
+An element names what it is and where it sits:
+
+```json
+{ "kind": "eq_tab", "at": "MR4" }
+```
+
+`kind` is one of the kinds in [Kinds and bindings](#kinds-and-bindings);
+`at` is one of the placements in [Placements](#placements).  The kind must be
+the one that belongs at that placement; `TR3` accepts `solo` and `cue`.
+
+The list must contain at least one element, and a placement appears at most
+once.  An omitted element leaves its row empty, and the rows below keep their
+position; the optional controls of a template therefore follow from its
+element list, not from a feature block.
 
 ### Derived placement
 
@@ -340,6 +352,9 @@ The preview rejects a document and renders nothing when:
 - an offset is negative;
 - a colour is not a `#rrggbb` literal;
 - the template list is empty or repeats an `id`;
+- a template has no elements, repeats a placement, or pairs a kind with the
+  wrong placement;
+- an element kind or placement token is not in the lists above;
 - a template places an element outside the card;
 - the fader track, the pan knob, the button pair, the readout pair or the dB
   readout leaves the content centre line;
@@ -435,6 +450,41 @@ Enlarge the channel fader cap:
 ```json
 { "visual": { "fader_cap_w": 24, "fader_cap_h": 16 } }
 ```
+
+Drop the FX fader from a template by leaving its element out:
+
+```json
+{
+  "templates": [
+    {
+      "id": "InputMono",
+      "kind": "Input",
+      "stereo": false,
+      "elements": [
+        { "kind": "name", "at": "T1" },
+        { "kind": "pan", "at": "T2" },
+        { "kind": "mute", "at": "TL3" },
+        { "kind": "solo", "at": "TR3" },
+        { "kind": "readout_left", "at": "M1L" },
+        { "kind": "readout_right", "at": "M1R" },
+        { "kind": "meter", "at": "ML" },
+        { "kind": "fader", "at": "MC" },
+        { "kind": "trim_tab", "at": "MR2" },
+        { "kind": "settings_tab", "at": "MR3" },
+        { "kind": "eq_tab", "at": "MR4" },
+        { "kind": "dynamics_tab", "at": "MR5" },
+        { "kind": "level_readout", "at": "B1" },
+        { "kind": "minimize", "at": "B1R" },
+        { "kind": "submix", "at": "B2" }
+      ]
+    }
+  ]
+}
+```
+
+The tab rows keep their positions: `MR2` still holds the trim tab and the
+rows below it do not move.  `templates` replaces the whole list, so a partial
+override is not possible here.
 
 ## Colour categories
 
