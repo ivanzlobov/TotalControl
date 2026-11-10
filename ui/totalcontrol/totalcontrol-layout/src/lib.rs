@@ -13,6 +13,8 @@
 //! `docs/spec/TOTALCONTROL-GUI-SPEC.md` §2.8.  The tests here pin the
 //! invariants so documentation, preview and runtime cannot drift silently.
 
+use serde::{Deserialize, Serialize};
+
 /// A rectangle in logical or scaled pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -77,10 +79,16 @@ pub const CONTENT_Y: f32 = 4.0;
 pub const ROW_GAP: f32 = 1.0;
 
 pub const NAME_H: f32 = 13.0;
+pub const PAN_X: f32 = 12.0;
+pub const PAN_W: f32 = 54.0;
 pub const PAN_H: f32 = 54.0;
+pub const BUTTON_W: f32 = 38.0;
+pub const BUTTON_GAP: f32 = 2.0;
 pub const BUTTON_H: f32 = 18.0;
 pub const READOUT_H: f32 = 18.0;
 pub const MIDDLE_H: f32 = 205.0;
+pub const DB_X: f32 = 20.0;
+pub const DB_W: f32 = 38.0;
 pub const DB_READOUT_H: f32 = 14.0;
 pub const SUBMIX_H: f32 = 18.0;
 
@@ -104,7 +112,89 @@ pub const TAB_GAP: f32 = 6.0;
 pub const COLLAPSE_X: f32 = 59.0;
 pub const COLLAPSE_W: f32 = 19.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Logical geometry at zoom 1.0.  The defaults are the shipped GUI; a
+/// configuration file may override any field.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LayoutMetrics {
+    pub strip_w: f32,
+    pub strip_h: f32,
+    pub content_x: f32,
+    pub content_w: f32,
+    pub content_y: f32,
+    pub row_gap: f32,
+    pub name_h: f32,
+    pub pan_x: f32,
+    pub pan_w: f32,
+    pub pan_h: f32,
+    pub button_w: f32,
+    pub button_gap: f32,
+    pub button_h: f32,
+    pub readout_h: f32,
+    pub middle_h: f32,
+    pub db_x: f32,
+    pub db_w: f32,
+    pub db_readout_h: f32,
+    pub submix_h: f32,
+    pub vu_x: f32,
+    pub vu_w: f32,
+    pub track_x: f32,
+    pub track_w: f32,
+    pub fader_canvas_w: f32,
+    pub tab_x: f32,
+    pub tab_w: f32,
+    pub fx_w: f32,
+    pub fx_h: f32,
+    pub tab_top_with_fx: f32,
+    pub tab_h: f32,
+    pub gear_h: f32,
+    pub tab_gap: f32,
+    pub collapse_x: f32,
+    pub collapse_w: f32,
+}
+
+impl Default for LayoutMetrics {
+    fn default() -> Self {
+        Self {
+            strip_w: STRIP_W,
+            strip_h: STRIP_H,
+            content_x: CONTENT_X,
+            content_w: CONTENT_W,
+            content_y: CONTENT_Y,
+            row_gap: ROW_GAP,
+            name_h: NAME_H,
+            pan_x: PAN_X,
+            pan_w: PAN_W,
+            pan_h: PAN_H,
+            button_w: BUTTON_W,
+            button_gap: BUTTON_GAP,
+            button_h: BUTTON_H,
+            readout_h: READOUT_H,
+            middle_h: MIDDLE_H,
+            db_x: DB_X,
+            db_w: DB_W,
+            db_readout_h: DB_READOUT_H,
+            submix_h: SUBMIX_H,
+            vu_x: VU_X,
+            vu_w: VU_W,
+            track_x: TRACK_X,
+            track_w: TRACK_W,
+            fader_canvas_w: FADER_CANVAS_W,
+            tab_x: TAB_X,
+            tab_w: TAB_W,
+            fx_w: FX_W,
+            fx_h: FX_H,
+            tab_top_with_fx: TAB_TOP_WITH_FX,
+            tab_h: TAB_H,
+            gear_h: GEAR_H,
+            tab_gap: TAB_GAP,
+            collapse_x: COLLAPSE_X,
+            collapse_w: COLLAPSE_W,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelKind {
     Input,
     Playback,
@@ -121,7 +211,8 @@ impl ChannelKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Features {
     /// The unit has an FX bus, so the thin MR1 fader exists.
     pub fx: bool,
@@ -161,7 +252,7 @@ impl Default for Features {
 
 /// The named standard channels used by the preview and, eventually, the
 /// runtime template compiler.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TemplateId {
     InputMono,
     InputStereo,
@@ -186,7 +277,8 @@ impl TemplateId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateSpec {
     pub id: TemplateId,
     pub kind: ChannelKind,
@@ -301,73 +393,110 @@ pub struct StripLayout {
 
 impl StripLayout {
     pub fn for_kind(kind: ChannelKind, scale: f32, features: Features) -> Self {
+        Self::for_metrics(kind, scale, features, &LayoutMetrics::default())
+    }
+
+    /// Resolve one template against explicit logical metrics.  This is the
+    /// entry point used by the JSON configuration loader and the preview.
+    pub fn for_metrics(
+        kind: ChannelKind,
+        scale: f32,
+        features: Features,
+        m: &LayoutMetrics,
+    ) -> Self {
         let r =
             |x: f32, y: f32, w: f32, h: f32| Rect::new(x * scale, y * scale, w * scale, h * scale);
 
-        let content = r(CONTENT_X, CONTENT_Y, CONTENT_W, STRIP_H - CONTENT_Y);
-        let name = r(CONTENT_X, CONTENT_Y, CONTENT_W, NAME_H);
-        let pan_y = CONTENT_Y + NAME_H + ROW_GAP;
-        let pan = r(CONTENT_X + 12.0, pan_y, 54.0, PAN_H);
-        let buttons_y = pan_y + PAN_H + ROW_GAP;
+        let content = r(
+            m.content_x,
+            m.content_y,
+            m.content_w,
+            m.strip_h - m.content_y,
+        );
+        let name = r(m.content_x, m.content_y, m.content_w, m.name_h);
+        let pan_y = m.content_y + m.name_h + m.row_gap;
+        let pan = r(m.content_x + m.pan_x, pan_y, m.pan_w, m.pan_h);
+        let buttons_y = pan_y + m.pan_h + m.row_gap;
         let buttons = [
-            r(CONTENT_X, buttons_y, 38.0, BUTTON_H),
-            r(CONTENT_X + 40.0, buttons_y, 38.0, BUTTON_H),
+            r(m.content_x, buttons_y, m.button_w, m.button_h),
+            r(
+                m.content_x + m.button_w + m.button_gap,
+                buttons_y,
+                m.button_w,
+                m.button_h,
+            ),
         ];
-        let readouts_y = buttons_y + BUTTON_H + ROW_GAP;
+        let readouts_y = buttons_y + m.button_h + m.row_gap;
         let readouts = [
-            r(CONTENT_X, readouts_y, 38.0, READOUT_H),
-            r(CONTENT_X + 40.0, readouts_y, 38.0, READOUT_H),
+            r(m.content_x, readouts_y, m.button_w, m.readout_h),
+            r(
+                m.content_x + m.button_w + m.button_gap,
+                readouts_y,
+                m.button_w,
+                m.readout_h,
+            ),
         ];
-        let middle_y = readouts_y + READOUT_H + ROW_GAP;
-        let vu = r(CONTENT_X + VU_X, middle_y, VU_W, MIDDLE_H);
-        let fader_canvas = r(CONTENT_X, middle_y, FADER_CANVAS_W, MIDDLE_H);
-        let fader = r(CONTENT_X + TRACK_X, middle_y, TRACK_W, MIDDLE_H);
+        let middle_y = readouts_y + m.readout_h + m.row_gap;
+        let vu = r(m.content_x + m.vu_x, middle_y, m.vu_w, m.middle_h);
+        let fader_canvas = r(m.content_x, middle_y, m.fader_canvas_w, m.middle_h);
+        let fader = r(m.content_x + m.track_x, middle_y, m.track_w, m.middle_h);
         let fx = features.fx.then(|| {
             r(
-                CONTENT_X + TAB_X + (TAB_W - FX_W) / 2.0,
+                m.content_x + m.tab_x + (m.tab_w - m.fx_w) / 2.0,
                 middle_y,
-                FX_W,
-                FX_H,
+                m.fx_w,
+                m.fx_h,
             )
         });
-        let tab_y = middle_y + if features.fx { TAB_TOP_WITH_FX } else { 0.0 };
+        let tab_y = middle_y + if features.fx { m.tab_top_with_fx } else { 0.0 };
         let tab_glyphs = [
-            r(CONTENT_X + TAB_X, tab_y, TAB_W, TAB_H),
-            r(CONTENT_X + TAB_X, tab_y + TAB_H + TAB_GAP, TAB_W, GEAR_H),
+            r(m.content_x + m.tab_x, tab_y, m.tab_w, m.tab_h),
             r(
-                CONTENT_X + TAB_X,
-                tab_y + TAB_H + GEAR_H + 2.0 * TAB_GAP,
-                TAB_W,
-                TAB_H,
+                m.content_x + m.tab_x,
+                tab_y + m.tab_h + m.tab_gap,
+                m.tab_w,
+                m.gear_h,
             ),
             r(
-                CONTENT_X + TAB_X,
-                tab_y + 2.0 * TAB_H + GEAR_H + 3.0 * TAB_GAP,
-                TAB_W,
-                TAB_H,
+                m.content_x + m.tab_x,
+                tab_y + m.tab_h + m.gear_h + 2.0 * m.tab_gap,
+                m.tab_w,
+                m.tab_h,
+            ),
+            r(
+                m.content_x + m.tab_x,
+                tab_y + 2.0 * m.tab_h + m.gear_h + 3.0 * m.tab_gap,
+                m.tab_w,
+                m.tab_h,
             ),
         ];
-        let tab_faces = tab_glyphs.map(|g| Rect::new(g.x, g.y, TAB_FACE_W * scale, g.height));
+        let tab_face_w = m.strip_w - (m.content_x + m.tab_x);
+        let tab_faces = tab_glyphs.map(|g| Rect::new(g.x, g.y, tab_face_w * scale, g.height));
 
-        let db_y = middle_y + MIDDLE_H + ROW_GAP;
-        let db_readout = r(CONTENT_X + 20.0, db_y, 38.0, DB_READOUT_H);
-        let collapse_glyph = r(CONTENT_X + COLLAPSE_X, db_y, COLLAPSE_W, DB_READOUT_H);
+        let db_y = middle_y + m.middle_h + m.row_gap;
+        let db_readout = r(m.content_x + m.db_x, db_y, m.db_w, m.db_readout_h);
+        let collapse_glyph = r(
+            m.content_x + m.collapse_x,
+            db_y,
+            m.collapse_w,
+            m.db_readout_h,
+        );
         let collapse_face = Rect::new(
             collapse_glyph.x,
             collapse_glyph.y,
-            (STRIP_W - (CONTENT_X + COLLAPSE_X)) * scale,
+            (m.strip_w - (m.content_x + m.collapse_x)) * scale,
             collapse_glyph.height,
         );
         let submix = match kind {
             ChannelKind::Input | ChannelKind::Playback => {
-                Some(r(0.0, STRIP_H - SUBMIX_H, STRIP_W, SUBMIX_H))
+                Some(r(0.0, m.strip_h - m.submix_h, m.strip_w, m.submix_h))
             }
             ChannelKind::Output => None,
         };
 
         Self {
             scale,
-            card: r(0.0, 0.0, STRIP_W, STRIP_H),
+            card: r(0.0, 0.0, m.strip_w, m.strip_h),
             content,
             name,
             pan,
@@ -393,36 +522,58 @@ impl StripLayout {
 
     /// All visible element rectangles, for preview and invariant checks.
     pub fn element_rects(&self) -> Vec<Rect> {
-        let mut slots = vec![
-            self.name,
-            self.pan,
-            self.buttons[0],
-            self.buttons[1],
-            self.readouts[0],
-            self.readouts[1],
-            self.vu,
-            self.fader_canvas,
-            self.fader,
-            self.db_readout,
-            self.collapse_glyph,
-            self.collapse_face,
+        self.elements().into_iter().map(|(_, rect)| rect).collect()
+    }
+
+    /// Visible elements with stable names, used by the invariant checks and
+    /// the configuration diagnostics.
+    pub fn elements(&self) -> Vec<(&'static str, Rect)> {
+        let mut elements = vec![
+            ("name", self.name),
+            ("pan", self.pan),
+            ("button_left", self.buttons[0]),
+            ("button_right", self.buttons[1]),
+            ("readout_left", self.readouts[0]),
+            ("readout_right", self.readouts[1]),
+            ("vu", self.vu),
+            ("fader_canvas", self.fader_canvas),
+            ("fader", self.fader),
+            ("db_readout", self.db_readout),
+            ("collapse_glyph", self.collapse_glyph),
+            ("collapse_face", self.collapse_face),
         ];
         if let Some(fx) = self.fx {
-            slots.push(fx);
+            elements.push(("fx", fx));
         }
-        slots.extend(self.tab_glyphs);
-        slots.extend(self.tab_faces);
+        for (index, glyph) in self.tab_glyphs.iter().enumerate() {
+            elements.push((TAB_GLYPH_NAMES[index], *glyph));
+            elements.push((TAB_FACE_NAMES[index], self.tab_faces[index]));
+        }
         if let Some(submix) = self.submix {
-            slots.push(submix);
+            elements.push(("submix", submix));
         }
-        slots
+        elements
     }
 }
+
+const TAB_GLYPH_NAMES: [&str; 4] = [
+    "tab_glyph_trim",
+    "tab_glyph_settings",
+    "tab_glyph_eq",
+    "tab_glyph_dynamics",
+];
+const TAB_FACE_NAMES: [&str; 4] = [
+    "tab_face_trim",
+    "tab_face_settings",
+    "tab_face_eq",
+    "tab_face_dynamics",
+];
 
 /// Shared visual tokens used by the preview and checked against the GUI by
 /// parity tests.  Keeping them here prevents the preview from quietly
 /// shrinking or re-proportioning controls that were tuned live.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct VisualTokens {
     pub name_size: f32,
     pub button_text_size: f32,
@@ -467,47 +618,53 @@ pub const VU_LABELS: [(f32, &str); 6] = [
 
 /// A compact set of semantic colour categories for the preview.  The
 /// runtime theme will adopt the same categories in its own focused change.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct SurfaceColors {
-    pub app_background: &'static str,
-    pub card: &'static str,
-    pub card_active: &'static str,
-    pub border: &'static str,
+    pub app_background: String,
+    pub card: String,
+    pub card_active: String,
+    pub border: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct TextColors {
-    pub primary: &'static str,
-    pub secondary: &'static str,
+    pub primary: String,
+    pub secondary: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct ControlColors {
-    pub button_face: &'static str,
-    pub knob_face: &'static str,
-    pub knob_border: &'static str,
-    pub fader_slot: &'static str,
-    pub fader_fill: &'static str,
-    pub cap_ridge: &'static str,
-    pub cap_centre: &'static str,
-    pub tab_face: &'static str,
+    pub button_face: String,
+    pub knob_face: String,
+    pub knob_border: String,
+    pub fader_slot: String,
+    pub fader_fill: String,
+    pub cap_ridge: String,
+    pub cap_centre: String,
+    pub tab_face: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct AccentColors {
-    pub mute: &'static str,
-    pub solo: &'static str,
-    pub cue: &'static str,
+    pub mute: String,
+    pub solo: String,
+    pub cue: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct MeterColors {
-    pub green: &'static str,
-    pub yellow: &'static str,
-    pub red: &'static str,
+    pub green: String,
+    pub yellow: String,
+    pub red: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct ColorScheme {
     pub surface: SurfaceColors,
     pub text: TextColors,
@@ -520,36 +677,68 @@ impl Default for ColorScheme {
     fn default() -> Self {
         Self {
             surface: SurfaceColors {
-                app_background: "#18191d",
-                card: "#24252a",
-                card_active: "#3a3b42",
-                border: "#36373d",
+                app_background: "#18191d".into(),
+                card: "#24252a".into(),
+                card_active: "#3a3b42".into(),
+                border: "#36373d".into(),
             },
             text: TextColors {
-                primary: "#f2f3f5",
-                secondary: "#a3a5ab",
+                primary: "#f2f3f5".into(),
+                secondary: "#a3a5ab".into(),
             },
             control: ControlColors {
-                button_face: "#191a1e",
-                knob_face: "#1a1b1f",
-                knob_border: "#36373d",
-                fader_slot: "#131417",
-                fader_fill: "#36373c",
-                cap_ridge: "#97989d",
-                cap_centre: "#4a4c52",
-                tab_face: "#202126",
+                button_face: "#191a1e".into(),
+                knob_face: "#1a1b1f".into(),
+                knob_border: "#36373d".into(),
+                fader_slot: "#131417".into(),
+                fader_fill: "#36373c".into(),
+                cap_ridge: "#97989d".into(),
+                cap_centre: "#4a4c52".into(),
+                tab_face: "#202126".into(),
             },
             accent: AccentColors {
-                mute: "#3d9df6",
-                solo: "#f0b429",
-                cue: "#3dd68c",
+                mute: "#3d9df6".into(),
+                solo: "#f0b429".into(),
+                cue: "#3dd68c".into(),
             },
             meter: MeterColors {
-                green: "#3dd68c",
-                yellow: "#d8c34a",
-                red: "#d94a4a",
+                green: "#3dd68c".into(),
+                yellow: "#d8c34a".into(),
+                red: "#d94a4a".into(),
             },
         }
+    }
+}
+
+/// A category omitted from a document takes the shipped scheme, so a single
+/// token can be overridden on its own.
+impl Default for SurfaceColors {
+    fn default() -> Self {
+        ColorScheme::default().surface
+    }
+}
+
+impl Default for TextColors {
+    fn default() -> Self {
+        ColorScheme::default().text
+    }
+}
+
+impl Default for ControlColors {
+    fn default() -> Self {
+        ColorScheme::default().control
+    }
+}
+
+impl Default for AccentColors {
+    fn default() -> Self {
+        ColorScheme::default().accent
+    }
+}
+
+impl Default for MeterColors {
+    fn default() -> Self {
+        ColorScheme::default().meter
     }
 }
 
@@ -699,5 +888,555 @@ mod tests {
         assert!(l.fx.is_some());
         assert!(l.submix.is_none());
         approx(l.tab_glyphs[0].y, l.vu.y + FX_H + 8.0);
+    }
+}
+
+impl Default for VisualTokens {
+    fn default() -> Self {
+        VISUAL
+    }
+}
+
+/// Schema version of the shared GUI layout configuration.
+pub const CONFIG_SCHEMA: u32 = 1;
+
+/// Name the preview uses for the schema file written beside an example
+/// document.
+pub const SCHEMA_FILE_NAME: &str = "gui-layout.schema.json";
+
+/// JSON Schema for [`GuiLayoutConfig`], embedded so the preview can write it
+/// next to an example file and the tests can keep it in step with the
+/// compiled defaults.
+pub const SCHEMA_JSON: &str = include_str!("../../../../docs/schema/gui-layout.schema.json");
+
+fn config_schema() -> u32 {
+    CONFIG_SCHEMA
+}
+
+fn default_templates() -> Vec<TemplateSpec> {
+    TEMPLATES.to_vec()
+}
+
+/// A `#rrggbb` colour literal; the preview writes the string straight into
+/// SVG, so anything else is rejected rather than rendered as black.
+fn is_hex_color(value: &str) -> bool {
+    match value.strip_prefix('#') {
+        Some(hex) => hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        None => false,
+    }
+}
+
+/// One JSON document for the complete GUI layout and its visual scheme.
+///
+/// The same document is consumed by the preview and, from the next runtime
+/// step, by the GUI.  Missing fields fall back to the compiled defaults and
+/// unknown fields are rejected.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GuiLayoutConfig {
+    /// Optional editor hint; it has no effect on rendering.
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema_url: Option<String>,
+    #[serde(default = "config_schema")]
+    pub schema: u32,
+    pub geometry: LayoutMetrics,
+    pub visual: VisualTokens,
+    pub colors: ColorScheme,
+    #[serde(default = "default_templates")]
+    pub templates: Vec<TemplateSpec>,
+}
+
+impl Default for GuiLayoutConfig {
+    fn default() -> Self {
+        Self {
+            schema_url: None,
+            schema: CONFIG_SCHEMA,
+            geometry: LayoutMetrics::default(),
+            visual: VISUAL,
+            colors: ColorScheme::default(),
+            templates: default_templates(),
+        }
+    }
+}
+
+impl GuiLayoutConfig {
+    /// Starting document for the preview's `--example`; it points at the
+    /// schema file written beside it.
+    pub fn example() -> Self {
+        Self {
+            schema_url: Some(SCHEMA_FILE_NAME.to_string()),
+            ..Self::default()
+        }
+    }
+
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let config: Self =
+            serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        Self::from_json(&text)
+    }
+
+    pub fn to_pretty_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("layout config serializes")
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != CONFIG_SCHEMA {
+            return Err(format!(
+                "unsupported layout schema {} (expected {CONFIG_SCHEMA})",
+                self.schema
+            ));
+        }
+        let m = &self.geometry;
+        let sizes = [
+            ("strip_w", m.strip_w),
+            ("strip_h", m.strip_h),
+            ("content_w", m.content_w),
+            ("name_h", m.name_h),
+            ("pan_w", m.pan_w),
+            ("pan_h", m.pan_h),
+            ("button_w", m.button_w),
+            ("button_h", m.button_h),
+            ("readout_h", m.readout_h),
+            ("middle_h", m.middle_h),
+            ("db_w", m.db_w),
+            ("db_readout_h", m.db_readout_h),
+            ("submix_h", m.submix_h),
+            ("vu_w", m.vu_w),
+            ("track_w", m.track_w),
+            ("fader_canvas_w", m.fader_canvas_w),
+            ("tab_w", m.tab_w),
+            ("fx_w", m.fx_w),
+            ("fx_h", m.fx_h),
+            ("tab_h", m.tab_h),
+            ("gear_h", m.gear_h),
+            ("collapse_w", m.collapse_w),
+        ];
+        for (name, value) in sizes {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("geometry.{name} must be a positive number"));
+            }
+        }
+        let offsets = [
+            ("content_x", m.content_x),
+            ("content_y", m.content_y),
+            ("row_gap", m.row_gap),
+            ("pan_x", m.pan_x),
+            ("button_gap", m.button_gap),
+            ("db_x", m.db_x),
+            ("vu_x", m.vu_x),
+            ("track_x", m.track_x),
+            ("tab_x", m.tab_x),
+            ("tab_top_with_fx", m.tab_top_with_fx),
+            ("tab_gap", m.tab_gap),
+            ("collapse_x", m.collapse_x),
+        ];
+        for (name, value) in offsets {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("geometry.{name} must be zero or positive"));
+            }
+        }
+        let tokens = [
+            ("name_size", self.visual.name_size),
+            ("button_text_size", self.visual.button_text_size),
+            ("readout_size", self.visual.readout_size),
+            ("micro_size", self.visual.micro_size),
+            ("tab_glyph_size", self.visual.tab_glyph_size),
+            ("gear_glyph_size", self.visual.gear_glyph_size),
+            ("knob_diameter", self.visual.knob_diameter),
+            ("knob_label_size", self.visual.knob_label_size),
+            ("fader_slot_w", self.visual.fader_slot_w),
+            ("fader_cap_w", self.visual.fader_cap_w),
+            ("fader_cap_h", self.visual.fader_cap_h),
+            ("fx_cap_w", self.visual.fx_cap_w),
+            ("fx_cap_h", self.visual.fx_cap_h),
+        ];
+        for (name, value) in tokens {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("visual.{name} must be a positive number"));
+            }
+        }
+        let c = &self.colors;
+        let colors = [
+            ("surface.app_background", &c.surface.app_background),
+            ("surface.card", &c.surface.card),
+            ("surface.card_active", &c.surface.card_active),
+            ("surface.border", &c.surface.border),
+            ("text.primary", &c.text.primary),
+            ("text.secondary", &c.text.secondary),
+            ("control.button_face", &c.control.button_face),
+            ("control.knob_face", &c.control.knob_face),
+            ("control.knob_border", &c.control.knob_border),
+            ("control.fader_slot", &c.control.fader_slot),
+            ("control.fader_fill", &c.control.fader_fill),
+            ("control.cap_ridge", &c.control.cap_ridge),
+            ("control.cap_centre", &c.control.cap_centre),
+            ("control.tab_face", &c.control.tab_face),
+            ("accent.mute", &c.accent.mute),
+            ("accent.solo", &c.accent.solo),
+            ("accent.cue", &c.accent.cue),
+            ("meter.green", &c.meter.green),
+            ("meter.yellow", &c.meter.yellow),
+            ("meter.red", &c.meter.red),
+        ];
+        for (name, value) in colors {
+            if !is_hex_color(value) {
+                return Err(format!("colors.{name} must be a #rrggbb value"));
+            }
+        }
+        if self.templates.is_empty() {
+            return Err("templates must contain at least one template".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for template in &self.templates {
+            if !ids.insert(template.id) {
+                return Err(format!("duplicate template id {:?}", template.id));
+            }
+        }
+        for template in &self.templates {
+            let layout = self.layout(*template, 1.0);
+            for (name, rect) in layout.elements() {
+                if !layout.card.contains(rect) {
+                    return Err(format!(
+                        "template {:?}: the {} element leaves the {} x {} card",
+                        template.id, name, m.strip_w, m.strip_h
+                    ));
+                }
+            }
+            let centred = |name: &str, rect: Rect, hint: &str| {
+                if (rect.centre_x() - layout.centre_x()).abs() > 0.01 {
+                    return Err(format!(
+                        "template {:?}: {name} must sit on the content centre line, {hint}",
+                        template.id
+                    ));
+                }
+                Ok(())
+            };
+            centred(
+                "geometry.pan_x and pan_w",
+                layout.pan,
+                "pan_x = (content_w - pan_w) / 2",
+            )?;
+            centred(
+                "geometry.db_x and db_w",
+                layout.db_readout,
+                "db_x = (content_w - db_w) / 2",
+            )?;
+            centred(
+                "geometry.track_x and track_w",
+                layout.fader,
+                "track_x = (content_w - track_w) / 2",
+            )?;
+            let pair = Rect::new(
+                layout.buttons[0].x,
+                layout.buttons[0].y,
+                layout.buttons[1].right() - layout.buttons[0].x,
+                layout.buttons[0].height,
+            );
+            centred(
+                "geometry.button_w and button_gap",
+                pair,
+                "content_w = 2 * button_w + button_gap",
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn layout(&self, template: TemplateSpec, scale: f32) -> StripLayout {
+        StripLayout::for_metrics(template.kind, scale, template.features, &self.geometry)
+    }
+
+    pub fn template(&self, id: TemplateId) -> Option<TemplateSpec> {
+        self.templates
+            .iter()
+            .copied()
+            .find(|template| template.id == id)
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn the_example_config_is_valid_and_matches_the_built_in_defaults() {
+        let text = include_str!("../../../../docs/examples/gui-layout.json");
+        let config = GuiLayoutConfig::from_json(text).expect("example config loads");
+        assert_eq!(config.schema, CONFIG_SCHEMA);
+        assert_eq!(config.geometry, LayoutMetrics::default());
+        assert_eq!(config.visual, VISUAL);
+        assert_eq!(config.colors, ColorScheme::default());
+        assert_eq!(config.templates, TEMPLATES);
+    }
+
+    #[test]
+    fn a_geometry_override_reaches_the_resolved_layout() {
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.strip_w = 100.0;
+        config.geometry.strip_h = 360.0;
+        let template = config.templates[0];
+        let layout = config.layout(template, 1.0);
+        assert_eq!(layout.card.width, 100.0);
+        assert_eq!(layout.card.height, 360.0);
+    }
+
+    #[test]
+    fn invalid_configs_are_rejected() {
+        let mut config = GuiLayoutConfig::default();
+        config.schema = 99;
+        assert!(config.validate().is_err());
+
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.middle_h = 0.0;
+        assert!(config.validate().is_err());
+
+        let mut config = GuiLayoutConfig::default();
+        config.templates.clear();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn config_round_trips_through_json() {
+        let json = GuiLayoutConfig::default().to_pretty_json();
+        let parsed = GuiLayoutConfig::from_json(&json).expect("round trip");
+        assert_eq!(parsed, GuiLayoutConfig::default());
+    }
+
+    #[test]
+    fn an_empty_document_uses_the_built_in_layout() {
+        let config = GuiLayoutConfig::from_json("{}").expect("empty document loads");
+        assert_eq!(config.geometry, LayoutMetrics::default());
+        assert_eq!(config.visual, VISUAL);
+        assert_eq!(config.colors, ColorScheme::default());
+        assert_eq!(config.templates, TEMPLATES);
+    }
+
+    #[test]
+    fn the_example_document_references_the_embedded_schema() {
+        let config =
+            GuiLayoutConfig::from_json(include_str!("../../../../docs/examples/gui-layout.json"))
+                .expect("example config loads");
+        let url = config.schema_url.expect("example names its schema");
+        let example_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../docs/examples")
+            .canonicalize()
+            .expect("docs/examples exists");
+        let schema_path = example_dir.join(&url);
+        assert!(
+            schema_path.is_file(),
+            "{} is missing",
+            schema_path.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&schema_path).expect("schema reads"),
+            SCHEMA_JSON,
+            "the referenced schema and the embedded copy differ"
+        );
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected() {
+        let text = r#"{"geometry": {"strip_w": 90.0, "stip_h": 350.0}}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("typo is rejected");
+        assert!(error.contains("stip_h"), "{error}");
+
+        let text = r#"{"templates": [{"id": "InputMono", "kind": "Input", "features": {"fx": true, "trim": true, "eq": true, "dynamics": true, "extra": false}, "stereo": false}]}"#;
+        let error = GuiLayoutConfig::from_json(text).expect_err("unknown feature is rejected");
+        assert!(error.contains("extra"), "{error}");
+    }
+
+    #[test]
+    fn offsets_visual_tokens_and_colours_are_validated() {
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.tab_x = -1.0;
+        let error = config.validate().expect_err("negative offset");
+        assert!(error.contains("geometry.tab_x"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.visual.fader_slot_w = 0.0;
+        let error = config.validate().expect_err("zero token");
+        assert!(error.contains("visual.fader_slot_w"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.colors.accent.mute = "blue".into();
+        let error = config.validate().expect_err("named colour");
+        assert!(error.contains("colors.accent.mute"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.colors.meter.red = "#d94a4".into();
+        assert!(config.validate().is_err(), "short hex colour");
+    }
+
+    #[test]
+    fn partial_documents_override_single_fields() {
+        let config = GuiLayoutConfig::from_json(r##"{"colors": {"accent": {"solo": "#ffcc00"}}}"##)
+            .expect("partial colour document loads");
+        assert_eq!(config.colors.accent.solo, "#ffcc00");
+        assert_eq!(
+            config.colors.accent.mute,
+            ColorScheme::default().accent.mute
+        );
+        assert_eq!(config.colors.surface, SurfaceColors::default());
+        assert_eq!(config.geometry, LayoutMetrics::default());
+
+        let config = GuiLayoutConfig::from_json(r#"{"visual": {"knob_diameter": 46.0}}"#)
+            .expect("partial visual document loads");
+        assert_eq!(config.visual.knob_diameter, 46.0);
+        assert_eq!(config.visual.fader_slot_w, VISUAL.fader_slot_w);
+    }
+
+    #[test]
+    fn a_layout_that_leaves_the_card_is_rejected() {
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.middle_h = 400.0;
+        let error = config.validate().expect_err("taller middle overflows");
+        assert!(error.contains("leaves the"), "{error}");
+
+        let mut config = GuiLayoutConfig::default();
+        config.geometry.track_x = 10.0;
+        let error = config.validate().expect_err("off-centre track");
+        assert!(error.contains("track_x"), "{error}");
+    }
+
+    /// The schema document is the editor-facing reference, so its property
+    /// names and defaults must match the compiled model exactly.
+    #[test]
+    fn the_schema_document_matches_the_compiled_defaults() {
+        let schema: serde_json::Value =
+            serde_json::from_str(SCHEMA_JSON).expect("schema is valid JSON");
+        let defaults = serde_json::to_value(GuiLayoutConfig::default()).expect("defaults");
+        let properties = object_property(&schema, "properties");
+        let mut documented: Vec<&str> = properties.keys().map(String::as_str).collect();
+        documented.retain(|name| *name != "$schema");
+        documented.sort_unstable();
+        let mut compiled: Vec<&str> = defaults
+            .as_object()
+            .expect("defaults are an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        compiled.sort_unstable();
+        assert_eq!(documented, compiled, "top-level fields differ");
+
+        for section in ["geometry", "visual", "colors"] {
+            compare_schema_defaults(
+                section,
+                object_property(property(&properties, section), "properties"),
+                &defaults[section],
+            );
+        }
+
+        let template = value_property(property(&properties, "templates"), "items");
+        let template_properties = object_property(template, "properties");
+        let features = property(&template_properties, "features");
+        let feature_properties = object_property(features, "properties");
+        let mut documented: Vec<&str> = feature_properties.keys().map(String::as_str).collect();
+        documented.sort_unstable();
+        let mut required = string_list(value_property(features, "required"));
+        required.sort_unstable();
+        assert_eq!(
+            documented, required,
+            "feature fields and required list differ"
+        );
+
+        let mut documented = string_list(property(&template_properties, "id"));
+        documented.sort_unstable();
+        let mut compiled: Vec<String> = TEMPLATES
+            .iter()
+            .map(|spec| {
+                serde_json::to_value(spec.id)
+                    .expect("template id serializes")
+                    .as_str()
+                    .expect("template id is a string")
+                    .to_string()
+            })
+            .collect();
+        compiled.sort_unstable();
+        assert!(!compiled.is_empty());
+        assert_eq!(documented, compiled, "template ids differ");
+    }
+
+    fn property<'a>(
+        object: &'a serde_json::Map<String, serde_json::Value>,
+        key: &str,
+    ) -> &'a serde_json::Value {
+        object
+            .get(key)
+            .unwrap_or_else(|| panic!("schema is missing {key}"))
+    }
+
+    fn value_property<'a>(value: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+        value
+            .get(key)
+            .unwrap_or_else(|| panic!("schema is missing {key}"))
+    }
+
+    fn object_property<'a>(
+        value: &'a serde_json::Value,
+        key: &str,
+    ) -> &'a serde_json::Map<String, serde_json::Value> {
+        value
+            .get(key)
+            .and_then(|value| value.as_object())
+            .unwrap_or_else(|| panic!("schema value is missing the {key} object"))
+    }
+
+    fn string_list(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .or_else(|| {
+                value
+                    .get("enum")
+                    .and_then(|enumeration| enumeration.as_array())
+            })
+            .unwrap_or_else(|| panic!("expected a string list, got {value}"))
+            .iter()
+            .map(|entry| entry.as_str().expect("string entry").to_string())
+            .collect()
+    }
+
+    fn compare_schema_defaults(
+        path: &str,
+        properties: &serde_json::Map<String, serde_json::Value>,
+        value: &serde_json::Value,
+    ) {
+        let object = value.as_object().expect("section is an object");
+        let mut documented: Vec<&str> = properties.keys().map(String::as_str).collect();
+        documented.sort_unstable();
+        let mut compiled: Vec<&str> = object.keys().map(String::as_str).collect();
+        compiled.sort_unstable();
+        assert_eq!(documented, compiled, "{path}: fields differ");
+        for (key, actual) in object {
+            let property = property(properties, key);
+            let full = format!("{path}.{key}");
+            match actual {
+                serde_json::Value::Object(_) => {
+                    compare_schema_defaults(&full, object_property(property, "properties"), actual)
+                }
+                serde_json::Value::Number(number) => {
+                    let documented = property
+                        .get("default")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or_else(|| panic!("{full}: no documented default"));
+                    assert_eq!(
+                        documented as f32,
+                        number.as_f64().expect("number") as f32,
+                        "{full}: default differs"
+                    );
+                }
+                serde_json::Value::String(text) => assert_eq!(
+                    property.get("default").and_then(|value| value.as_str()),
+                    Some(text.as_str()),
+                    "{full}: default differs"
+                ),
+                other => panic!("{full}: unexpected default {other}"),
+            }
+        }
     }
 }

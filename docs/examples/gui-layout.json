@@ -1,0 +1,166 @@
+{
+  "$schema": "../schema/gui-layout.schema.json",
+  "schema": 1,
+  "geometry": {
+    "strip_w": 90.0,
+    "strip_h": 350.0,
+    "content_x": 6.0,
+    "content_w": 78.0,
+    "content_y": 4.0,
+    "row_gap": 1.0,
+    "name_h": 13.0,
+    "pan_x": 12.0,
+    "pan_w": 54.0,
+    "pan_h": 54.0,
+    "button_w": 38.0,
+    "button_gap": 2.0,
+    "button_h": 18.0,
+    "readout_h": 18.0,
+    "middle_h": 205.0,
+    "db_x": 20.0,
+    "db_w": 38.0,
+    "db_readout_h": 14.0,
+    "submix_h": 18.0,
+    "vu_x": 0.0,
+    "vu_w": 13.0,
+    "track_x": 26.0,
+    "track_w": 26.0,
+    "fader_canvas_w": 55.0,
+    "tab_x": 56.0,
+    "tab_w": 20.0,
+    "fx_w": 16.12,
+    "fx_h": 66.0,
+    "tab_top_with_fx": 74.0,
+    "tab_h": 22.0,
+    "gear_h": 26.0,
+    "tab_gap": 6.0,
+    "collapse_x": 59.0,
+    "collapse_w": 19.0
+  },
+  "visual": {
+    "name_size": 13.0,
+    "button_text_size": 11.0,
+    "readout_size": 10.0,
+    "micro_size": 8.0,
+    "tab_glyph_size": 13.0,
+    "gear_glyph_size": 14.0,
+    "knob_diameter": 42.0,
+    "knob_label_size": 15.0,
+    "fader_slot_w": 4.34,
+    "fader_cap_w": 22.0,
+    "fader_cap_h": 15.0,
+    "fx_cap_w": 13.64,
+    "fx_cap_h": 9.3
+  },
+  "colors": {
+    "surface": {
+      "app_background": "#18191d",
+      "card": "#24252a",
+      "card_active": "#3a3b42",
+      "border": "#36373d"
+    },
+    "text": {
+      "primary": "#f2f3f5",
+      "secondary": "#a3a5ab"
+    },
+    "control": {
+      "button_face": "#191a1e",
+      "knob_face": "#1a1b1f",
+      "knob_border": "#36373d",
+      "fader_slot": "#131417",
+      "fader_fill": "#36373c",
+      "cap_ridge": "#97989d",
+      "cap_centre": "#4a4c52",
+      "tab_face": "#202126"
+    },
+    "accent": {
+      "mute": "#3d9df6",
+      "solo": "#f0b429",
+      "cue": "#3dd68c"
+    },
+    "meter": {
+      "green": "#3dd68c",
+      "yellow": "#d8c34a",
+      "red": "#d94a4a"
+    }
+  },
+  "templates": [
+    {
+      "id": "InputMono",
+      "kind": "Input",
+      "features": {
+        "fx": true,
+        "trim": true,
+        "eq": true,
+        "dynamics": true
+      },
+      "stereo": false
+    },
+    {
+      "id": "InputStereo",
+      "kind": "Input",
+      "features": {
+        "fx": true,
+        "trim": true,
+        "eq": true,
+        "dynamics": true
+      },
+      "stereo": true
+    },
+    {
+      "id": "InputMonoNoFx",
+      "kind": "Input",
+      "features": {
+        "fx": false,
+        "trim": true,
+        "eq": false,
+        "dynamics": false
+      },
+      "stereo": false
+    },
+    {
+      "id": "PlaybackStereo",
+      "kind": "Playback",
+      "features": {
+        "fx": true,
+        "trim": false,
+        "eq": false,
+        "dynamics": false
+      },
+      "stereo": true
+    },
+    {
+      "id": "OutputStereo",
+      "kind": "Output",
+      "features": {
+        "fx": true,
+        "trim": false,
+        "eq": true,
+        "dynamics": true
+      },
+      "stereo": true
+    },
+    {
+      "id": "OutputMono",
+      "kind": "Output",
+      "features": {
+        "fx": true,
+        "trim": false,
+        "eq": true,
+        "dynamics": true
+      },
+      "stereo": false
+    },
+    {
+      "id": "ControlRoom",
+      "kind": "Output",
+      "features": {
+        "fx": true,
+        "trim": false,
+        "eq": true,
+        "dynamics": true
+      },
+      "stereo": true
+    }
+  ]
+}

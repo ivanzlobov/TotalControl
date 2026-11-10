@@ -1,0 +1,532 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TotalControl GUI layout (prototype)",
+  "description": "Complete GUI layout document for TotalControl: channel-strip geometry at zoom 1.0, visual tokens, the semantic colour scheme and the channel templates. Prototype schema, version 1: it describes one global rule set for every channel and is consumed by the layout preview only. Reference: docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional path or URI of this schema file. Ignored by TotalControl; used by editors for validation and completion."
+    },
+    "schema": {
+      "const": 1,
+      "default": 1,
+      "description": "Document schema version. Must be 1."
+    },
+    "geometry": {
+      "type": "object",
+      "description": "Logical strip geometry at zoom 1.0, in pixels. Every value is multiplied by the zoom exactly once.",
+      "additionalProperties": false,
+      "properties": {
+        "strip_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 90.0,
+          "description": "Full card width."
+        },
+        "strip_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 350.0,
+          "description": "Full card height. Must hold every row."
+        },
+        "content_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 6.0,
+          "description": "Left inset of the content box from the card."
+        },
+        "content_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 78.0,
+          "description": "Content box width, inside both insets."
+        },
+        "content_y": {
+          "type": "number",
+          "minimum": 0,
+          "default": 4.0,
+          "description": "Top inset of the content box from the card."
+        },
+        "row_gap": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Vertical gap between stacked rows."
+        },
+        "name_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 13.0,
+          "description": "Channel name row height."
+        },
+        "pan_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 12.0,
+          "description": "Left edge of the pan knob area from the content box."
+        },
+        "pan_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 54.0,
+          "description": "Pan knob area width."
+        },
+        "pan_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 54.0,
+          "description": "Pan knob area height."
+        },
+        "button_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 38.0,
+          "description": "Width of one mute/solo button; the two readouts use the same width."
+        },
+        "button_gap": {
+          "type": "number",
+          "minimum": 0,
+          "default": 2.0,
+          "description": "Gap between the two buttons and between the two readouts."
+        },
+        "button_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18.0,
+          "description": "Mute/solo button height."
+        },
+        "readout_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18.0,
+          "description": "M1 readout row height."
+        },
+        "middle_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 205.0,
+          "description": "Middle area height, shared by the VU, the channel fader and the FX fader."
+        },
+        "db_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 20.0,
+          "description": "Left edge of the dB readout from the content box."
+        },
+        "db_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 38.0,
+          "description": "dB readout width."
+        },
+        "db_readout_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 14.0,
+          "description": "B1 row height, shared with the minimize face."
+        },
+        "submix_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18.0,
+          "description": "B2 submix bar height. The bar is flush with the card bottom."
+        },
+        "vu_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.0,
+          "description": "Left edge of the VU from the content box."
+        },
+        "vu_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 13.0,
+          "description": "VU width, split into two bars for a stereo channel."
+        },
+        "track_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 26.0,
+          "description": "Left edge of the fader track from the content box. The track must centre on the content centre line."
+        },
+        "track_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 26.0,
+          "description": "Fader track width, holding the fader cap."
+        },
+        "fader_canvas_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 55.0,
+          "description": "Width of the canvas that holds the meter graduations, cap and track."
+        },
+        "tab_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 56.0,
+          "description": "Left edge of the tab column from the content box."
+        },
+        "tab_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 20.0,
+          "description": "Tab glyph width. The tab face extends from here to the card's right edge."
+        },
+        "fx_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 16.12,
+          "description": "FX fader width, centred in the tab column."
+        },
+        "fx_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 66.0,
+          "description": "FX fader height, measured from the middle-area top."
+        },
+        "tab_top_with_fx": {
+          "type": "number",
+          "minimum": 0,
+          "default": 74.0,
+          "description": "Distance from the middle-area top to the first tab when the FX fader exists. Without FX the tabs start at the middle-area top."
+        },
+        "tab_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 22.0,
+          "description": "Tab face height."
+        },
+        "gear_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 26.0,
+          "description": "Settings gear face height."
+        },
+        "tab_gap": {
+          "type": "number",
+          "minimum": 0,
+          "default": 6.0,
+          "description": "Gap between tab faces."
+        },
+        "collapse_x": {
+          "type": "number",
+          "minimum": 0,
+          "default": 59.0,
+          "description": "Left edge of the minimize glyph from the content box. The face extends to the card's right edge."
+        },
+        "collapse_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 19.0,
+          "description": "Minimize glyph width."
+        }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "description": "Visual tokens at zoom 1.0, in pixels. Font sizes, knob and fader-cap dimensions.",
+      "additionalProperties": false,
+      "properties": {
+        "name_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 13.0,
+          "description": "Channel name font size."
+        },
+        "button_text_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 11.0,
+          "description": "Mute/solo and cue button label size."
+        },
+        "readout_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 10.0,
+          "description": "M1 readout, dB readout and submix label size."
+        },
+        "micro_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 8.0,
+          "description": "VU ruler label size."
+        },
+        "tab_glyph_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 13.0,
+          "description": "Trim, EQ and Dynamics tab glyph size."
+        },
+        "gear_glyph_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 14.0,
+          "description": "Settings gear glyph size."
+        },
+        "knob_diameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 42.0,
+          "description": "Pan knob diameter."
+        },
+        "knob_label_size": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15.0,
+          "description": "Pan knob value label size."
+        },
+        "fader_slot_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 4.34,
+          "description": "Fader slot width, shared by the channel fader and the FX fader."
+        },
+        "fader_cap_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 22.0,
+          "description": "Channel fader cap width."
+        },
+        "fader_cap_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15.0,
+          "description": "Channel fader cap height."
+        },
+        "fx_cap_w": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 13.64,
+          "description": "FX fader cap width."
+        },
+        "fx_cap_h": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 9.3,
+          "description": "FX fader cap height."
+        }
+      }
+    },
+    "colors": {
+      "type": "object",
+      "description": "Semantic colour scheme. Every value is a #rrggbb literal.",
+      "additionalProperties": false,
+      "properties": {
+        "surface": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "app_background": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#18191d",
+              "description": "Page background behind the strips."
+            },
+            "card": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#24252a",
+              "description": "Channel card face at rest, used for outputs."
+            },
+            "card_active": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#3a3b42",
+              "description": "Channel card face of a stripped input or playback."
+            },
+            "border": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#36373d",
+              "description": "Card and control outline."
+            }
+          }
+        },
+        "text": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#f2f3f5",
+              "description": "Channel name, knob label and ruler text."
+            },
+            "secondary": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#a3a5ab",
+              "description": "Button labels, readouts and tab glyphs."
+            }
+          }
+        },
+        "control": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "button_face": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#191a1e",
+              "description": "Mute/solo button and submix bar face."
+            },
+            "knob_face": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#1a1b1f",
+              "description": "Pan knob face."
+            },
+            "knob_border": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#36373d",
+              "description": "Pan knob outline."
+            },
+            "fader_slot": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#131417",
+              "description": "Fader slot groove."
+            },
+            "fader_fill": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#36373c",
+              "description": "Fader slot below the cap."
+            },
+            "cap_ridge": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#97989d",
+              "description": "Outer fader cap ridges."
+            },
+            "cap_centre": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#4a4c52",
+              "description": "Centre fader cap ridge on the level line."
+            },
+            "tab_face": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#202126",
+              "description": "Tab face while hovered or open."
+            }
+          }
+        },
+        "accent": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mute": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#3d9df6",
+              "description": "Active mute."
+            },
+            "solo": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#f0b429",
+              "description": "Active solo."
+            },
+            "cue": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#3dd68c",
+              "description": "Active cue and, on an output, the FX fader fill."
+            }
+          }
+        },
+        "meter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "green": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#3dd68c",
+              "description": "Meter bar up to the yellow zone."
+            },
+            "yellow": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#d8c34a",
+              "description": "Meter bar above the green zone."
+            },
+            "red": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "default": "#d94a4a",
+              "description": "Meter bar in the red zone and the +3 dB fader tick."
+            }
+          }
+        }
+      }
+    },
+    "templates": {
+      "type": "array",
+      "description": "Channel templates rendered by the preview, in sheet order. At least one entry; ids must be unique.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "features", "stereo"],
+        "properties": {
+          "id": {
+            "enum": [
+              "InputMono",
+              "InputStereo",
+              "InputMonoNoFx",
+              "PlaybackStereo",
+              "OutputStereo",
+              "OutputMono",
+              "ControlRoom"
+            ],
+            "description": "Standard channel template."
+          },
+          "kind": {
+            "enum": ["Input", "Playback", "Output"],
+            "description": "Channel row. Input and Playback have a B2 submix bar; Output does not."
+          },
+          "features": {
+            "type": "object",
+            "description": "Optional controls that exist for this template. An absent feature keeps its slot, so elements below it do not move.",
+            "additionalProperties": false,
+            "required": ["fx", "trim", "eq", "dynamics"],
+            "properties": {
+              "fx": {
+                "type": "boolean",
+                "default": true,
+                "description": "The thin FX fader exists in the tab column."
+              },
+              "trim": {
+                "type": "boolean",
+                "default": true,
+                "description": "The Trim tab exists in the MR2 slot."
+              },
+              "eq": {
+                "type": "boolean",
+                "default": true,
+                "description": "The EQ tab exists in the MR4 slot."
+              },
+              "dynamics": {
+                "type": "boolean",
+                "default": true,
+                "description": "The Dynamics tab exists in the MR5 slot."
+              }
+            }
+          },
+          "stereo": {
+            "type": "boolean",
+            "default": false,
+            "description": "Linked stereo pair: the VU draws two bars and the name uses the pair form."
+          }
+        }
+      }
+    }
+  }
+}

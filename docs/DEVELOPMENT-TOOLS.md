@@ -171,10 +171,28 @@ quick raster review:
 magick /tmp/channel-preview.svg /tmp/channel-preview.png
 ```
 
-The command renders the standard template set and the semantic preview
-colour categories.  See
+Render a candidate configuration without rebuilding:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --config ~/.config/totalcontrol/gui-layout.json \
+    /tmp/my-layout.svg 2
+```
+
+Write the current built-in defaults as a starting example:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --example /tmp/gui-layout.json
+```
+
+The command writes `/tmp/gui-layout.json` and the matching
+`gui-layout.schema.json` beside it; the document references that sibling file
+through `$schema` for editor validation and completion.  The checked-in files
+are [`examples/gui-layout.json`](examples/gui-layout.json) and
+[`schema/gui-layout.schema.json`](schema/gui-layout.schema.json).  See
 [`spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md)
-for the schema and the change workflow.
+for the field reference, the validation rules and the change workflow.
 
 `scripts/audio-health.sh` and `scripts/reload-kernel.sh` are transport and
 driver helpers. `scripts/install-dkms.sh` is the supported driver installer;

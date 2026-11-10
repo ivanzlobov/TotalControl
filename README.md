@@ -41,7 +41,7 @@ WirePlumber.
 - [GUI specification](docs/spec/TOTALCONTROL-GUI-SPEC.md) — layout, controls,
   panels, gestures and motion.
 - [Channel template schema](docs/spec/TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) —
-  shared channel templates, invariants and layout preview.
+  shared channel templates, layout configuration, invariants and preview.
 - [UC protocol specification](docs/spec/FIREFFACE-UC-PROTOCOL-SPEC.md).
 - [UCX protocol specification](docs/spec/FIREFFACE-UCX-PROTOCOL-SPEC.md).
 - [Babyface Pro protocol specification](docs/spec/BABYFACE-PRO-PROTOCOL-SPEC.md).
