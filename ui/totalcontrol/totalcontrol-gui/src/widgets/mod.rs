@@ -7,3 +7,4 @@ pub mod layout;
 pub mod panel_icon;
 pub mod splitter;
 pub mod strip;
+pub mod strip_canvas;

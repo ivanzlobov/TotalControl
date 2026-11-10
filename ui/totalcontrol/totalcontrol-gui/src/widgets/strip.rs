@@ -857,6 +857,9 @@ pub fn strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     };
 
     if show_full {
+        if crate::widgets::strip_canvas::enabled() {
+            return crate::widgets::strip_canvas::strip_canvas(p);
+        }
         full_strip(p)
     } else {
         collapsed_strip(p, w)
