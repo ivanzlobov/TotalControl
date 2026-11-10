@@ -5,5 +5,6 @@ pub mod fader;
 pub mod knob;
 pub mod layout;
 pub mod panel_icon;
+pub mod pause_mark;
 pub mod splitter;
 pub mod strip;

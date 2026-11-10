@@ -101,10 +101,14 @@ pub struct Workspace {
     /// The eight Mix slots.
     pub snapshots: [WorkspaceSnapshot; 8],
     pub groups: [Group; 4],
-    /// The temporary fader group (the strip selection), stored so a
+    /// The global fader group (the Shift+clicked strips), stored so a
     /// workspace restores the whole working set, not only the four
     /// permanent groups.
     pub temporary_group: Vec<ChannelId>,
+    /// Whether that group was ganged (`F` lit) when saved. Missing in old
+    /// workspaces, which always stored a ganged group.
+    #[serde(default = "fader_ganged_default")]
+    pub fader_ganged: bool,
     /// The six Mixer Layout slots.
     pub layouts: [Option<HashSet<ChannelId>>; 6],
     pub labels: Vec<(ChannelId, String)>,
@@ -114,6 +118,10 @@ pub struct Workspace {
     pub surround_51: bool,
     pub surround_71: bool,
     pub window_size: Option<(f32, f32)>,
+}
+
+fn fader_ganged_default() -> bool {
+    true
 }
 
 impl Default for Workspace {
@@ -127,6 +135,7 @@ impl Default for Workspace {
             snapshots: Default::default(),
             groups: Default::default(),
             temporary_group: Vec::new(),
+            fader_ganged: false,
             layouts: Default::default(),
             labels: Vec::new(),
             view: WorkspaceView::default(),
@@ -1256,5 +1265,15 @@ mod tests {
             with_extension(PathBuf::from("a.tcws")),
             PathBuf::from("a.tcws")
         );
+    }
+
+    #[test]
+    fn an_old_workspace_restores_its_group_ganged() {
+        let mut workspace = Workspace::default();
+        workspace.temporary_group = vec![ChannelId::Input(0), ChannelId::Input(4)];
+        let mut json = serde_json::to_value(&workspace).unwrap();
+        json.as_object_mut().unwrap().remove("fader_ganged");
+        let back: Workspace = serde_json::from_value(json).unwrap();
+        assert!(back.fader_ganged, "old files always stored a ganged group");
     }
 }

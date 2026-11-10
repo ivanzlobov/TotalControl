@@ -332,7 +332,9 @@ its tab.
 The strength readouts refresh four times a second; the meter bars keep moving
 smoothly. A readout shows one decimal place, except for levels of magnitude
 100 dB or more, which are printed without a fraction (`100`, `120`, `-150`).
-Silence — and anything below the unit's -150.5 dBFS floor — reads `-∞`. Mute silences a channel without moving its fader; unmuting restores
+Silence — and anything below the unit's -150.5 dBFS floor — reads `-∞`.
+
+Mute silences a channel without moving its fader; unmuting restores
 the same level. Solo silences the other inputs and software playbacks while
 the soloed channel keeps its fader; releasing the last solo restores the
 others. The Cue button on a hardware output copies that output's submix into
@@ -340,6 +342,50 @@ the selected `Cue/PFL to` target, so you can listen to any hardware output
 through the monitor output. Cue is exclusive; releasing it restores the target
 mix. An engaged Mute button is outlined blue, Solo yellow and Cue green; the
 button face stays dark.
+
+### The masters
+
+The sidebar's `M`, `S`/`F` and `F` buttons are the three masters, each drawn
+in the colour of the channel control it stands for: mute blue, solo yellow and
+the fader group's own colour. They are the same size as the sidebar's other
+buttons. A master that is switched off takes a muted version of its colour.
+
+The mute and solo groups build themselves. You do not have to set anything
+up: every channel you mute joins the global mute group, and every channel you
+solo joins the global solo group. All you need to remember is the button.
+
+`M` is on when TotalControl starts. Press it and the whole mute group switches
+off for the moment: the master and every held channel show the pause mark
+before the `M`, and the channels become audible again. Press `M` again and the
+same channels are muted together. The mute group works on every routing, not
+only the submix you are looking at.
+
+The pause mark means the group is being remembered, not cleared. Clicking a
+channel that is already in the group toggles it and takes it out of the
+group; a linked stereo pair goes with it, and the rest of the group is
+unaffected. Muting a channel that is not in the group mutes it as usual and
+adds it, even while the group is off.
+
+`S` works the same way for solos over the current submix. In PFL mode the same
+button becomes the PFL master: it shows `F` while an input is listening, and
+pressing it cancels the active PFL rather than restoring it.
+
+`F` is different: it gangs faders and remembers the group, but has no pause
+face. Shift+click a strip to add it to the global fader group; the first
+member turns `F` on and gives the member's fader cap the group colour. Keep
+Shift+clicking to add or remove channels. A plain click moves the focused
+strip and leaves the group alone, so you can work on a channel in the middle
+of a group without breaking it. Press `F` off and the members stop moving
+together and lose the colour; press it on again and the same group gangs
+again. Only level is ganged, never pan.
+
+The group is really three groups in one: input faders gang with input faders,
+software playback faders with software playback faders, and hardware output
+faders with hardware output faders. One group can span all three rows, and each
+row moves on its own. An empty group leaves `F` off. `F` never mutes or solos
+anything, and it does not affect the stored fader groups `1`–`4` in the
+`groups` card. The pause mark is two short, thick bars, half the label height:
+before the `M`, and after the `S`.
 
 Every strip has the same height. A collapse button in the readout row under
 the fader folds a strip so only its channel name and meter remain, and the
@@ -833,10 +879,12 @@ front-panel equivalent controls of the unit.
   readout to type a value; double-click a strip's background to collapse
   it.
 - Ordinary buttons act once per click.
-- **Shift+click** a strip or its fader adds or removes it from the temporary
-  fader group; those faders move together relatively and their caps turn
-  yellow. Shift+drag still fine-adjusts. The `F` button above the fader
-  clears the group. A plain click selects one strip; there is no Ctrl+click.
+- **Shift+click** a strip or its fader adds or removes it from the global
+  fader group. The first member turns `F` on and the members' caps take the
+  group colour; Shift+drag still fine-adjusts. Press `F` to ungang the members
+  and hide the colour without forgetting them, and press it again to bring
+  both back. A plain click focuses one strip and leaves the group untouched;
+  there is no Ctrl+click.
 
 ## 12. Workspace and Options menus
 
@@ -876,12 +924,12 @@ term for a mixer state; the interface uses the terms below.
 |---|---|
 | **Current mix** | The live mixer state: routing, faders, EQ, dynamics and FX. It is saved continuously for recovery. |
 | **Snapshot** | One named, saved current mix inside a workspace. |
-| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups — including the temporary fader group — layouts, view state and Control Room state. |
+| **Workspace** | A portable host-side configuration file: the current mix, snapshots, labels, groups — including the global fader group — layouts, view state and Control Room state. |
 | **Device setup** | One of the unit's own six states, separate from host files. |
 
 | Layer | Contains | Stored |
 |---|---|---|
-| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the temporary fader group), layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
+| **Workspace** | The portable host-side configuration: current mix, sample rate, pitch, Dim/Speaker B state, the eight named snapshots, labels, groups (including the global fader group), layouts, view state, Control Room assignments and window size | A `.tcws` file chosen by you |
 | **Snapshot** | One mixer state: routing, faders, names, trims and the device settings TotalControl manages | Inside the current workspace, and in the working `Mix n.json` files |
 | **Auto state** | The current mixer, saved continuously for crash recovery | `auto.json` |
 | **Device setup** | The unit's own six-slot state | The interface, not TotalControl |
@@ -955,7 +1003,7 @@ A workspace contains:
 - the current mix, including sample rate, pitch/varispeed and Dim/Speaker B state;
 - all eight snapshots and their names;
 - user channel labels;
-- the four mute/solo/fader groups and the temporary fader group;
+- the four mute/solo/fader groups and the global fader group;
 - the six layout slots and the current collapsed/expanded strips;
 - view, row mode, sidebar, zoom and selected-output state;
 - Control Room assignments and monitoring settings;
@@ -1028,9 +1076,11 @@ cannot go further in that direction. Mute and solo propagate the same way.
 
 The fader groups carry red, blue, green and violet, on their cells and on the
 caps of their members; mute cells are steel blue and solo cells amber.
-Shift+click on a strip or its fader builds the **temporary fader group**,
-whose members' caps turn yellow; the `F` button clears it. The temporary
-group outranks a stored colour while it exists.
+Shift+click on a strip or its fader builds the **global fader group** (the
+`F` master above the faders). While the group is ganged its members' caps take
+the group colour and their levels move together; pressing `F` off ungangs them
+and hides the colour without forgetting them. The global group outranks a
+stored colour while it is ganged.
 
 Groups are saved in a workspace. Loading a workspace replaces the current
 groups with the stored ones.

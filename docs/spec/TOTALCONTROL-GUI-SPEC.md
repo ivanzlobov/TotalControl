@@ -46,10 +46,39 @@ FX knob, group and snapshot controls, and layout. It stays in the layout as
 the window narrows. Its default width is 140 px; it accepts resizing and has
 its own collapse toggle.
 
-The global row is `M`, `S`/`F`, `F`. The left button is the Mute master. The
-middle button is the Solo master; in PFL mode it shows `F` while an input is
-listening and `S` otherwise, and it switches the active PFL inputs off and
-back on. The right `F` is the temporary fader group, not the FX panel.
+The global row is `M`, `S`/`F`, `F`.
+
+The left button is the **Mute master**. Membership is automatic: every channel
+mute joins the set, and while the master is lit the channel mutes. The master
+is lit from the first frame with an empty set. A press suspends the set: every
+member unmutes and the master and each held channel show the pause mark;
+pressing it again mutes the set. A member click toggles that channel and
+removes it from the set, a linked pair leaving together; muting any other
+channel mutes it and adds it, whatever the master's state. The master can also be switched off while the set
+is empty. The set is global: it silences the channel on every routing.
+
+The middle button is the **Solo master**, the same machine with the pause mark
+after the letter, over the current submix; it is also lit from the first frame
+and its membership is automatic. In PFL mode it shows `F` while an input is
+listening; a press then cancels the active PFL and does not restore it.
+
+The right `F` is the **global fader group** master, not the FX panel.
+Shift+click a strip adds or removes it; the first member turns `F` on. A plain
+click moves the focus and leaves the group untouched. While `F` is on, the
+members of each row gang level moves and their caps carry the group colour. A
+press turns it off: the members stop ganging and lose the colour but keep
+their membership; another press restores both. Pan never gangs. The group is
+per row: input faders gang with input faders, software-playback faders with
+their own, hardware-output faders with theirs, so a group spanning rows moves
+one row at a time. It never affects the stored fader groups `1`–`4`; an empty
+group leaves `F` off.
+
+The three masters are outline switches in the colour of the channel control
+they stand for — mute blue, solo yellow, fader-group colour — and take a muted
+version of that hue while off. They use the normal sidebar button box and
+centre their label in both axes. Mute and solo are lit from the first frame;
+switching one off always shows the pause mark. The pause mark is two short,
+thick bars, half the label height: before the `M`, after the `S`.
 
 The `groups` card has four rows of storage places: `M1`–`M4` for the mute
 link, `S1`–`S4` for the solo link and `1`–`4` for the fader link, with `edit`
@@ -61,7 +90,7 @@ engages the chosen link, choosing another place stores the current one and
 starts the next, and Esc cancels the session.  A linked place keeps its
 steady colour: fader groups red, blue, green and violet, mute steel blue,
 solo amber.  A fader-linked group tints the caps of its members with its
-colour; the temporary fader group tints them yellow.
+colour; the global fader group tints them yellow while it is ganged.
 
 The Control Room closes the Hardware Outputs row, flush with the mixer's right
 edge.
@@ -158,7 +187,7 @@ of the chosen output pairs are cleared. A factory workspace has no file:
 `Save` opens Save As so the user can keep it.
 
 A workspace contains the current mixer, the eight named snapshots, labels,
-groups (including the temporary fader group), six layout slots,
+groups (including the global fader group and its ganged state), six layout slots,
 collapsed/expanded strips, view and sidebar state,
 Control Room settings and assignments, virtual-surround settings and window
 size. It stores the sample rate, pitch/varispeed and active Dim, Speaker B,
@@ -1377,9 +1406,8 @@ other; FX Send can follow it.
 Every click on a hardware output counts, not only the strip's empty surface:
 its mute and cue switches, its slideout buttons (gear, EQ, D), its fader and
 its name field select that output the same way, and the visible submix
-switches to it. An output strip that is already part of a multi-selection
-keeps the selection when one of its controls is clicked, so group edits still
-apply.
+switches to it. Clicking any of an output strip's controls focuses that
+output and shows its submix; the global fader group is left untouched.
 
 ### 11.2 Assignment motion
 
@@ -1488,6 +1516,10 @@ beyond the window.
 
 - Every channel control has a defined effect in the mixer model and its device
   path.
+- Every button centres its label horizontally and vertically in the button
+  face; an icon-only button centres the icon. The three masters and the group
+  storage cells use the normal sidebar button height. Menu items are the one
+  exception: they keep their text left-aligned.
 - Engaged controls use their defined style: orange outline for Stereo, Inst,
   AutoSet, FX Return and Loopback; green outline for Phase; orange arc for
   gain, pan and output balance; solo colour for Dynamics.

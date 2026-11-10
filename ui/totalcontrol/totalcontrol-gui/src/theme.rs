@@ -698,6 +698,40 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     outline_toggle(active, PHANTOM)
 }
 
+/// The Control Strip masters (Mute, Solo/PFL, Fader): the same outline
+/// switch as the stereo button, in the colour of the channel control they
+/// stand for, with a muted version of that hue while the master is off.
+pub fn master_button(
+    active: bool,
+    color: Color,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let pressed = matches!(status, button::Status::Pressed);
+        let mut background = if hovered { SURFACE_HI } else { button_face() };
+        if pressed {
+            background = blend(background, Color::BLACK, PRESS_DARKEN);
+        }
+        let idle = muted(color);
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color: if active { color } else { idle },
+            border: Border {
+                color: if active { color } else { idle },
+                width: 1.0,
+                radius: RADIUS_SM.into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        }
+    }
+}
+
+/// A dim version of a UI colour, for an idle master's outline and mark.
+pub fn muted(color: Color) -> Color {
+    Color { a: 0.42, ..color }
+}
+
 /// CUE uses the same outline language as Stereo, in green.
 pub fn cue_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     outline_toggle(active, cue_color())

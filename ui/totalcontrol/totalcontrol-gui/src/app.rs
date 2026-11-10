@@ -1983,14 +1983,15 @@ pub enum Message {
     EditChanged(String),
     EditCommit,
 
-    /// Ctrl/Shift+click on a strip's non-control area toggles its
-    /// selection membership; a plain click there is a no-op (so
-    /// double-click-to-collapse on a selected strip isn't disrupted by an
-    /// intervening deselect on the first press).
+    /// Shift+click on a strip's non-control area adds or removes it from
+    /// the global fader group; a plain click moves the focus only and
+    /// leaves the group alone.
     StripClicked(ChannelId),
-    /// Plain click on genuinely empty page background clears the
-    /// selection — see `page()`.
+    /// Plain click on genuinely empty page background clears the focused
+    /// strip — see `page()`.
     ClearSelection,
+    /// Gang or ungang the stored global fader group (`F`).
+    FaderGroupToggle,
     /// The cursor just entered (`Some`) or left (`None`) a strip's card —
     /// drives the hover border/glow. See `TotalControl::hovered_strip`.
     StripHovered(Option<ChannelId>),
@@ -2292,6 +2293,17 @@ pub struct GroupEdit {
     pub pending: Vec<ChannelId>,
 }
 
+/// One master's stored set. The resting master is idle: not suspended, empty,
+/// and drawn with the dimmed pause glyph. A channel mute/solo joins the set and
+/// lights the master; pressing the master suspends the set (members unmuted,
+/// pause glyph) and pressing it again re-applies it. While suspended, clicking
+/// a member's button removes it from the set.
+#[derive(Debug, Clone, Default)]
+pub struct MasterSet {
+    pub members: Vec<ChannelId>,
+    pub suspended: bool,
+}
+
 pub struct TotalControl {
     pub device: DeviceHandle,
     /// The layout document, or the built-in defaults when none loads.
@@ -2480,22 +2492,21 @@ pub struct TotalControl {
     /// inside `RESIZE_THROTTLE` of the last applied one) — flushed by the
     /// next due resize or the next `Message::Tick`. See `apply_pending_resize`.
     pending_resize_width: Option<f32>,
-    /// Multi-selected strips — Ctrl+click toggles just the clicked strip,
-    /// Shift+click selects the whole range from `select_anchor` (standard
-    /// file-manager convention), click empty background to clear.
-    /// Mute/solo/collapse/volume/pan applied to any selected strip apply
-    /// to the whole selection at once.
+    /// The stored global fader group: every Shift+clicked strip, in all
+    /// three rows. The first member is added by Shift+click; a plain click
+    /// never changes it. Ganging and the member colour are gated by
+    /// `fader_ganged` (the `F` master), so an unganged group still exists.
     pub selected: HashSet<ChannelId>,
-    /// The strip a plain click last focused.  Cursor Up/Down nudge this
-    /// channel (or all of `selected` when a multi-selection exists), the
-    /// way TotalMix's keyboard control works.  Kept separate from
-    /// `selected` so a plain click does not turn into a multi-selection.
+    /// Whether the stored fader group is ganged (`F` lit). While off the
+    /// members keep their membership but lose the colour and no fader
+    /// moves another.
+    pub fader_ganged: bool,
+    /// The strip a plain click last focused. Cursor Up/Down nudges it (and
+    /// its ganged row peers), the way TotalMix's keyboard control works.
+    /// Kept separate from `selected` so a plain click does not join or
+    /// clear the fader group.
     pub focus_channel: Option<ChannelId>,
-    /// The strip a future Shift+click's range is measured from — the
-    /// most recent strip explicitly Ctrl- or Shift-clicked. Not moved by
-    /// Shift+click itself, so repeated Shift+clicks pivot around the same
-    /// point (letting you grow/shrink a range interactively) the way
-    /// Explorer/Finder do.
+    /// The strip a Shift+click last added to the fader group.
     pub select_anchor: Option<ChannelId>,
     /// Which strip the cursor is currently over, if any — drives the hover
     /// border/glow in `theme::strip_panel`. Plain `container::Style`
@@ -2638,14 +2649,10 @@ pub struct TotalControl {
     pub snapshots: [Option<Scene>; 8],
     /// User-visible names of the eight Mix slots.
     pub snapshot_names: [String; 8],
-    /// Which channels `Message::GlobalSoloToggle` most recently cleared
-    /// — restored on the next press if nothing's been soloed again in
-    /// the meantime. Empty when there's nothing to restore.
-    pub last_cleared_solos: Vec<ChannelId>,
-    /// Which channels `Message::GlobalMuteToggle` most recently
-    /// unmuted, muted again on the next press if nothing has been muted in
-    /// the meantime. Empty when there's nothing to restore.
-    pub last_cleared_mutes: Vec<ChannelId>,
+    /// The Solo master's stored set (see `MasterSet`).
+    pub solo_master: MasterSet,
+    /// The Mute master's stored set.
+    pub mute_master: MasterSet,
     /// Whether the mix has changed since `active_snapshot` was recalled
     /// or stored: TotalMix flashes the slot ("As soon as the mixer state
     /// is changed the button starts flashing"), the sidebar marks it.
@@ -3168,6 +3175,7 @@ pub fn new_with_device(
         last_resize_applied: None,
         pending_resize_width: None,
         selected: HashSet::new(),
+        fader_ganged: false,
         focus_channel: None,
         select_anchor: None,
         hovered_strip: None,
@@ -3233,8 +3241,8 @@ pub fn new_with_device(
         stored_snapshots: std::array::from_fn(|i| snapshots[i].is_some()),
         snapshots,
         snapshot_names: std::array::from_fn(|i| format!("Mix {}", i + 1)),
-        last_cleared_solos: Vec::new(),
-        last_cleared_mutes: Vec::new(),
+        solo_master: MasterSet::default(),
+        mute_master: MasterSet::default(),
         snapshot_dirty: false,
         row_mode: RowMode::Three,
         sync_direction,
@@ -3575,6 +3583,7 @@ fn capture_workspace(state: &TotalControl) -> Workspace {
         snapshots,
         groups: state.groups.clone(),
         temporary_group: state.selected.iter().copied().collect(),
+        fader_ganged: state.fader_ganged,
         layouts: state.layouts.clone(),
         labels: state.labels.iter().map(|(c, l)| (*c, l.clone())).collect(),
         view: WorkspaceView {
@@ -3678,6 +3687,7 @@ fn apply_workspace_state(
     state.groups = workspace.groups.clone();
     state.group_edit = None;
     state.selected = workspace.temporary_group.iter().copied().collect();
+    state.fader_ganged = workspace.fader_ganged && !state.selected.is_empty();
     state.select_anchor = None;
     state.layouts = workspace.layouts.clone();
     state.active_layout = workspace.view.active_layout;
@@ -5248,21 +5258,72 @@ pub(crate) fn any_channel_muted(state: &TotalControl) -> bool {
     all_channel_ids(state).into_iter().any(|cid| channel_is_muted(state, cid))
 }
 
-/// Whether `cid`'s mute is held off by the Mute master: the master's last
-/// press cleared it, and nothing has been muted since (a new mute makes the
-/// master's next press clear that one instead, so the old set is no longer
-/// what it would bring back).
+/// Whether the global fader group has any member. The group exists as soon
+/// as the first strip is Shift+clicked, even before it has a peer to gang.
+pub(crate) fn temporary_group_exists(state: &TotalControl) -> bool {
+    !state.selected.is_empty()
+}
+
+/// Whether `cid` is a member whose group is ganged — the condition for the
+/// member colour. An unganged group keeps its members but shows no colour.
+fn temporary_group_contains(state: &TotalControl, cid: ChannelId) -> bool {
+    state.fader_ganged && state.selected.contains(&cid)
+}
+
+/// The channels a mute or solo click switches together: the channel itself
+/// and its partner when the pair is linked. The master's group stores both,
+/// so clicking either half removes the pair from the group.
+fn paired_channels(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
+    match cid {
+        ChannelId::Input(i) if state.device.input_pair_linked(i / 2) => {
+            vec![ChannelId::Input(i & !1), ChannelId::Input(i | 1)]
+        }
+        ChannelId::Playback(i) if state.device.playback_linked(i / 2) => {
+            vec![
+                ChannelId::Playback(i & !1),
+                ChannelId::Playback(i | 1),
+            ]
+        }
+        ChannelId::Output(i) if state.device.output_linked(i / 2) => {
+            vec![
+                ChannelId::Output(i & !1),
+                ChannelId::Output(i | 1),
+            ]
+        }
+        _ => vec![cid],
+    }
+}
+
+/// The other members of `cid`'s row in the ganged global fader group.
+/// Ganging is within one kind only: inputs with inputs, software playbacks
+/// with playbacks, hardware outputs with outputs.
+fn temporary_group_peers(state: &TotalControl, cid: ChannelId) -> Vec<ChannelId> {
+    if !state.fader_ganged || !state.selected.contains(&cid) {
+        return Vec::new();
+    }
+    let kind = std::mem::discriminant(&cid);
+    state
+        .selected
+        .iter()
+        .copied()
+        .filter(|other| *other != cid && std::mem::discriminant(other) == kind)
+        .collect()
+}
+
+/// Whether `cid` is a member of the suspended Mute master: it is unmuted
+/// and shows the pause mark. A click on it toggles the channel and removes
+/// it from the set.
 pub(crate) fn mute_armed(state: &TotalControl, cid: ChannelId) -> bool {
-    state.last_cleared_mutes.contains(&cid)
+    state.mute_master.suspended
+        && state.mute_master.members.contains(&cid)
         && !channel_is_muted(state, cid)
-        && !any_channel_muted(state)
 }
 
 /// The same for the Solo master and `cid`'s solo.
 pub(crate) fn solo_armed(state: &TotalControl, cid: ChannelId) -> bool {
-    state.last_cleared_solos.contains(&cid)
+    state.solo_master.suspended
+        && state.solo_master.members.contains(&cid)
         && !channel_is_soloed(state, cid)
-        && !any_channel_soloed(state)
 }
 
 /// Whether at least one channel is currently soloed — drives the
@@ -5286,8 +5347,11 @@ fn propagation_set(
     link: sidebar::GroupLink,
 ) -> HashSet<ChannelId> {
     let mut set = HashSet::new();
-    if state.selected.len() > 1 && state.selected.contains(&cid) {
-        set.extend(state.selected.iter().copied());
+    // The global fader group gangs level only, and only within one row —
+    // inputs with inputs, software playbacks with playbacks, outputs with
+    // outputs. Its stored membership is ignored while `F` is off.
+    if link == sidebar::GroupLink::Fader {
+        set.extend(temporary_group_peers(state, cid));
     }
     for g in &state.groups {
         let linked = match link {
@@ -5332,31 +5396,16 @@ fn apply_grouped_volume(state: &mut TotalControl, cid: ChannelId, out: usize, v:
     set_channel_volume(state, cid, out, v);
     notify_osc(state, OscOutbound::Volume(cid, out, v));
     for sel in others {
-        let cur = state.device.volume(sel, out).unwrap_or(0.0)
+        // Hardware outputs carry their own index instead of a submix.
+        let peer_out = match sel {
+            ChannelId::Output(i) => i,
+            _ => out,
+        };
+        let cur = state.device.volume(sel, peer_out).unwrap_or(0.0)
             * trim_factor(channel_trim(state, sel));
         let new_vol = db_to_vol(vol_to_db(cur) + delta_db).clamp(0.0, 2.0);
-        set_channel_volume(state, sel, out, new_vol);
-        notify_osc(state, OscOutbound::Volume(sel, out, new_vol));
-    }
-}
-
-/// Same relative-delta grouping as `apply_grouped_volume`, for pan.
-fn apply_grouped_pan(state: &mut TotalControl, cid: ChannelId, out: usize, pan: i8) {
-    let others = propagation_set(state, cid, sidebar::GroupLink::Fader);
-    if others.is_empty() {
-        set_channel_pan(state, cid, out, pan);
-        notify_osc(state, OscOutbound::Pan(cid, out, pan));
-        return;
-    }
-    let old = i16::from(channel_pan(state, cid, out));
-    let delta = i16::from(pan) - old;
-    set_channel_pan(state, cid, out, pan);
-    notify_osc(state, OscOutbound::Pan(cid, out, pan));
-    for sel in others {
-        let cur = i16::from(channel_pan(state, sel, out));
-        let new = (cur + delta).clamp(-100, 100) as i8;
-        set_channel_pan(state, sel, out, new);
-        notify_osc(state, OscOutbound::Pan(sel, out, new));
+        set_channel_volume(state, sel, peer_out, new_vol);
+        notify_osc(state, OscOutbound::Volume(sel, peer_out, new_vol));
     }
 }
 
@@ -7420,6 +7469,7 @@ fn is_undoable(message: &Message) -> bool {
             | Message::EditChanged(_)
             | Message::StripClicked(_)
             | Message::ClearSelection
+            | Message::FaderGroupToggle
             | Message::StripHovered(_)
             | Message::OscReady(_)
 
@@ -7639,6 +7689,7 @@ fn changes_workspace(message: &Message) -> bool {
             | Message::GroupClear
             | Message::StripClicked(_)
             | Message::ClearSelection
+            | Message::FaderGroupToggle
             | Message::ControlRoomMuteFx(_)
             | Message::ControlRoomMono(_)
             | Message::ControlRoomRecall
@@ -7738,17 +7789,13 @@ fn selected_output_channel(state: &TotalControl) -> usize {
     }
 }
 
-/// Select a strip the way a plain click does.  The strip's own controls
+/// Focus a strip the way a plain click does.  The strip's own controls
 /// (mute, solo, the flyout buttons, the fader, the knobs) call this too, so
-/// a click anywhere on a channel selects it; on a hardware output it also
-/// shows that output's submix.  A strip that is already part of a
-/// multi-selection keeps the selection, so group edits still work.
+/// a click anywhere on a channel focuses it; on a hardware output it also
+/// shows that output's submix.  The global fader group is not touched: only
+/// Shift+click adds or removes its members.
 fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     state.focus_channel = Some(cid);
-    if !state.selected.contains(&cid) {
-        state.selected.clear();
-        state.selected.insert(cid);
-    }
     state.select_anchor = Some(cid);
     if let ChannelId::Output(i) = cid {
         if state.device.outputs_one_per_pair() {
@@ -8613,9 +8660,27 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::Mute(cid, m) => {
+            // The group is automatic: muting always mutes the channel and
+            // joins it, whatever the master's state. Clicking a member
+            // toggles it and takes it out of the group again. A linked pair
+            // joins and leaves together.
+            let targets = paired_channels(state, cid);
+            let member = targets
+                .iter()
+                .any(|target| state.mute_master.members.contains(target));
+            if member {
+                state
+                    .mute_master
+                    .members
+                    .retain(|channel| !targets.contains(channel));
+            } else if m {
+                for target in targets {
+                    if !state.mute_master.members.contains(&target) {
+                        state.mute_master.members.push(target);
+                    }
+                }
+            }
             select_strip(state, cid);
-            // `propagation_set` covers both the pre-existing multi-select
-            // case and (new) any mute-linked group `cid` belongs to.
             set_channel_mute(state, cid, m);
             notify_osc(state, OscOutbound::Mute(cid, m));
             for other in propagation_set(state, cid, sidebar::GroupLink::Mute) {
@@ -8624,6 +8689,23 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::Solo(cid, s) => {
+            // Same automatic group as mute, with the same pair handling.
+            let targets = paired_channels(state, cid);
+            let member = targets
+                .iter()
+                .any(|target| state.solo_master.members.contains(target));
+            if member {
+                state
+                    .solo_master
+                    .members
+                    .retain(|channel| !targets.contains(channel));
+            } else if s {
+                for target in targets {
+                    if !state.solo_master.members.contains(&target) {
+                        state.solo_master.members.push(target);
+                    }
+                }
+            }
             select_strip(state, cid);
             set_channel_solo(state, cid, s);
             notify_osc(state, OscOutbound::Solo(cid, s));
@@ -8633,35 +8715,51 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             }
         }
         Message::GlobalMuteToggle => {
-            let muted: Vec<ChannelId> =
-                all_channel_ids(state).into_iter().filter(|&cid| channel_is_muted(state, cid)).collect();
-            if muted.is_empty() {
-                for cid in std::mem::take(&mut state.last_cleared_mutes) {
+            if state.mute_master.suspended {
+                // Engage: mute every member; the set is kept.
+                state.mute_master.suspended = false;
+                for cid in state.mute_master.members.clone() {
                     set_channel_mute(state, cid, true);
                     notify_osc(state, OscOutbound::Mute(cid, true));
                 }
             } else {
-                for &cid in &muted {
+                // Suspend: every member unmutes and keeps the pause mark.
+                // Only the stored members are touched; a channel removed
+                // from the group stays out even if it was muted afterwards.
+                state.mute_master.suspended = true;
+                for cid in state.mute_master.members.clone() {
                     set_channel_mute(state, cid, false);
                     notify_osc(state, OscOutbound::Mute(cid, false));
                 }
-                state.last_cleared_mutes = muted;
             }
         }
         Message::GlobalSoloToggle => {
-            let soloed: Vec<ChannelId> =
-                all_channel_ids(state).into_iter().filter(|&cid| channel_is_soloed(state, cid)).collect();
-            if soloed.is_empty() {
-                for cid in std::mem::take(&mut state.last_cleared_solos) {
+            if state.control_room.pfl_replaces_solo && any_channel_soloed(state) {
+                // Measured in TotalMix: the PFL master cancels the active
+                // PFL and does not restore it on a second press.
+                let active: Vec<ChannelId> = all_channel_ids(state)
+                    .into_iter()
+                    .filter(|&cid| channel_is_soloed(state, cid))
+                    .collect();
+                for cid in active {
+                    set_channel_solo(state, cid, false);
+                    notify_osc(state, OscOutbound::Solo(cid, false));
+                }
+                state.solo_master = MasterSet::default();
+            } else if state.solo_master.suspended {
+                state.solo_master.suspended = false;
+                for cid in state.solo_master.members.clone() {
                     set_channel_solo(state, cid, true);
                     notify_osc(state, OscOutbound::Solo(cid, true));
                 }
             } else {
-                for &cid in &soloed {
+                // Only the stored members are suspended; a solo removed
+                // from the group stays out.
+                state.solo_master.suspended = true;
+                for cid in state.solo_master.members.clone() {
                     set_channel_solo(state, cid, false);
                     notify_osc(state, OscOutbound::Solo(cid, false));
                 }
-                state.last_cleared_solos = soloed;
             }
         }
         Message::Phantom(idx, p) => {            if let Err(e) = state.device.set_input_phantom(idx, p) {
@@ -8773,10 +8871,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::RmeSelect(cid, on) => {
             if on {
                 state.selected.insert(cid);
+                state.fader_ganged = true;
                 state.focus_channel = Some(cid);
                 state.select_anchor = Some(cid);
             } else {
                 state.selected.remove(&cid);
+                state.fader_ganged = !state.selected.is_empty();
                 if state.focus_channel == Some(cid) {
                     state.focus_channel = state.selected.iter().next().copied();
                 }
@@ -9357,12 +9457,13 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
             state.last_activity = Instant::now();
         }
         Message::NudgeVolume(delta_db) => {
-            let targets: Vec<ChannelId> = if !state.selected.is_empty() {
-                state.selected.iter().copied().collect()
-            } else if let Some(cid) = state.focus_channel {
-                vec![cid]
-            } else {
-                Vec::new()
+            let targets: Vec<ChannelId> = match state.focus_channel {
+                Some(cid) => {
+                    let mut targets = vec![cid];
+                    targets.extend(temporary_group_peers(state, cid));
+                    targets
+                }
+                None => Vec::new(),
             };
             for cid in targets {
                 let out = match cid {
@@ -9393,43 +9494,36 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         }
         Message::Reset(cid, out, default_vol) => {
             select_strip(state, cid);
-            if state.selected.len() > 1 && state.selected.contains(&cid) {
-                // Reset means "back to default" for the whole group, not a
-                // relative move — every selected fader snaps to the same
-                // absolute value, unlike a drag which preserves balance.
-                for sel in state.selected.clone() {
-                    set_channel_volume(state, sel, out, default_vol);
-                    notify_osc(state, OscOutbound::Volume(sel, out, default_vol));
-                }
-            } else {
-                set_channel_volume(state, cid, out, default_vol);
-                notify_osc(state, OscOutbound::Volume(cid, out, default_vol));
+            let peers = temporary_group_peers(state, cid);
+            // Reset means "back to default" for the whole ganged row, not a
+            // relative move — every member snaps to the same absolute value,
+            // unlike a drag which preserves balance.
+            for sel in std::iter::once(cid).chain(peers) {
+                let peer_out = match sel {
+                    ChannelId::Output(i) => i,
+                    _ => out,
+                };
+                set_channel_volume(state, sel, peer_out, default_vol);
+                notify_osc(state, OscOutbound::Volume(sel, peer_out, default_vol));
             }
             if state.drag_range.is_some_and(|(dc, _, _)| dc == cid) {
                 state.drag_range = None;
             }
         }
-        Message::PanChanged(cid, out, pan) => {            apply_grouped_pan(state, cid, out, pan);
+        // The global fader group gangs level only; pan stays per channel.
+        Message::PanChanged(cid, out, pan) => {
+            set_channel_pan(state, cid, out, pan);
+            notify_osc(state, OscOutbound::Pan(cid, out, pan));
         }
-        Message::PanReset(cid, out) => {            if state.selected.len() > 1 && state.selected.contains(&cid) {
-                for sel in state.selected.clone() {
-                    set_channel_pan(state, sel, out, 0);
-                    notify_osc(state, OscOutbound::Pan(sel, out, 0));
-                }
-            } else {
-                set_channel_pan(state, cid, out, 0);
-                notify_osc(state, OscOutbound::Pan(cid, out, 0));
-            }
+        Message::PanReset(cid, out) => {
+            set_channel_pan(state, cid, out, 0);
+            notify_osc(state, OscOutbound::Pan(cid, out, 0));
         }
         Message::ToggleCollapse(cid) => {
             select_strip(state, cid);
             let target = !state.collapsed.contains(&cid);
-            let group: Vec<ChannelId> =
-                if state.selected.len() > 1 && state.selected.contains(&cid) {
-                    state.selected.iter().copied().collect()
-                } else {
-                    vec![cid]
-                };
+            // Folding is per channel; the fader group gangs level only.
+            let group: Vec<ChannelId> = vec![cid];
             if target {
                 let now = Instant::now();
                 let open: Vec<_> = state
@@ -9542,23 +9636,33 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 );
                 return Task::none();
             }
-            state.focus_channel = Some(cid);
             if state.modifiers.shift() {
-                // Shift+click adds or removes this strip from the temporary
-                // fader group (the selection), RME's gesture. There is no
-                // range-select and no Ctrl+click: one additive gesture.
+                // Shift+click adds or removes this strip in the global
+                // fader group for its row and turns the group on, RME's
+                // gesture. There is no range-select and no Ctrl+click.
                 if !state.selected.remove(&cid) {
                     state.selected.insert(cid);
                 }
+                state.fader_ganged = !state.selected.is_empty();
                 state.select_anchor = Some(cid);
-            } else {
-                // Plain click: this strip becomes the selection.
-                select_strip(state, cid);
             }
+            // Both gestures focus the strip; a plain click leaves the
+            // stored fader group exactly as it was.
+            select_strip(state, cid);
         }
         Message::ClearSelection => {
-            state.selected.clear();
+            // Empty background clears the focused strip, not the stored
+            // fader group.
+            state.focus_channel = None;
             state.select_anchor = None;
+        }
+        Message::FaderGroupToggle => {
+            // `F` gangs or ungangs the stored group; an empty group has
+            // nothing to toggle and leaves the master off.
+            if !state.selected.is_empty() {
+                state.fader_ganged = !state.fader_ganged;
+            }
+            state.last_activity = Instant::now();
         }
         Message::StripHovered(h) => state.hovered_strip = h,
         Message::EditStart(cid, buf) => {
@@ -12982,7 +13086,7 @@ fn fader_group_mark(state: &TotalControl, cid: ChannelId) -> Option<Color> {
             }
         }
     }
-    if state.selected.len() > 1 && state.selected.contains(&cid) {
+    if temporary_group_contains(state, cid) {
         return Some(theme::group_temporary());
     }
     state
@@ -13121,7 +13225,7 @@ fn strip_params<'a>(
         collapsed: state.collapsed.contains(&cid),
         collapse_anim: state.collapse_anim.get(&cid).copied(),
         scale: state.ui_scale,
-        selected: state.selected.contains(&cid),
+        selected: state.focus_channel == Some(cid),
         hovered: state.hovered_strip == Some(cid),
         active_surface: false,
         name_custom: false,
@@ -17945,11 +18049,11 @@ mod tests {
         channel_trim, trim_factor, trim_meter_levels,
         apply_prefs, channel_is_muted, channel_is_soloed, choose_startup_kind,
         global_feedback, global_feedback_is_typed, global_messages, global_state_commands,
-        input_gain_knob_label, TotalControl,
+        input_gain_knob_label, temporary_group_exists, TotalControl,
         choose_startup_target,
         frames_ms, converter_frames, is_undoable, new, new_with_device,
         apply_startup_sync, apply_control_room_assignments, sync_control_room_runtime,
-        attach_device_service, prefs_of, mute_armed, power_sum_output_meters,
+        attach_device_service, prefs_of, mute_armed, solo_armed, power_sum_output_meters,
         apply_workspace, capture_workspace, save_workspace_to,
         reorder_pair_volumes, fx_reserve, fx_slot,
         uc_min_buffer_frames, uc_usb_frames, ucx_min_buffer_frames,
@@ -19035,17 +19139,20 @@ mod tests {
         let b = ChannelId::Input(4);
         state.selected.insert(a);
         state.selected.insert(b);
+        state.fader_ganged = true;
         let workspace = capture_workspace(&state);
 
         // Through the file format, not only the struct.
         let json = serde_json::to_string(&workspace).unwrap();
         let back: crate::workspaces::Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(back.temporary_group.len(), 2, "the set is serialized");
+        assert!(back.fader_ganged, "the ganged state is serialized");
 
         let mut other = new(true, None, None);
         apply_workspace(&mut other, &back, std::path::PathBuf::from("test.tcws")).unwrap();
         assert!(other.selected.contains(&a));
         assert!(other.selected.contains(&b));
+        assert!(other.fader_ganged);
     }
 
     #[test]
@@ -19246,11 +19353,21 @@ mod tests {
 
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!any_channel_muted(&state), "first press clears every mute");
+        assert!(state.mute_master.suspended);
+        assert!(state.mute_master.members.contains(&a));
+        assert!(mute_armed(&state, a), "members show the pause glyph");
 
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(channel_is_muted(&state, a));
         assert!(channel_is_muted(&state, b));
-        assert!(state.last_cleared_mutes.is_empty(), "the remembered set was used up");
+        assert!(!state.mute_master.suspended);
+        assert!(state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+        assert_eq!(
+            state.mute_master.members.len(),
+            4,
+            "the set persists, including the stereo partners"
+        );
     }
 
     #[test]
@@ -19491,7 +19608,7 @@ mod tests {
     }
 
     #[test]
-    fn channels_held_by_the_mute_master_show_as_armed() {
+    fn muting_while_the_master_is_off_mutes_and_joins_the_set() {
         let mut state = new(true, None, None);
         let a = ChannelId::Input(0);
         let other = ChannelId::Playback(0);
@@ -19500,17 +19617,23 @@ mod tests {
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(mute_armed(&state, a), "held off by the master");
         assert!(!mute_armed(&state, other), "never muted, never armed");
-        // A fresh mute makes the master's next press clear that one, so the
-        // old set is no longer shown as coming back.
+        // The group is automatic: a new mute mutes at once and joins, while
+        // the existing member stays held with the pause glyph.
         let _ = update(&mut state, Message::Mute(other, true));
-        assert!(!mute_armed(&state, a));
+        assert!(channel_is_muted(&state, other), "a new mute mutes at once");
+        assert!(state.mute_master.members.contains(&other));
+        assert!(!mute_armed(&state, other), "a muted member is not paused");
+        assert!(mute_armed(&state, a), "the held set survives a new member");
     }
 
     #[test]
-    fn global_mute_master_does_nothing_with_nothing_to_restore() {
+    fn global_mute_master_suspends_even_an_empty_set() {
         let mut state = new(true, None, None);
         let _ = update(&mut state, Message::GlobalMuteToggle);
         assert!(!any_channel_muted(&state), "it never mutes everything");
+        assert!(state.mute_master.suspended, "the master switches off");
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!state.mute_master.suspended, "a second press switches it on");
     }
 
     #[test]
@@ -19545,28 +19668,304 @@ mod tests {
     }
 
     #[test]
-    fn global_solo_toggle_soloing_a_new_channel_after_a_clear_replaces_the_restore_set() {
+    fn a_solo_while_the_master_is_off_solos_and_joins_the_set() {
         let mut state = new(true, None, None);
-        // Input(0) and Input(8) are each half of a hardware-linked pair
-        // by default (see `mock.rs::test_input_pair_linked_by_default`),
-        // so soloing either one mirrors onto its sibling too — accounted
-        // for below rather than fought.
         let a = ChannelId::Input(0);
         let c = ChannelId::Input(8);
         let _ = update(&mut state, Message::Solo(a, true));
         let _ = update(&mut state, Message::GlobalSoloToggle);
         assert!(!any_channel_soloed(&state));
+        assert!(state.solo_master.suspended);
 
-        // Solo a different channel manually before pressing the global
-        // toggle again — the toggle should clear *that* one (and its
-        // linked sibling), not try to restore the stale `a`/`Input(1)`
-        // pair from before.
+        // The group is automatic: a new solo solos at once and joins, while
+        // the existing member stays held with the pause glyph.
         let _ = update(&mut state, Message::Solo(c, true));
+        assert!(channel_is_soloed(&state, c), "a new solo solos at once");
+        assert!(state.solo_master.members.contains(&c));
+        assert!(!solo_armed(&state, c), "a soloed member is not paused");
+        assert!(solo_armed(&state, a), "the held set survives a new member");
+
+        // The next press applies the whole set.
         let _ = update(&mut state, Message::GlobalSoloToggle);
-        assert!(!any_channel_soloed(&state));
-        assert!(state.last_cleared_solos.contains(&c));
-        assert!(!state.last_cleared_solos.contains(&a));
-        assert!(!state.last_cleared_solos.contains(&ChannelId::Input(1)));
+        assert!(channel_is_soloed(&state, a));
+        assert!(channel_is_soloed(&state, c));
+        assert!(!state.solo_master.suspended);
+    }
+
+    #[test]
+    fn the_first_mute_and_solo_join_the_lit_master() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        assert!(!state.mute_master.suspended, "the mute master starts on");
+        assert!(!state.solo_master.suspended, "the solo master starts on");
+        assert!(state.mute_master.members.is_empty());
+        assert!(state.solo_master.members.is_empty());
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a), "a lit master mutes at once");
+        assert!(!state.mute_master.suspended);
+        assert!(state.mute_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::Solo(b, true));
+        assert!(channel_is_soloed(&state, b), "the solo master mirrors it");
+        assert!(!state.solo_master.suspended);
+        assert!(state.solo_master.members.contains(&b));
+    }
+
+    #[test]
+    fn a_linked_mute_pair_leaves_the_group_in_both_states() {
+        let mut state = new(true, None, None);
+        let left = ChannelId::Input(0);
+        let right = ChannelId::Input(1);
+
+        // Master on: clicking either half toggles and removes the pair.
+        let _ = update(&mut state, Message::Mute(left, true));
+        assert!(state.mute_master.members.contains(&left));
+        assert!(state.mute_master.members.contains(&right), "the pair rides along");
+        let _ = update(&mut state, Message::Mute(right, false));
+        assert!(!state.mute_master.members.contains(&left));
+        assert!(!state.mute_master.members.contains(&right));
+        assert!(!channel_is_muted(&state, left));
+
+        // Master off: the pair is held, then a click switches it on and
+        // removes it. A later off press must not collect it again.
+        let _ = update(&mut state, Message::Mute(left, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(mute_armed(&state, right), "the pair is held together");
+        let _ = update(&mut state, Message::Mute(left, true));
+        assert!(!state.mute_master.members.contains(&left));
+        assert!(!state.mute_master.members.contains(&right));
+        assert!(channel_is_muted(&state, right));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(state.mute_master.members.is_empty(), "removed stays removed");
+    }
+
+    #[test]
+    fn a_linked_solo_pair_leaves_the_group_in_both_states() {
+        let mut state = new(true, None, None);
+        let left = ChannelId::Input(0);
+        let right = ChannelId::Input(1);
+
+        let _ = update(&mut state, Message::Solo(left, true));
+        assert!(state.solo_master.members.contains(&left));
+        assert!(state.solo_master.members.contains(&right), "the pair rides along");
+        let _ = update(&mut state, Message::Solo(right, false));
+        assert!(!state.solo_master.members.contains(&left));
+        assert!(!state.solo_master.members.contains(&right));
+        assert!(!channel_is_soloed(&state, left));
+
+        let _ = update(&mut state, Message::Solo(left, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(solo_armed(&state, right), "the pair is held together");
+        let _ = update(&mut state, Message::Solo(left, true));
+        assert!(!state.solo_master.members.contains(&left));
+        assert!(!state.solo_master.members.contains(&right));
+        assert!(channel_is_soloed(&state, right));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(state.solo_master.members.is_empty(), "removed stays removed");
+    }
+
+    #[test]
+    fn a_held_mute_member_click_toggles_it_and_leaves_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::Mute(b, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(mute_armed(&state, a));
+
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a), "the member switches on");
+        assert!(
+            !state.mute_master.members.contains(&a),
+            "and leaves the set"
+        );
+        assert!(mute_armed(&state, b), "the rest of the set is untouched");
+    }
+
+    #[test]
+    fn a_held_solo_member_click_toggles_it_and_leaves_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Solo(a, true));
+        let _ = update(&mut state, Message::Solo(b, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(solo_armed(&state, a));
+
+        let _ = update(&mut state, Message::Solo(a, true));
+        assert!(channel_is_soloed(&state, a), "the member switches on");
+        assert!(
+            !state.solo_master.members.contains(&a),
+            "and leaves the set"
+        );
+        assert!(solo_armed(&state, b), "the rest of the set is untouched");
+    }
+
+    #[test]
+    fn switching_a_soloed_member_off_removes_it_from_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        // Mono, so the partner does not solo the pair again.
+        let _ = update(&mut state, Message::StereoLinkChanged(a, false));
+        let _ = update(&mut state, Message::StereoLinkChanged(b, false));
+        let _ = update(&mut state, Message::Solo(a, true));
+        let _ = update(&mut state, Message::Solo(b, true));
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(channel_is_soloed(&state, a));
+
+        let _ = update(&mut state, Message::Solo(a, false));
+        assert!(!state.solo_master.members.contains(&a));
+        assert!(state.solo_master.members.contains(&b));
+
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        let _ = update(&mut state, Message::GlobalSoloToggle);
+        assert!(!channel_is_soloed(&state, a));
+        assert!(channel_is_soloed(&state, b));
+    }
+
+    #[test]
+    fn switching_a_held_mute_off_removes_it_from_the_set() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        let _ = update(&mut state, Message::Mute(a, true));
+        let _ = update(&mut state, Message::Mute(b, true));
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(channel_is_muted(&state, a));
+
+        let _ = update(&mut state, Message::Mute(a, false));
+        assert!(!state.mute_master.members.contains(&a));
+
+        let _ = update(&mut state, Message::GlobalMuteToggle);
+        assert!(!state.mute_master.members.contains(&a));
+        assert!(state.mute_master.members.contains(&b));
+    }
+
+    #[test]
+    fn the_temporary_group_gangs_within_a_row_only() {
+        let mut state = new(true, None, None);
+        let input = ChannelId::Input(0);
+        let other_input = ChannelId::Input(4);
+        let output = ChannelId::Output(0);
+        state.selected.insert(input);
+        state.selected.insert(other_input);
+        state.selected.insert(output);
+        state.fader_ganged = true;
+        let output_before = state.device.outputs()[0].volume;
+
+        let _ = update(&mut state, Message::VolumeChanged(input, 0, 0.5));
+        assert!(
+            (state.device.inputs()[4].volumes[0] - 0.5).abs() < 1e-4,
+            "the other input fader follows"
+        );
+        assert_eq!(
+            output_before,
+            state.device.outputs()[0].volume,
+            "an output selected alongside is its own group"
+        );
+    }
+
+    #[test]
+    fn the_fader_master_gangs_one_member_and_ignores_an_empty_group() {
+        let mut state = new(true, None, None);
+        state.selected.insert(ChannelId::Input(0));
+        assert!(temporary_group_exists(&state), "one Shift+click makes a member");
+        assert!(!state.fader_ganged, "a stored group starts off");
+
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(state.fader_ganged, "F gangs the stored group");
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(!state.fader_ganged, "a second press ungangs it");
+
+        state.selected.clear();
+        let _ = update(&mut state, Message::FaderGroupToggle);
+        assert!(!state.fader_ganged, "an empty group has nothing to gang");
+    }
+
+    #[test]
+    fn a_plain_click_leaves_the_shift_clicked_group_alone() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+        let _ = update(&mut state, Message::StripClicked(a));
+        state.modifiers = iced::keyboard::Modifiers::default();
+        let _ = update(&mut state, Message::StripClicked(b));
+
+        assert!(state.selected.contains(&a), "the group member stays");
+        assert!(!state.selected.contains(&b), "the plain click does not join");
+        assert_eq!(state.focus_channel, Some(b), "the plain click moves the focus");
+        assert!(state.fader_ganged, "a Shift+click turns the group on");
+    }
+
+    #[test]
+    fn the_fader_master_gangs_level_but_not_pan() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        state.fader_ganged = true;
+        let pan_before = super::channel_pan(&state, b, 0);
+
+        let _ = update(&mut state, Message::PanChanged(a, 0, 60));
+        assert_eq!(super::channel_pan(&state, b, 0), pan_before, "pan stays per channel");
+
+        // A fader move propagates the same relative amount: halving a's
+        // level halves b's, whatever their absolute starting points.
+        let a_shown = state.device.inputs()[0].volumes[0]
+            * trim_factor(channel_trim(&state, a));
+        let b_before = state.device.inputs()[4].volumes[0];
+        let _ = update(&mut state, Message::VolumeChanged(a, 0, a_shown * 0.5));
+        let b_after = state.device.inputs()[4].volumes[0];
+        assert!(
+            (b_after - b_before * 0.5).abs() < 1e-3,
+            "level follows the group: b {b_before} -> {b_after}"
+        );
+    }
+
+    #[test]
+    fn an_unganged_group_does_not_move_its_members() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        state.fader_ganged = false;
+        let b_before = state.device.inputs()[4].volumes[0];
+
+        let _ = update(&mut state, Message::VolumeChanged(a, 0, 0.4));
+        assert_eq!(
+            state.device.inputs()[4].volumes[0], b_before,
+            "F off leaves the other fader alone"
+        );
+    }
+
+    #[test]
+    fn the_temporary_fader_group_does_not_propagate_mute_or_solo() {
+        let mut state = new(true, None, None);
+        let a = ChannelId::Input(0);
+        let b = ChannelId::Input(4);
+        state.selected.insert(a);
+        state.selected.insert(b);
+        let _ = update(&mut state, Message::Mute(a, true));
+        assert!(channel_is_muted(&state, a));
+        assert!(
+            !channel_is_muted(&state, b),
+            "the temporary group gangs faders only"
+        );
     }
 
     #[test]
@@ -20512,8 +20911,8 @@ mod tests {
         let out = state.device.outputs().len() - 1;
         let cid = ChannelId::Output(out);
         let _ = update(&mut state, Message::StripClicked(cid));
-        assert!(state.selected.contains(&cid));
         assert_eq!(state.focus_channel, Some(cid));
+        assert!(state.selected.is_empty(), "a plain click does not join the group");
         assert_eq!(
             state.sel_out,
             if state.device.outputs_one_per_pair() { out } else { out / 2 }
@@ -20528,7 +20927,7 @@ mod tests {
         let cid = ChannelId::Output(out);
         let _ = update(&mut state, Message::ToggleFlyout(cid, strip::FlyoutKind::Settings));
         assert_eq!(state.focus_channel, Some(cid));
-        assert!(state.selected.contains(&cid));
+        assert!(state.selected.is_empty(), "a control click does not join the group");
         assert_eq!(
             state.sel_out,
             if state.device.outputs_one_per_pair() { out } else { out / 2 }
@@ -20541,7 +20940,7 @@ mod tests {
         state.sel_out = 2;
         let cid = ChannelId::Input(1);
         let _ = update(&mut state, Message::Mute(cid, true));
-        assert!(state.selected.contains(&cid));
+        assert_eq!(state.focus_channel, Some(cid));
         assert_eq!(state.sel_out, 2);
     }
 
@@ -21256,16 +21655,14 @@ mod tests {
         let _ = update(&mut state, Message::StripClicked(left));
         assert_eq!(state.sel_out, 1);
         assert_eq!(state.sel_out_side, 0);
-        assert!(state.selected.contains(&left));
-        assert!(!state.selected.contains(&right));
+        assert_eq!(state.focus_channel, Some(left));
         assert!(strip_params(&state, left, state.sel_out).active_surface);
         assert!(!strip_params(&state, right, state.sel_out).active_surface);
 
         let _ = update(&mut state, Message::StripClicked(right));
         assert_eq!(state.sel_out, 1);
         assert_eq!(state.sel_out_side, 1);
-        assert!(state.selected.contains(&right));
-        assert!(!state.selected.contains(&left));
+        assert_eq!(state.focus_channel, Some(right));
         assert!(!strip_params(&state, left, state.sel_out).active_surface);
         assert!(strip_params(&state, right, state.sel_out).active_surface);
     }
