@@ -44,6 +44,7 @@ struct Scene {
     period: Option<Duration>,
     animate: bool,
     bank: bool,
+    cached: bool,
 }
 
 fn rect(r: Rect, origin: Point) -> Rectangle {
@@ -77,6 +78,11 @@ fn label(frame: &mut Frame, r: Rectangle, s: &str, size: f32, color: Color, cent
 }
 
 fn draw_strip(frame: &mut Frame, layout: &StripLayout, origin: Point, phase: f32, c: &ColorScheme) {
+    draw_static(frame, layout, origin, c);
+    draw_dynamic(frame, layout, origin, phase, c);
+}
+
+fn draw_static(frame: &mut Frame, layout: &StripLayout, origin: Point, c: &ColorScheme) {
     let scale = layout.scale;
     let card = rect(layout.card, origin);
     frame.fill(
@@ -136,6 +142,56 @@ fn draw_strip(frame: &mut Frame, layout: &StripLayout, origin: Point, phase: f32
             label(frame, r, text, VISUAL.readout_size * scale, colour(&c.text.secondary), false);
         }
     }
+
+    if let Some(r) = at(ElementPlacement::Level) {
+        label(frame, r, "0.0", VISUAL.readout_size * scale, colour(&c.text.primary), true);
+    }
+    if let Some(face) = layout.face(ElementPlacement::Minimize) {
+        let face = rect(face, origin);
+        frame.fill(
+            &Path::rounded_rectangle(face.position(), face.size(), (3.0 * scale).into()),
+            colour(&c.control.button_face),
+        );
+        label(frame, face, "−", 8.0 * scale, colour(&c.text.secondary), true);
+    }
+    if let Some(bar) = at(ElementPlacement::Submix) {
+        frame.fill(
+            &Path::rounded_rectangle(bar.position(), bar.size(), (4.0 * scale).into()),
+            colour(&c.control.button_face),
+        );
+        label(frame, bar, "Phones 7/8", VISUAL.readout_size * scale, colour(&c.text.secondary), true);
+    }
+
+    // Right-hand stack: glyphs only; the faces are not drawn at rest.
+    for (index, panel) in [Panel::Trim, Panel::Settings, Panel::Eq, Panel::Dynamics]
+        .into_iter()
+        .enumerate()
+    {
+        if layout
+            .rect(ElementPlacement::Stack(panel))
+            .is_none()
+        {
+            continue;
+        }
+        let (glyph, _) = layout.stack_tabs[index];
+        let glyph = rect(glyph, origin);
+        let text = match panel {
+            Panel::Trim => "T",
+            Panel::Settings => "⚙",
+            Panel::Eq => "EQ",
+            Panel::Dynamics => "D",
+        };
+        let size = match panel {
+            Panel::Settings => VISUAL.gear_glyph_size,
+            _ => VISUAL.tab_glyph_size,
+        };
+        label(frame, glyph, text, size * scale, colour(&c.text.secondary), true);
+    }
+}
+
+fn draw_dynamic(frame: &mut Frame, layout: &StripLayout, origin: Point, phase: f32, c: &ColorScheme) {
+    let scale = layout.scale;
+    let at = |placement| layout.rect(placement).map(|r| rect(r, origin));
 
     // Meter: two wells, two bars, animated by the phase.
     if let Some(vu) = at(ElementPlacement::Meter) {
@@ -197,58 +253,14 @@ fn draw_strip(frame: &mut Frame, layout: &StripLayout, origin: Point, phase: f32
         );
     }
 
-    // Right-hand stack: glyphs only; the faces are not drawn at rest.
-    for (index, panel) in [Panel::Trim, Panel::Settings, Panel::Eq, Panel::Dynamics]
-        .into_iter()
-        .enumerate()
-    {
-        if layout
-            .rect(ElementPlacement::Stack(panel))
-            .is_none()
-        {
-            continue;
-        }
-        let (glyph, _) = layout.stack_tabs[index];
-        let glyph = rect(glyph, origin);
-        let text = match panel {
-            Panel::Trim => "T",
-            Panel::Settings => "⚙",
-            Panel::Eq => "EQ",
-            Panel::Dynamics => "D",
-        };
-        let size = match panel {
-            Panel::Settings => VISUAL.gear_glyph_size,
-            _ => VISUAL.tab_glyph_size,
-        };
-        label(frame, glyph, text, size * scale, colour(&c.text.secondary), true);
-    }
-
-    if let Some(r) = at(ElementPlacement::Level) {
-        label(frame, r, "0.0", VISUAL.readout_size * scale, colour(&c.text.primary), true);
-    }
-    if let Some(face) = layout.face(ElementPlacement::Minimize) {
-        let face = rect(face, origin);
-        frame.fill(
-            &Path::rounded_rectangle(face.position(), face.size(), (3.0 * scale).into()),
-            colour(&c.control.button_face),
-        );
-        label(frame, face, "−", 8.0 * scale, colour(&c.text.secondary), true);
-    }
-    if let Some(bar) = at(ElementPlacement::Submix) {
-        frame.fill(
-            &Path::rounded_rectangle(bar.position(), bar.size(), (4.0 * scale).into()),
-            colour(&c.control.button_face),
-        );
-        label(frame, bar, "Phones 7/8", VISUAL.readout_size * scale, colour(&c.text.secondary), true);
-    }
 }
 
 impl canvas::Program<()> for Scene {
-    type State = f32;
+    type State = (f32, canvas::Cache);
 
     fn update(
         &self,
-        state: &mut f32,
+        state: &mut (f32, canvas::Cache),
         event: &canvas::Event,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
@@ -258,7 +270,7 @@ impl canvas::Program<()> for Scene {
             if !self.animate {
                 return None;
             }
-            *state += 0.15;
+            state.0 += 0.15;
             self.period
                 .map(|period| canvas::Action::request_redraw_at(Instant::now() + period))
         } else {
@@ -268,19 +280,35 @@ impl canvas::Program<()> for Scene {
 
     fn draw(
         &self,
-        phase: &f32,
+        (phase, cache): &(f32, canvas::Cache),
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
         let scheme = ColorScheme::default();
+        if !self.cached {
+            let mut frame = Frame::new(renderer, bounds.size());
+            for (index, layout) in self.layouts.iter().enumerate() {
+                let origin = Point::new(index as f32 * (layout.card.width + STRIP_GAP), 0.0);
+                draw_strip(&mut frame, layout, origin, *phase + index as f32 * 0.3, &scheme);
+            }
+            return vec![frame.into_geometry()];
+        }
+        // Static layer: card, text, controls.  Built once and reused until
+        // the scene changes, so a frame only rebuilds the moving parts.
+        let static_layer = cache.draw(renderer, bounds.size(), |frame| {
+            for (index, layout) in self.layouts.iter().enumerate() {
+                let origin = Point::new(index as f32 * (layout.card.width + STRIP_GAP), 0.0);
+                draw_static(frame, layout, origin, &scheme);
+            }
+        });
+        let mut frame = Frame::new(renderer, bounds.size());
         for (index, layout) in self.layouts.iter().enumerate() {
             let origin = Point::new(index as f32 * (layout.card.width + STRIP_GAP), 0.0);
-            draw_strip(&mut frame, layout, origin, *phase + index as f32 * 0.3, &scheme);
+            draw_dynamic(&mut frame, layout, origin, *phase + index as f32 * 0.3, &scheme);
         }
-        vec![frame.into_geometry()]
+        vec![static_layer, frame.into_geometry()]
     }
 }
 
@@ -297,6 +325,7 @@ fn view(state: &Scene) -> Element<'_, ()> {
             period: state.period,
             animate: state.animate,
             bank: true,
+            cached: state.cached,
         })
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
@@ -310,6 +339,7 @@ fn view(state: &Scene) -> Element<'_, ()> {
                     period: state.period,
                     animate: state.animate,
                     bank: false,
+                    cached: state.cached,
                 })
                 .width(Length::Fixed(layout.card.width))
                 .height(Length::Fixed(layout.card.height)),
@@ -346,6 +376,7 @@ fn main() -> iced::Result {
             period,
             animate,
             bank,
+            cached: env("PROBE_CACHE", 1.0) != 0.0,
         },
         update,
         view,
