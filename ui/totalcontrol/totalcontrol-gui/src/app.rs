@@ -13254,9 +13254,12 @@ fn strip_params<'a>(
             // Device block pair 0 is Phones 7/8, wherever the display
             // order puts it.  The unit's physical encoder writes the IF1
             // 0x1800/0x1900 hardware volume, which the driver exposes
-            // separately from the DSP master.  Show that value on the
-            // Phones strip so the slider follows the unit.
-            let hw = if i / 2 == 0 {
+            // separately from the DSP master.  While the pair is linked
+            // both strips show that pair level; a split pair shows each
+            // channel's own volume, which is what its own state word
+            // updates — otherwise the right channel's knob movement was
+            // invisible because both strips read the left channel.
+            let hw = if i / 2 == 0 && linked {
                 state.device.hardware_volume()
             } else {
                 None
@@ -20389,6 +20392,22 @@ mod tests {
         let _ = update(&mut state, Message::Mute(cid, true));
         assert!(state.selected.contains(&cid));
         assert_eq!(state.sel_out, 2);
+    }
+
+    #[test]
+    fn a_split_phones_pair_shows_each_channels_own_volume() {
+        // The front encoder writes one state word per output channel.  While
+        // the pair is linked both strips show the pair level; split, each
+        // strip must show its own channel, or a moved mono channel reads as
+        // "nothing changed" because both strips followed the left one.
+        let mut state = new(true, None, None);
+        state.device.set_output_linked(0, false).unwrap();
+        state.device.set_output_volume(0, 0, 0.5).unwrap();
+        state.device.set_output_volume(0, 1, 0.25).unwrap();
+        let left = strip_params(&state, ChannelId::Output(0), 0).vol;
+        let right = strip_params(&state, ChannelId::Output(1), 0).vol;
+        assert!((left - 0.5).abs() < 1e-6, "left strip shows {left}");
+        assert!((right - 0.25).abs() < 1e-6, "right strip shows {right}");
     }
 
     #[test]

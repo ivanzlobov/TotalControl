@@ -3157,6 +3157,9 @@ impl Fireface {
         }
         if let Some(idx) = ucx::output_index_from_state(addr) {
             let volume = ucx::tenths_to_linear(value);
+            log::debug!(
+                "UCX state {addr:#06x} = {value:#06x}: output {idx} volume {volume:.4}"
+            );
             if let Some(output) = self.outputs.get_mut(idx) {
                 output.volume = volume;
             }
@@ -3186,7 +3189,7 @@ impl Fireface {
             ucx::global::MONITOR_FLAGS => {
                 self.settings.mono = value & 0x02 != 0;
             }
-            _ => {}
+            _ => log::debug!("UCX state {addr:#06x} = {value:#06x}: no handler"),
         }
     }
 
