@@ -248,7 +248,9 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     return None;
                 }
                 let display = state.display.get_or_insert_with(|| MeterFrame::still(self.value));
-                if (display.value - self.value).abs() > f32::EPSILON {
+                if (self.value_to_t(display.value) - self.value_to_t(self.value)).abs()
+                    > crate::widgets::fader::PAINT_EPSILON
+                {
                     *display = MeterFrame {
                         prev: display.at(*now),
                         value: self.value,
@@ -258,7 +260,11 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     };
                 }
                 if display.is_settling(*now) {
-                    Some(canvas::Action::request_redraw())
+                    Some(canvas::Action::request_redraw_at(
+                        *now + std::time::Duration::from_millis(
+                            crate::widgets::fader::METER_FRAME_MS,
+                        ),
+                    ))
                 } else {
                     None
                 }

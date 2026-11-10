@@ -45,11 +45,30 @@ const INTERPOLATE_METERS: bool = true;
 /// a signal is live.
 const METER_INTERP_MS: f32 = 120.0;
 
-/// How often a bus-driven meter schedules its next canvas frame.  30 fps
-/// reads as continuous motion for a VU and halves the window redraws a
-/// display-rate loop would cost; the bus itself is still updated at the
-/// device rate, so a frame always shows a current value.
-const METER_FRAME_MS: u64 = 33;
+/// How often a moving bus-driven meter schedules its next canvas frame.
+/// Every frame is a whole-window present: the wgpu backend has no damage
+/// tracking, so the compositor recomposites the whole screen for each one.
+/// 20 fps still reads as continuous motion for a VU, and the bus itself is
+/// updated at the device rate, so a frame always shows a current value.
+pub(crate) const METER_FRAME_MS: u64 = 50;
+
+/// While the service reports a live signal but the drawn level did not move
+/// far enough to change a pixel (a steady tone, a held note), the canvas
+/// only re-reads the shared snapshot this often instead of asking for
+/// another 20 fps frame.
+const METER_STILL_POLL_MS: u64 = 100;
+
+/// A level or cap change smaller than this fraction of the drawn travel is
+/// invisible: compare in `vol_to_t` space, the mapping both the meter bar
+/// and the fader cap use.  0.001 of a 400 px travel is well under a pixel.
+pub(crate) const PAINT_EPSILON: f32 = 0.001;
+
+/// Whether a value moved far enough along the tapered travel to change a
+/// pixel.  Without this, a decaying peak re-armed the meter's next frame
+/// (and so a whole-window present) on every tick.
+fn paint_moved(before: f32, after: f32) -> bool {
+    (vol_to_t(before) - vol_to_t(after)).abs() > PAINT_EPSILON
+}
 
 /// Which channel a fader's meter reads from the device-service bus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,6 +682,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
             // (see `MeterFrame`).
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
                 let mut bus_live = false;
+                let mut bus_moving = false;
                 if let Some((bus, slot)) = &self.bus {
                     let snapshot = *bus.lock().unwrap();
                     // The service stops writing visible movement once every
@@ -683,24 +703,34 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                         left: MeterFrame::still(left),
                         right: right.map(|(v, _)| MeterFrame::still(v)),
                     });
+                    let before = entry.left;
                     entry.left =
                         advance_bus(entry.left, left, left_peak, snapshot.connected, *now);
+                    bus_moving = paint_moved(before.value, entry.left.value)
+                        || paint_moved(before.peak, entry.left.peak);
                     if let Some((value, peak)) = right {
                         match &mut entry.right {
                             Some(frame) => {
+                                let before = *frame;
                                 *frame = advance_bus(
                                     *frame,
                                     value,
                                     peak,
                                     snapshot.connected,
                                     *now,
-                                )
+                                );
+                                bus_moving |= paint_moved(before.value, frame.value)
+                                    || paint_moved(before.peak, frame.peak);
                             }
                             None => entry.right = Some(MeterFrame::still(value)),
                         }
                     } else {
                         entry.right = None;
                     }
+                    bus_moving |= entry
+                        .right
+                        .is_some_and(|right| right.is_settling(*now))
+                        || entry.left.is_settling(*now);
                 }
                 // With a bus the display comes from the shared snapshot;
                 // the view-fed meter (and its interpolation) is only the
@@ -714,7 +744,7 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                     let display = state
                         .display
                         .get_or_insert_with(|| MeterFrame::still(self.value));
-                    if (display.value - self.value).abs() > f32::EPSILON {
+                    if paint_moved(display.value, self.value) {
                         *display = MeterFrame {
                             prev: display.at(*now),
                             value: self.value,
@@ -727,11 +757,18 @@ impl<Message> canvas::Program<Message> for Fader<Message> {
                 }
 
                 if bus_live {
+                    let ms = if bus_moving {
+                        METER_FRAME_MS
+                    } else {
+                        METER_STILL_POLL_MS
+                    };
+                    Some(canvas::Action::request_redraw_at(
+                        *now + Duration::from_millis(ms),
+                    ))
+                } else if still_animating {
                     Some(canvas::Action::request_redraw_at(
                         *now + Duration::from_millis(METER_FRAME_MS),
                     ))
-                } else if still_animating {
-                    Some(canvas::Action::request_redraw())
                 } else {
                     None
                 }
@@ -1474,16 +1511,27 @@ impl<Message> canvas::Program<Message> for VuMeter {
                         left: MeterFrame::still(left),
                         right: None,
                     });
+                    let before = entry.left;
                     entry.left =
                         advance_bus(entry.left, left, peak, snapshot.connected, *now);
+                    let moving = paint_moved(before.value, entry.left.value)
+                        || paint_moved(before.peak, entry.left.peak)
+                        || entry.left.is_settling(*now);
                     return active.then(|| {
+                        let ms = if moving {
+                            METER_FRAME_MS
+                        } else {
+                            METER_STILL_POLL_MS
+                        };
                         canvas::Action::request_redraw_at(
-                            *now + Duration::from_millis(METER_FRAME_MS),
+                            *now + Duration::from_millis(ms),
                         )
                     });
                 }
                 (INTERPOLATE_METERS && self.level.is_settling(*now))
-                    .then_some(canvas::Action::request_redraw())
+                    .then_some(canvas::Action::request_redraw_at(
+                        *now + Duration::from_millis(METER_FRAME_MS),
+                    ))
             }
             _ => None,
         }
@@ -1667,6 +1715,22 @@ pub fn fx_meter<'a, Message: 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_moved_ignores_changes_the_eye_cannot_see() {
+        // A held peak or a steady tone moves by a small fraction of a dB
+        // per frame.  Such a change must not schedule another whole-window
+        // present, or a static meter keeps the compositor busy forever.
+        let level = 10f32.powf(-40.0 / 20.0);
+        let tiny = 10f32.powf(-40.01 / 20.0);
+        assert!(
+            !paint_moved(level, tiny),
+            "0.01 dB at -40 dBFS cannot move the bar a pixel"
+        );
+        assert!(paint_moved(level, f32::EPSILON), "silence must move it");
+        let loud = 10f32.powf(-30.0 / 20.0);
+        assert!(paint_moved(level, loud), "10 dB must move the bar");
+    }
 
     #[test]
     fn meter_fill_curve_is_tapered_not_linear() {

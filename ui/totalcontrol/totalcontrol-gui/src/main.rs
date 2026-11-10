@@ -250,6 +250,13 @@ fn main() -> iced::Result {
         app::view,
     )
     .title(app::title)
+    // iced defaults to `Settings::antialiasing`, which selects MSAAx4 for
+    // every canvas layer: the layer renders into a 4x multisampled surface
+    // and resolves it again. This app draws the mixer with canvases, so that
+    // multiplied the fill cost of every frame by ~5 on the integrated GPU and
+    // starved the compositor. The canvas shapes are tessellated already; the
+    // remaining edge softening is not worth a stuttering desktop.
+    .antialiasing(false)
     .subscription(app::subscription)
     .theme(|_state: &app::TotalControl, _id: window::Id| iced::Theme::Dark)
     .font(INTER_REGULAR)
