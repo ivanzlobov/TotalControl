@@ -56,6 +56,9 @@ pub struct MockBabyfacePro {
     /// `TOTALCONTROL_MOCK_DISCONNECT` so the disconnected chip can be looked at
     /// without unplugging anything, and flippable at runtime for tests.
     connected: bool,
+    /// Per-cell gains written through `set_matrix_cell`, for the split-output
+    /// matrix model. The pair volumes remain the defaults.
+    matrix_overrides: std::collections::HashMap<(ChannelId, usize), f32>,
 }
 
 /// The UCX's own capability set, taken from the model spec the real
@@ -259,6 +262,7 @@ impl MockBabyfacePro {
             // disconnected chip is screenshotted without unplugging
             // anything.
             connected: std::env::var_os("TOTALCONTROL_MOCK_DISCONNECT").is_none(),
+            matrix_overrides: std::collections::HashMap::new(),
         })
     }
     /// Point this mock at the class-compliant personality's feature set, or
@@ -458,6 +462,12 @@ impl RmeDevice for MockBabyfacePro {
 
     fn set_volume(&mut self, channel: ChannelId, output: usize, volume: f32) -> Result<(), Error> {
         let vol = volume.clamp(0.0, 2.0);
+        // A pair-level write replaces the custom mono cells for this source
+        // and output pair, exactly as the UCX model does.
+        self.matrix_overrides
+            .retain(|&(cell_channel, block), _| {
+                !(cell_channel == channel && block / 2 == output)
+            });
         match channel {
             ChannelId::Input(idx) => {
                 let ch = self
@@ -508,6 +518,47 @@ impl RmeDevice for MockBabyfacePro {
                 .map(|c| c.volume)
                 .ok_or_else(|| Error::InvalidChannel(format!("Output {}", idx))),
         }
+    }
+
+    fn matrix_cell(&self, channel: ChannelId, block: usize) -> Option<f32> {
+        if let Some(gain) = self.matrix_overrides.get(&(channel, block)) {
+            return Some(*gain);
+        }
+        let pair = block / 2;
+        let side = block % 2;
+        match channel {
+            ChannelId::Input(idx) => {
+                let volume = *self.inputs.get(idx)?.volumes.get(pair)?;
+                if self.input_pair_linked(idx / 2) {
+                    Some(if side == idx % 2 { volume } else { 0.0 })
+                } else {
+                    Some(volume)
+                }
+            }
+            ChannelId::Playback(idx) => {
+                let volume = *self.playbacks.get(idx)?.volumes.get(pair)?;
+                if self.playback_linked(idx / 2) {
+                    Some(if side == idx % 2 { volume } else { 0.0 })
+                } else {
+                    Some(volume)
+                }
+            }
+            ChannelId::Output(_) => None,
+        }
+    }
+
+    fn set_matrix_cell(
+        &mut self,
+        channel: ChannelId,
+        block: usize,
+        gain: f32,
+    ) -> Result<(), Error> {
+        if block >= self.outputs.len() {
+            return Err(Error::InvalidChannel(format!("output block {block}")));
+        }
+        self.matrix_overrides
+            .insert((channel, block), gain.clamp(0.0, 2.0));
+        Ok(())
     }
 
     fn set_pan(&mut self, channel: ChannelId, output: usize, pan: i8) -> Result<(), Error> {

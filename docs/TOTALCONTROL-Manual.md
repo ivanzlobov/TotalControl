@@ -500,6 +500,12 @@ Splitting a pair sets the two channels hard left and right for panning into
 a submix and gives each channel its own fader. Re-linking restores the pair
 level and balance you had before the split.
 
+When the current submix is one channel of a split output pair, a linked
+pair's balance still works, but per mono output. The two mono outputs default
+to hard left and hard right, so each carries its own side of the source. Turn
+the balance towards the centre on one of them to send both sides there; the
+other mono output keeps its own setting.
+
 Output pairs behave the same way: the balance knob exists only while
 linked, and splitting converts the pair level and balance into two
 independent channel volumes. A pair assigned to the Control Room is always

@@ -1142,6 +1142,13 @@ submix; the knob writes the source's matrix cells for that submix. On a
 linked pair the same knob is a balance derived from the two channel volumes,
 and writing it changes the quieter channel's volume instead of a pan.
 
+When the selected submix is one channel of a split output pair, a linked
+pair's balance works on that one mono block. Its two source cells default to
+hard left and hard right; the knob reads their peak as the pair level and
+their ratio as the balance, and writes both cells into that block. Each mono
+output has its own balance and the other block is not written. A mono source
+has one cell and no balance into a mono target.
+
 ### 8.1 Signal model and submixes
 
 Each hardware output is a bus. The selected output is the current submix;
