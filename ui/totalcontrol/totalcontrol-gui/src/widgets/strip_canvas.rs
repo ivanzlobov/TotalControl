@@ -88,6 +88,8 @@ struct CanvasState {
     controls_cache: Cache,
     static_key: std::cell::Cell<u64>,
     controls_key: std::cell::Cell<u64>,
+    /// The meter values the last frame drew, for the change gate.
+    last_meter: Option<(f32, f32, f32, f32)>,
 }
 
 impl Default for CanvasState {
@@ -99,6 +101,7 @@ impl Default for CanvasState {
             controls_cache: Cache::new(),
             static_key: std::cell::Cell::new(u64::MAX),
             controls_key: std::cell::Cell::new(u64::MAX),
+            last_meter: None,
         }
     }
 }
@@ -366,24 +369,43 @@ fn draw_controls(
     }
 }
 
-/// Read the live levels: the shared bus when the device service owns
-/// metering, the view-fed frame otherwise.
-fn levels(p: &StripParams<'_>) -> (f32, Option<f32>) {
+/// Read the live levels and held peaks: the shared bus when the device
+/// service owns metering, the view-fed frame otherwise.
+fn meter_values(p: &StripParams<'_>) -> (f32, f32, f32, f32) {
     if let (Some(bus), Some(slot)) = (&p.meter_bus, p.meter_slot) {
         if let Ok(snapshot) = bus.lock() {
-            let (level, _peak, right) = bus_levels(&snapshot, slot, p.stereo_linked);
-            return (level, right.map(|(right, _peak)| right));
+            let (level, peak, right) = bus_levels(&snapshot, slot, p.stereo_linked);
+            let (right_level, right_peak) = right.unwrap_or((level, peak));
+            return (level, right_level, peak, right_peak);
         }
     }
-    (p.meter.value, p.meter2.map(|m| m.value))
+    (
+        p.meter.value,
+        p.meter2.map_or(p.meter.value, |m| m.value),
+        p.meter.peak,
+        p.meter2.map_or(p.meter.peak, |m| m.peak),
+    )
+}
+
+/// Whether the next frame would draw something different, at the pixel
+/// granularity of the bars and peak lines.  A level that is merely
+/// non-zero — converter or analog noise on a channel with gain — does not
+/// keep the loop alive; only a visible change does.
+fn meter_changed(prev: (f32, f32, f32, f32), current: (f32, f32, f32, f32), height: f32) -> bool {
+    let step = 1.0 / height.max(1.0);
+    let moved = |a: f32, b: f32| (a - b).abs() > step;
+    moved(prev.0, current.0)
+        || moved(prev.1, current.1)
+        || moved(prev.2, current.2)
+        || moved(prev.3, current.3)
 }
 
 fn draw_meters(frame: &mut Frame, layout: &StripLayout, p: &StripParams<'_>, scheme: &ColorScheme) {
     let scale = layout.scale;
-    let (left, right) = levels(p);
+    let (left, right, _, _) = meter_values(p);
     if let Some(vu) = at(layout, ElementPlacement::Meter) {
         for (index, well) in meter_wells(vu, scale, p.stereo_linked).into_iter().enumerate() {
-            let level = if index == 0 { left } else { right.unwrap_or(left) };
+            let level = if index == 0 { left } else { right };
             let filled = Rectangle::new(
                 Point::new(well.x, well.y + well.height * (1.0 - level)),
                 Size::new(well.width, well.height * level),
@@ -501,14 +523,16 @@ impl canvas::Program<Message> for StripCanvas<'_> {
                 }
             }
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
-                // Only keep scheduling frames while something is moving;
-                // `meter_stream` wakes us when a new transient starts.
-                let live = if let (Some(bus), Some(_)) = (&self.p.meter_bus, self.p.meter_slot) {
-                    bus.lock().map(|snapshot| snapshot.active).unwrap_or(false)
-                } else {
-                    self.p.meter.value > 0.0005
-                };
-                if live {
+                // Schedule the next frame only if this one would look
+                // different.  `meter_stream` wakes a stopped canvas when a
+                // new transient starts, so silence costs no frames.
+                let current = meter_values(&self.p);
+                let height = at(layout, ElementPlacement::Meter).map_or(1.0, |vu| vu.height);
+                let changed = state
+                    .last_meter
+                    .map_or(true, |prev| meter_changed(prev, current, height));
+                state.last_meter = Some(current);
+                if changed {
                     return Some(canvas::Action::request_redraw_at(
                         *now + std::time::Duration::from_millis(50),
                     ));
@@ -589,4 +613,27 @@ pub fn strip_canvas<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::meter_changed;
+
+    #[test]
+    fn a_sub_pixel_drift_does_not_keep_the_loop_alive() {
+        let height = 400.0;
+        let a = (0.500, 0.500, 0.500, 0.500);
+        // Half a pixel of travel at the bottom of the bar.
+        let b = (0.5005, 0.5005, 0.5005, 0.5005);
+        assert!(!meter_changed(a, b, height));
+    }
+
+    #[test]
+    fn a_visible_move_or_a_peak_change_does() {
+        let height = 400.0;
+        let a = (0.5, 0.5, 0.5, 0.5);
+        assert!(meter_changed(a, (0.55, 0.5, 0.5, 0.5), height));
+        assert!(meter_changed(a, (0.5, 0.5, 0.55, 0.5), height));
+        assert!(meter_changed(a, (0.5, 0.5, 0.5, 0.55), height));
+    }
 }
