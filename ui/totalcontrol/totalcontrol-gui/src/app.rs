@@ -2198,9 +2198,7 @@ pub enum Message {
     /// Select how the graph rate is chosen: `Auto`, `Follow`, or a fixed
     /// rate (which arrives through [`Message::EngineRate`]).
     EngineRateMode(EngineRateMode),
-    /// Read the PipeWire graph while Follow is active.
-    FollowPoll,
-    /// The graph read from `FollowPoll`.
+    /// A PipeWire graph snapshot that differs from the last one seen.
     FollowRead(Option<totalcontrol_core::pw_follow::GraphSnapshot>),
     /// Force PipeWire's quantum (buffer size in samples), `0` = default.
     EngineQuantum(u32),
@@ -2318,8 +2316,8 @@ pub struct TotalControl {
     /// Host-computed output levels (power sum of routed sources ×
     /// faders) — same ballistics as the input/playback meters.
     pub output_meters: Vec<MeterAnim>,
-    /// Snapshot of the two M1 strength readouts per channel, refreshed at
-    /// `STRENGTH_READOUT_MS` instead of at the meter tick rate.  Indexing
+    /// Snapshot of the two M1 strength readouts per channel, refreshed on
+    /// the 250 ms metered tick.  Indexing
     /// matches the meter vectors; `[0]` is the left channel and `[1]` the
     /// right channel of a linked pair.
     pub strength_inputs: Vec<[Option<f32>; 2]>,
@@ -2852,7 +2850,9 @@ const METER_TICK_MS: f32 = 50.0;
 /// Refresh interval for the numerical strength fields.  The meters keep
 /// animating at the fast tick, but the numbers are easier to read when
 /// they move four times a second.
-const STRENGTH_READOUT_MS: u64 = 250;
+/// Below the 250 ms metered tick, so the tick is the readout's clock and no
+/// tick is skipped by a timing race.
+const STRENGTH_READOUT_GUARD_MS: u64 = 200;
 /// Fast rise — a meter should jump to a new peak almost instantly so
 /// transients don't feel muted.
 const METER_ATTACK: f32 = 0.7;
@@ -7421,7 +7421,6 @@ fn is_undoable(message: &Message) -> bool {
             | Message::EngineQuantum(_)
             | Message::EnginePoll
             | Message::EngineRead(..)
-            | Message::FollowPoll
             | Message::FollowRead(..)
             | Message::RenameStart(_)
             | Message::RenameChanged(_)
@@ -7699,6 +7698,19 @@ fn select_strip(state: &mut TotalControl, cid: ChannelId) {
     }
 }
 
+/// Poll the PipeWire graph at 4 Hz and yield only when it changes.
+fn follow_graph_stream() -> impl iced::futures::Stream<Item = Option<totalcontrol_core::pw_follow::GraphSnapshot>> {
+    iced::futures::stream::unfold((None, false), |(last, seeded)| async move {
+        loop {
+            let graph = totalcontrol_core::pw_follow::read_graph();
+            if !seeded || graph != last {
+                return Some((graph.clone(), (graph, true)));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+}
+
 pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
     // A host change whose confirming snapshot never arrived (a rejected
     // command, or a stopped service) must not capture a later snapshot.
@@ -7753,7 +7765,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 | Message::CollapseTick
                 | Message::EnginePoll
                 | Message::EngineRead(..)
-                | Message::FollowPoll
                 | Message::FollowRead(..)
                 | Message::OscLog(_)
                 | Message::OscRmeIn(_, _)
@@ -7868,8 +7879,12 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
         Message::Tick
             | Message::EnginePoll
             | Message::EngineRead(..)
-            | Message::FollowPoll
             | Message::FollowRead(..)
+            // Device-service traffic is not the user doing something: a
+            // snapshot or a meter wake must not hold the mixer at the fast
+            // tick for another 1.5 s.
+            | Message::DeviceUpdated
+            | Message::MeterWake
     ) {
         state.last_activity = Instant::now();
     }
@@ -8217,9 +8232,10 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 m.step_elapsed(fx_levels[i]);
             }
             state.fx_overload = state.device.fx_overload().unwrap_or([false, false]);
-            // The numerical strength fields read a slower snapshot than the
-            // meters: 250 ms keeps them legible while the bars stay smooth.
-            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_MS) {
+            // The numerical strength fields read the tick's snapshot.  The
+            // guard is shorter than the 250 ms metered tick so no tick is
+            // skipped; the tick is their clock, not a second timer.
+            if state.strength_at.elapsed() >= Duration::from_millis(STRENGTH_READOUT_GUARD_MS) {
                 state.strength_at = Instant::now();
                 state.strength_inputs = strength_snapshot(&state.input_meters, |pair| {
                     state.device.input_pair_linked(pair)
@@ -9908,18 +9924,6 @@ pub fn update(state: &mut TotalControl, message: Message) -> Task<Message> {
                 .unwrap_or(state.engine_force_rate);
             notify_osc_raw(state, "/sample_rate", vec![OscType::Int(shown as i32)]);
         }
-        Message::FollowPoll => {
-            if state.device.is_mock()
-                || state.engine_rate_mode != EngineRateMode::Follow
-                || !state.device.rate_follows_sound_server()
-            {
-                return Task::none();
-            }
-            return Task::perform(
-                async { totalcontrol_core::pw_follow::read_graph() },
-                Message::FollowRead,
-            );
-        }
         Message::FollowRead(graph) => {
             if state.device.is_mock()
                 || state.engine_rate_mode != EngineRateMode::Follow
@@ -10596,10 +10600,9 @@ const TICK_HIDDEN: Duration = Duration::from_millis(250);
 /// auto-save, the front panel); anything that changes the screen switches
 /// back to a faster tick at once.
 const TICK_IDLE: Duration = Duration::from_millis(100);
-/// Housekeeping cadence once the device service owns the meters: the
-/// canvases redraw from the shared bus themselves, so the view only needs
-/// an occasional pass for connection/autosave/OSC and non-canvas readouts.
-const TICK_SERVICE: Duration = Duration::from_secs(1);
+/// The metered idle tick: one clock that drives the M1 readouts and the
+/// periodic housekeeping, so they cannot beat against each other.
+const TICK_READOUT: Duration = Duration::from_millis(250);
 /// How long after the last change the tick stays fast: longer than the
 /// meters' release, so a fading peak is drawn to the end.
 const ACTIVE_FOR: Duration = Duration::from_millis(1500);
@@ -10629,11 +10632,11 @@ pub fn tick_interval(state: &TotalControl) -> Duration {
         TICK_ACTIVE
     } else if is_active(state) {
         TICK_METERS
-    } else if state.meter_bus.is_some()
-        && (state.device.has_device_playback_meters() || state.device.is_mock())
-        && state.osc_config.is_none()
-    {
-        TICK_SERVICE
+    } else if state.meter_bus.is_some() && state.osc_config.is_none() {
+        // The device service owns metering and the fader canvases schedule
+        // their own frames; this single clock drives the M1 readouts and the
+        // periodic housekeeping.
+        TICK_READOUT
     } else {
         TICK_IDLE
     }
@@ -10673,11 +10676,10 @@ pub fn subscription(state: &TotalControl) -> Subscription<Message> {
         };
         subs.push(iced::time::every(poll).map(|_| Message::EnginePoll));
         if state.engine_rate_mode == EngineRateMode::Follow && !state.device.is_mock() {
-            // Graph changes are cheap to observe compared with a card-rate
-            // poll; 4 Hz keeps the 300 ms stabilization delay responsive.
-            subs.push(
-                iced::time::every(Duration::from_millis(250)).map(|_| Message::FollowPoll),
-            );
+            // Poll the graph at 4 Hz but only deliver a message when the
+            // snapshot changes: otherwise every poll rebuilt the whole view
+            // to draw the same pixels.
+            subs.push(Subscription::run(follow_graph_stream).map(Message::FollowRead));
         }
     }
     // Only running while a collapse/expand transition is actually in
@@ -10788,22 +10790,29 @@ fn handle_global_event(
 // ── View ─────────────────────────────────────────────────────────
 
 thread_local! {
-    static VIEW_WINDOW: std::cell::RefCell<(std::time::Instant, u32)> =
-        std::cell::RefCell::new((std::time::Instant::now(), 0));
+    static VIEW_WINDOW: std::cell::RefCell<(std::time::Instant, u32, f32)> =
+        std::cell::RefCell::new((std::time::Instant::now(), 0, 0.0));
 }
 
 /// Count full view builds per second when `TOTALCONTROL_PROFILE` is set.
-fn profile_view_build() {
+fn profile_view_build(state: &TotalControl, build_ms: f32) {
     VIEW_WINDOW.with(|cell| {
         let mut window = cell.borrow_mut();
         window.1 += 1;
+        window.2 += build_ms;
         let elapsed = window.0.elapsed();
         if elapsed >= Duration::from_secs(1) {
             eprintln!(
-                "profile: view builds/s={:.1}",
-                window.1 as f32 / elapsed.as_secs_f32()
+                "profile: builds/s={:.1} build_ms={:.2} tick={:?} hidden={} bus={} active={} osc={}",
+                window.1 as f32 / elapsed.as_secs_f32(),
+                window.2 / window.1 as f32,
+                tick_interval(state),
+                state.window_hidden,
+                state.meter_bus.is_some(),
+                is_active(state),
+                state.osc_config.is_some()
             );
-            *window = (Instant::now(), 0);
+            *window = (Instant::now(), 0, 0.0);
         }
     });
 }
@@ -10813,10 +10822,16 @@ fn profiling() -> bool {
     *ON.get_or_init(|| std::env::var_os("TOTALCONTROL_PROFILE").is_some())
 }
 
-pub fn view(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
+pub fn view(state: &TotalControl, window: window::Id) -> Element<'_, Message> {
+    let started = Instant::now();
+    let element = view_inner(state, window);
     if profiling() {
-        profile_view_build();
+        profile_view_build(state, started.elapsed().as_secs_f32() * 1000.0);
     }
+    element
+}
+
+fn view_inner(state: &TotalControl, _window: window::Id) -> Element<'_, Message> {
     let top = top_bar(state);
     let now = Instant::now();
     let fx_width = fx_slot(state, now);
