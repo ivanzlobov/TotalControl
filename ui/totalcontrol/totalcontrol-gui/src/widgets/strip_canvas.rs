@@ -532,9 +532,22 @@ impl canvas::Program<Message> for StripCanvas<'_> {
                     .last_meter
                     .map_or(true, |prev| meter_changed(prev, current, height));
                 state.last_meter = Some(current);
-                if changed {
+                // A visible change: 20 frames a second.  A static picture
+                // with any non-zero level (steady noise, a held tone): a
+                // 4 Hz heartbeat, so a signal that starts without moving a
+                // bar is still picked up within 250 ms.  True silence:
+                // stop; `meter_stream` wakes the canvas on a transient.
+                let any = current.0 > 0.0 || current.1 > 0.0 || current.2 > 0.0 || current.3 > 0.0;
+                let period = if changed {
+                    Some(50)
+                } else if any {
+                    Some(250)
+                } else {
+                    None
+                };
+                if let Some(ms) = period {
                     return Some(canvas::Action::request_redraw_at(
-                        *now + std::time::Duration::from_millis(50),
+                        *now + std::time::Duration::from_millis(ms),
                     ));
                 }
             }
@@ -626,6 +639,16 @@ mod tests {
         // Half a pixel of travel at the bottom of the bar.
         let b = (0.5005, 0.5005, 0.5005, 0.5005);
         assert!(!meter_changed(a, b, height));
+    }
+
+    #[test]
+    fn a_static_picture_with_signal_still_gets_a_heartbeat() {
+        // The gate itself only reports movement; the heartbeat keeps a
+        // non-zero but static picture polled at 4 Hz.
+        let idle = [0.0f32; 4];
+        assert!(!idle.iter().any(|v| *v > 0.0));
+        let noisy = [0.0005f32; 4];
+        assert!(noisy.iter().any(|v| *v > 0.0));
     }
 
     #[test]
