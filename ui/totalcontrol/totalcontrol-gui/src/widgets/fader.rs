@@ -231,11 +231,11 @@ fn meter_zone_color(vol: f32) -> Color {
         FLOOR_DB
     };
     if db > 0.0 {
-        theme::MRED
+        theme::mred()
     } else if db > -3.0 {
-        theme::YSIM
+        theme::ysim()
     } else {
-        theme::MGREEN
+        theme::mgreen()
     }
 }
 
@@ -957,11 +957,13 @@ fn safe_clamp(v: f32, lo: f32, hi: f32) -> f32 {
 /// -3 dB, yellow from -3 dB to 0 dB, and red above 0 dB.  Its meter scale
 /// keeps about 6 dB of headroom above 0, so a hot signal is visible as a
 /// red segment before the separate OVR block lights.
-const METER_ZONES: [(f32, Color); 3] = [
-    (-3.0, theme::MGREEN),
-    (0.0, theme::YSIM),
-    (TOP_DB, theme::MRED),
-];
+fn meter_zones() -> [(f32, Color); 3] {
+    [
+        (-3.0, theme::mgreen()),
+        (0.0, theme::ysim()),
+        (TOP_DB, theme::mred()),
+    ]
+}
 
 /// The bars are opaque; the scale labels are drawn underneath and may be
 /// hidden by a raised bar, exactly like printed marks behind a moving meter.
@@ -973,7 +975,7 @@ const FILL_ALPHA: f32 = 1.0;
 /// (which used to widen this whole column well past what the numbers
 /// alone need, shoving the fader and everything after it further right
 /// than the reference: see `METER_RULER_W`'s own doc comment). Tints
-/// through `METER_ZONES` (green, amber, red), plus a
+/// through `meter_zones` (green, amber, red), plus a
 /// separate clip "LED" above the track that lights up near 0 dBFS.
 /// `available` is a per-session backend capability (see `DeviceHandle::
 /// has_input_meter`/`has_playback_meters`), not a per-tick reading —
@@ -1124,7 +1126,7 @@ fn draw_meter_bar(
         // Each zone is filled only as far as the level reaches into it.
         let top = r.y + r.height - r.height * vol_to_t(l);
         let mut lower_db = FLOOR_DB;
-        for (upper_db, color) in METER_ZONES {
+        for (upper_db, color) in meter_zones() {
             let zone_bottom = r.y + r.height - r.height * db_to_t(lower_db);
             let zone_top = (r.y + r.height - r.height * db_to_t(upper_db)).max(top);
             if zone_top < zone_bottom {
@@ -1179,7 +1181,7 @@ fn draw_meter_bar(
     let clip_color = if clipping {
         Color {
             a: FILL_ALPHA,
-            ..theme::MRED
+            ..theme::mred()
         }
     } else {
         Color::from_rgb8(0x3a, 0x16, 0x16)
@@ -1199,7 +1201,7 @@ fn draw_meter_bar(
             }),
             Color {
                 a: 0.35,
-                ..theme::MRED
+                ..theme::mred()
             },
         );
     }
@@ -1266,7 +1268,7 @@ fn draw_track(
         Point::new(cx - (slot_w * scale) / 2.0, r.y),
         Size::new(slot_w * scale, r.height),
     );
-    frame.fill(&slot, theme::FADER_SLOT);
+    frame.fill(&slot, theme::fader_slot());
 
     // Filled portion of the rail, from the bottom up to the cap.
     if raw_y < r.y + r.height {
@@ -1291,9 +1293,9 @@ fn draw_track(
             let value = 10f32.powf(db / 20.0);
             let y = track_value_y(r, value, range);
             let color = if db == METER_RED_DB {
-                theme::MRED
+                theme::mred()
             } else if db == -3.0 {
-                theme::MGREEN
+                theme::mgreen()
             } else if db == 0.0 {
                 Color::from_rgba8(0xff, 0xff, 0xff, 0.82)
             } else {
@@ -1329,7 +1331,7 @@ fn draw_track(
             Size::new((REF_RIGHT_W * scale).max(2.0), guide_h),
             Color {
                 a: 0.85,
-                ..theme::TEXT_PRIMARY
+                ..theme::text_primary()
             },
         );
     }
@@ -1381,7 +1383,7 @@ fn draw_track(
 
     frame.stroke(
         &body,
-        Stroke::default().with_color(theme::BORDER).with_width(1.0),
+        Stroke::default().with_color(theme::border()).with_width(1.0),
     );
 }
 
@@ -1620,11 +1622,11 @@ impl<Message> canvas::Program<Message> for FxMeter {
             Size::new(bounds.width, bounds.height),
             radius,
         );
-        frame.fill(&well, theme::BG_DEEP);
+        frame.fill(&well, theme::bg_deep());
         frame.stroke(
             &well,
             Stroke::default()
-                .with_color(theme::BORDER)
+                .with_color(theme::border())
                 .with_width(1.0),
         );
         let t = vol_to_t(level).clamp(0.0, 1.0);
@@ -1635,14 +1637,14 @@ impl<Message> canvas::Program<Message> for FxMeter {
                 Size::new(bounds.width, fill_h),
                 radius,
             );
-            frame.fill(&fill, theme::MGREEN);
+            frame.fill(&fill, theme::mgreen());
         }
         if overload {
             let over = Path::rectangle(
                 Point::new(0.0, 0.0),
                 Size::new(bounds.width, 4.0 * self.scale),
             );
-            frame.fill(&over, theme::MRED);
+            frame.fill(&over, theme::mred());
         }
         let _ = self.height;
         vec![frame.into_geometry()]
@@ -1857,7 +1859,7 @@ mod tests {
     #[test]
     fn meter_zones_cover_the_scale_in_order() {
         let mut lower = FLOOR_DB;
-        for (upper, _) in METER_ZONES {
+        for (upper, _) in meter_zones() {
             assert!(upper > lower);
             lower = upper;
         }
@@ -1914,11 +1916,11 @@ mod tests {
     #[test]
     fn meter_zone_colors_match_the_three_totalmix_bands() {
         let at = |db: f32| meter_zone_color(10f32.powf(db / 20.0));
-        assert_eq!(at(-12.0), theme::MGREEN);
-        assert_eq!(at(-3.0), theme::MGREEN);
-        assert_eq!(at(-2.9), theme::YSIM);
-        assert_eq!(at(0.0), theme::YSIM);
-        assert_eq!(at(0.1), theme::MRED);
-        assert_eq!(meter_zone_color(0.0), theme::MGREEN);
+        assert_eq!(at(-12.0), theme::mgreen());
+        assert_eq!(at(-3.0), theme::mgreen());
+        assert_eq!(at(-2.9), theme::ysim());
+        assert_eq!(at(0.0), theme::ysim());
+        assert_eq!(at(0.1), theme::mred());
+        assert_eq!(meter_zone_color(0.0), theme::mgreen());
     }
 }

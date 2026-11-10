@@ -507,9 +507,10 @@ The preview uses a semantic colour scheme with five categories:
 | accent | mute, solo, cue |
 | meter | green, yellow, red |
 
-The GUI theme will consume the same categories in a follow-up change.  Until
-then the preview palette is the design reference for the colour grouping,
-not a second runtime theme.
+The GUI theme installs these categories from the document at startup, so a
+colour edit reaches the window as well as the preview.  Tones derived from
+them — hover surfaces, the VU well, the fader cap silver, knob arcs, the
+phantom orange — are computed in code and are not document tokens.
 
 ## Fidelity
 

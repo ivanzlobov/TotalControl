@@ -26,7 +26,7 @@ const CARD_W: f32 = 560.0;
 fn header(scale: f32) -> Element<'static, Message> {
     row![
         text("About")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(theme::TEXT_DIALOG * scale),
         Space::new().width(Length::Fill),
         // Same title/Close pair as the device popover (`app::device_panel`).
@@ -60,18 +60,18 @@ const SHORTCUTS: [(&str, &str); 12] = [
 
 fn shortcuts(scale: f32) -> Element<'static, Message> {
     let mut list = column![text("SHORTCUTS")
-        .color(theme::TEXT_SEC)
+        .color(theme::text_sec())
         .size(theme::TEXT_DIALOG * scale)]
     .spacing(theme::SPACE_SM * scale);
     for (keys, action) in SHORTCUTS {
         list = list.push(
             row![
                 text(keys)
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(theme::TEXT_DIALOG * scale)
                     .width(Length::Fixed(150.0 * scale)),
                 text(action)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .size(theme::TEXT_DIALOG * scale),
             ]
             .spacing(theme::SPACE_MD * scale),
@@ -115,19 +115,19 @@ pub fn about_modal(state: &TotalControl) -> Element<'_, Message> {
     let identity = column![
         row![
             text("TotalControl")
-                .color(theme::TEXT_PRIMARY)
+                .color(theme::text_primary())
                 .size(theme::TEXT_DIALOG * scale),
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(theme::TEXT_DIALOG * scale),
         ]
         .spacing(theme::SPACE_LG)
         .align_y(Alignment::Center),
         text("Open-source TotalMix replacement for RME audio interfaces")
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(theme::TEXT_DIALOG * scale),
         text(device)
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(theme::TEXT_DIALOG * scale),
         button(
             text(REPO_URL)

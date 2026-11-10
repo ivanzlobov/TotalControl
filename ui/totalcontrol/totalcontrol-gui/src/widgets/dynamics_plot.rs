@@ -61,7 +61,7 @@ impl<Message> canvas::Program<Message> for DynamicsPlot {
             height: (bounds.height - margin * 2.0).max(1.0),
         };
 
-        let grid = Color { a: 0.14, ..theme::TEXT_SEC };
+        let grid = Color { a: 0.14, ..theme::text_sec() };
         for db in [-60.0, -40.0, -20.0, 0.0, 20.0] {
             if !(OUT_MIN..=OUT_MAX).contains(&db) {
                 continue;
@@ -87,7 +87,7 @@ impl<Message> canvas::Program<Message> for DynamicsPlot {
         frame.stroke(
             &unity,
             Stroke::default()
-                .with_color(Color { a: 0.3, ..theme::TEXT_SEC })
+                .with_color(Color { a: 0.3, ..theme::text_sec() })
                 .with_width(1.0),
         );
 
@@ -98,9 +98,9 @@ impl<Message> canvas::Program<Message> for DynamicsPlot {
         let exp = self.dynamics.exp_threshold_db.clamp(IN_MIN, IN_MAX);
         let comp = self.dynamics.comp_threshold_db.clamp(IN_MIN, IN_MAX);
         let (low, high) = if exp <= comp { (exp, comp) } else { (comp, exp) };
-        let green = Color { a, ..theme::MGREEN };
-        let blue = Color { a, ..theme::MUTE_COLOR };
-        let red = Color { a, ..theme::MRED };
+        let green = Color { a, ..theme::mgreen() };
+        let blue = Color { a, ..theme::mute_color() };
+        let red = Color { a, ..theme::mred() };
         let width = 1.5 * self.scale;
 
         let mut segment = |from: f32, to: f32, colour: Color| {

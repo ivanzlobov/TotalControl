@@ -91,7 +91,7 @@ fn header_cell(label: String, lit: bool, width: f32, scale: f32) -> Element<'sta
     container(text(label).size(theme::TEXT_XS * scale).color(if lit {
         theme::ACCENT
     } else {
-        theme::TEXT_SEC
+        theme::text_sec()
     }))
     .width(Length::Fixed(width * scale))
     .height(Length::Fixed(CELL_H * scale))
@@ -353,7 +353,7 @@ fn push_channel_rows<'a>(
             r = r.push(label_cell(
                 format!("{row_prefix} {}", idx + 1),
                 IDX_LABEL_W,
-                if lit { theme::ACCENT } else { theme::TEXT_SEC },
+                if lit { theme::ACCENT } else { theme::text_sec() },
                 scale,
             ));
             rows = rows.push(r);
@@ -368,7 +368,7 @@ fn section_caption(label: &str, scale: f32) -> Element<'static, Message> {
     container(
         text(label.to_uppercase())
             .size(theme::TEXT_MICRO * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
     )
     .height(Length::Fixed(CELL_H * scale))
     .align_y(iced::Alignment::End)
@@ -390,7 +390,7 @@ fn hairline(width: f32) -> Element<'static, Message> {
             .height(1),
     )
     .style(|_theme: &iced::Theme| container::Style {
-        background: Some(iced::Background::Color(theme::BORDER)),
+        background: Some(iced::Background::Color(theme::border())),
         ..container::Style::default()
     })
     .into()
@@ -475,7 +475,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
     // ── Column header: individual output channels ("Out 1".."Out 12"),
     // lit for the selected submix's pair and for the hovered column.
     let mut header = row![
-        label_cell(String::new(), GROUP_LABEL_W, theme::TEXT_SEC, scale),
+        label_cell(String::new(), GROUP_LABEL_W, theme::text_sec(), scale),
     ]
     .spacing(theme::SPACE_HAIRLINE);
     for out in 0..n_outputs {
@@ -489,7 +489,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
             header = header.push(pair_gap(scale));
         }
     }
-    header = header.push(label_cell(String::new(), IDX_LABEL_W, theme::TEXT_SEC, scale));
+    header = header.push(label_cell(String::new(), IDX_LABEL_W, theme::text_sec(), scale));
 
     let mut sources =
         column![section_caption("Hardware inputs", scale)].spacing(theme::SPACE_HAIRLINE);
@@ -520,7 +520,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
             if out_lit {
                 theme::ACCENT
             } else {
-                theme::TEXT_PRIMARY
+                theme::text_primary()
             },
             scale
         ),
@@ -544,12 +544,12 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
             out_row = out_row.push(pair_gap(scale));
         }
     }
-    out_row = out_row.push(label_cell(String::new(), IDX_LABEL_W, theme::TEXT_SEC, scale));
+    out_row = out_row.push(label_cell(String::new(), IDX_LABEL_W, theme::text_sec(), scale));
 
     // ── Column-group footer: each output pair's bus label, one label
     // spanning both its columns.
     let mut footer = row![
-        label_cell(String::new(), GROUP_LABEL_W, theme::TEXT_SEC, scale),
+        label_cell(String::new(), GROUP_LABEL_W, theme::text_sec(), scale),
     ]
     .spacing(theme::SPACE_HAIRLINE);
     for pair in 0..(n_outputs / 2) {
@@ -563,7 +563,7 @@ fn grid_view(state: &TotalControl, size: iced::Size) -> Element<'_, Message> {
         ));
         footer = footer.push(pair_gap(scale));
     }
-    footer = footer.push(label_cell(String::new(), IDX_LABEL_W, theme::TEXT_SEC, scale));
+    footer = footer.push(label_cell(String::new(), IDX_LABEL_W, theme::text_sec(), scale));
 
     // Frozen panes: only the source rows scroll vertically, under a fixed
     // header and above the fixed output row and bus labels; the whole grid

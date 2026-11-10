@@ -330,15 +330,15 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             // readable — one visual state to reason about, not two.
             const DRAG_LIGHTEN: f32 = 0.18;
             let face_color = if state.dragging {
-                theme::blend(theme::KNOB_FACE, Color::WHITE, DRAG_LIGHTEN)
+                theme::blend(theme::knob_face(), Color::WHITE, DRAG_LIGHTEN)
             } else {
-                theme::KNOB_FACE
+                theme::knob_face()
             };
             frame.fill(&Path::circle(center, radius.max(1.0)), face_color);
             frame.stroke(
                 &Path::circle(center, radius.max(1.0)),
                 Stroke::default()
-                    .with_color(Color { a: dim, ..theme::BORDER })
+                    .with_color(Color { a: dim, ..theme::knob_border() })
                     .with_width(border_w),
             );
 
@@ -362,7 +362,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     Stroke::default()
                         .with_color(Color {
                             a: 0.22,
-                            ..theme::TEXT_SEC
+                            ..theme::text_sec()
                         })
                         .with_width(2.0 * self.scale),
                 );
@@ -434,7 +434,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
                     iced::Point::new(center.x + pc * (radius + tick_len), center.y + ps * (radius + tick_len)),
                 ),
                 Stroke::default()
-                    .with_color(Color { a: dim, ..theme::TEXT_SEC })
+                    .with_color(Color { a: dim, ..theme::text_sec() })
                     .with_width(1.5 * self.scale),
             );
 
@@ -469,7 +469,7 @@ impl<Message> canvas::Program<Message> for Knob<Message> {
             frame.fill_text(canvas::Text {
                 content: self.label.clone(),
                 position: center,
-                color: Color { a: dim, ..theme::TEXT_PRIMARY },
+                color: Color { a: dim, ..theme::text_primary() },
                 size: (label_size * self.scale).into(),
                 align_x: text::Alignment::Center,
                 align_y: alignment::Vertical::Center,

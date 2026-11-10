@@ -184,17 +184,17 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
         let well = if self.in_sel {
             theme::SURFACE_HI
         } else {
-            theme::blend(theme::BG_DEEP, theme::SURFACE, 0.6)
+            theme::blend(theme::bg_deep(), theme::surface(), 0.6)
         };
         let unity = routed && (20.0 * self.shown.log10()).abs() < UNITY_DB;
         let fill = if !routed {
             well
         } else if self.muted {
-            theme::blend(well, theme::MUTE_COLOR, 0.38)
+            theme::blend(well, theme::mute_color(), 0.38)
         } else if self.phase {
-            theme::blend(well, theme::MRED, 0.38)
+            theme::blend(well, theme::mred(), 0.38)
         } else if unity {
-            theme::blend(well, theme::MGREEN, 0.38)
+            theme::blend(well, theme::mgreen(), 0.38)
         } else {
             theme::blend(well, theme::FADER, 0.16)
         };
@@ -207,7 +207,7 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
         } else if self.interactive && self.hovered {
             Some(theme::FADER)
         } else if self.in_sel {
-            Some(theme::BORDER)
+            Some(theme::border())
         } else {
             None
         };
@@ -227,9 +227,9 @@ impl<Message: Clone> canvas::Program<Message> for Crosspoint<Message> {
                 content: label,
                 position: Point::new(bounds.width / 2.0, bounds.height / 2.0),
                 color: if routed {
-                    theme::TEXT_PRIMARY
+                    theme::text_primary()
                 } else {
-                    theme::TEXT_SEC
+                    theme::text_sec()
                 },
                 size: (theme::TEXT_XS * self.scale).into(),
                 align_x: advanced_text::Alignment::Center,

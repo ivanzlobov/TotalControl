@@ -1234,7 +1234,7 @@ impl Default for ColorScheme {
     fn default() -> Self {
         Self {
             surface: SurfaceColors {
-                app_background: "#18191d".into(),
+                app_background: "#0e0e10".into(),
                 card: "#24252a".into(),
                 card_active: "#3a3b42".into(),
                 border: "#36373d".into(),
@@ -1260,8 +1260,8 @@ impl Default for ColorScheme {
             },
             meter: MeterColors {
                 green: "#3dd68c".into(),
-                yellow: "#d8c34a".into(),
-                red: "#d94a4a".into(),
+                yellow: "#f0b429".into(),
+                red: "#e5484d".into(),
             },
         }
     }

@@ -175,7 +175,7 @@ const RESIZE_W: f32 = theme::SPACE_MD;
 fn panel_toggle(open: bool, scale: f32) -> Element<'static, Message> {
     let toggle = button(
         iced::widget::canvas(crate::widgets::panel_icon::PanelIcon {
-            color: theme::TEXT_SEC,
+            color: theme::text_sec(),
             open,
             scale,
         })
@@ -212,7 +212,7 @@ fn title_row(scale: f32) -> Element<'static, Message> {
     row![
         text("CONTROLS")
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
         iced::widget::Space::new().width(Length::Fill),
         panel_toggle(true, scale),
     ]
@@ -233,7 +233,7 @@ fn edge_line(scale: f32) -> Element<'static, Message> {
             .height(Length::Fill),
     )
     .style(|_theme: &iced::Theme| container::Style {
-        background: Some(iced::Background::Color(theme::BORDER)),
+        background: Some(iced::Background::Color(theme::border())),
         ..container::Style::default()
     })
     .into()
@@ -433,11 +433,11 @@ fn panel<'a>(content: Element<'a, Message>, scale: f32) -> Element<'a, Message> 
 /// build).
 pub(crate) fn device_state(state: &TotalControl) -> (Color, &'static str) {
     if !state.connected {
-        (theme::MRED, "Disconnected")
+        (theme::mred(), "Disconnected")
     } else if state.device.is_mock() {
-        (theme::YSIM, "Simulated")
+        (theme::ysim(), "Simulated")
     } else if state.device.class_compliant() {
-        (theme::YSIM, "Class Compliant")
+        (theme::ysim(), "Class Compliant")
     } else {
         (theme::GCONN, "Proprietary")
     }
@@ -496,17 +496,17 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                         .color(status_color),
                     text(display_name)
                         .size(theme::TEXT_MD * scale)
-                        .color(theme::TEXT_PRIMARY)
+                        .color(theme::text_primary())
                         .wrapping(iced::advanced::text::Wrapping::None),
                     iced::widget::Space::new().width(Length::Fill),
                     text("\u{2699}")
                         .size(theme::TEXT_SM * scale)
                         .color(if state.connected {
-                            theme::TEXT_SEC
+                            theme::text_sec()
                         } else {
                             iced::Color {
                                 a: 0.35,
-                                ..theme::TEXT_SEC
+                                ..theme::text_sec()
                             }
                         }),
                 ]
@@ -517,7 +517,7 @@ fn device_chip(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                     .color(status_color),
                 text(clock_line(state, &settings.clock_source))
                     .size(theme::TEXT_XS * scale)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .wrapping(iced::advanced::text::Wrapping::None),
             ]
             .spacing(theme::SPACE_HAIRLINE * scale),
@@ -629,7 +629,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                 .style(theme::armed_toggle_button(
                     any_mute,
                     mute_held,
-                    theme::MUTE_COLOR
+                    theme::mute_color()
                 ))
                 .on_press(Message::GlobalMuteToggle),
             if mute_held {
@@ -644,7 +644,7 @@ fn msf_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
                 .style(theme::armed_toggle_button(
                     any_solo,
                     solo_held,
-                    theme::SOLO_COLOR
+                    theme::solo_color()
                 ))
                 .on_press(Message::GlobalSoloToggle),
             if pfl && any_solo {
@@ -681,7 +681,7 @@ fn fx_row(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         .height(Length::Fixed(38.0 * scale));
     let label = text("FX")
         .size(theme::TEXT_XS * scale)
-        .color(if open { theme::TEXT_PRIMARY } else { theme::TEXT_SEC });
+        .color(if open { theme::text_primary() } else { theme::text_sec() });
     hint(
         mouse_area(
             column![knob, label]
@@ -770,7 +770,7 @@ impl canvas::Program<Message> for FxKnob {
                 .with_color(if self.open {
                     theme::ACCENT
                 } else {
-                    theme::TEXT_SEC
+                    theme::text_sec()
                 })
                 .with_width((2.0 * self.scale).max(1.0)),
         );
@@ -820,7 +820,7 @@ fn panel_header(label: &str, open: bool, on_toggle: Message, scale: f32) -> Elem
             .style(theme::accent_bar),
             text(label.to_uppercase())
                 .size(theme::TEXT_SM * scale)
-                .color(theme::TEXT_PRIMARY),
+                .color(theme::text_primary()),
             iced::widget::rule::horizontal(1),
             // No color of its own: it takes `header_button`'s, which is
             // what lights up under the cursor.
@@ -844,7 +844,7 @@ fn panel_header(label: &str, open: bool, on_toggle: Message, scale: f32) -> Elem
 fn sub_label(label: &str, scale: f32) -> Element<'_, Message> {
     text(label)
         .size(theme::TEXT_XS * scale)
-        .color(theme::TEXT_SEC)
+        .color(theme::text_sec())
         .width(Length::Fixed(OPTIONS_LABEL_W * scale))
         .into()
 }
@@ -960,7 +960,7 @@ fn slot_grid<'a>(
             } else {
                 Some(Color {
                     a: 0.45,
-                    ..theme::TEXT_SEC
+                    ..theme::text_sec()
                 })
             };
             // The selected slot, modified since it was recalled or stored,
@@ -977,7 +977,7 @@ fn slot_grid<'a>(
                         .color_maybe(name_color),
                     text("\u{25CF}")
                         .size(theme::TEXT_MICRO * scale)
-                        .color(theme::YSIM),
+                        .color(theme::ysim()),
                 ]
                 .spacing(theme::SPACE_SM * scale)
                 .align_y(iced::Alignment::Center)
@@ -1209,17 +1209,17 @@ fn groups_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         row![
             text("mute")
                 .size(theme::TEXT_MICRO * scale)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .width(Length::Fill)
                 .center(),
             text("solo")
                 .size(theme::TEXT_MICRO * scale)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .width(Length::Fill)
                 .center(),
             text("fader")
                 .size(theme::TEXT_MICRO * scale)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .width(Length::Fill)
                 .center(),
         ]

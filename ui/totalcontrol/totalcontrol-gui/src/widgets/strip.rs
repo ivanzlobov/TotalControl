@@ -365,7 +365,7 @@ pub(crate) fn hint<'a>(
     let label: std::borrow::Cow<'a, str> = label.into();
     tooltip(
         content,
-        container(text(label).size(theme::TEXT_XS * scale).color(theme::TEXT_PRIMARY))
+        container(text(label).size(theme::TEXT_XS * scale).color(theme::text_primary()))
             .padding(theme::SPACE_SM * scale)
             .style(theme::panel),
         tooltip::Position::Top,
@@ -399,7 +399,7 @@ fn strength_cell<'a>(value: Option<f32>, w: f32, h: f32, scale: f32) -> Element<
     container(
         text(label)
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .wrapping(advanced_text::Wrapping::None),
     )
     .width(Length::Fixed(w))
@@ -586,7 +586,7 @@ impl<Message> canvas::Program<Message> for RotatedLabel {
             frame.fill_text(canvas::Text {
                 content: self.text.clone(),
                 position: Point::ORIGIN,
-                color: theme::TEXT_PRIMARY,
+                color: theme::text_primary(),
                 size: self.size.into(),
                 align_x: advanced_text::Alignment::Center,
                 align_y: alignment::Vertical::Center,
@@ -654,7 +654,7 @@ fn header_row<'a>(
     // matching `.wrapping(None)` added to every other `text()` in
     // `full_strip` below for the same reason.
     let mut header = row![text(shown_name.to_string())
-        .color(theme::TEXT_PRIMARY)
+        .color(theme::text_primary())
         .size(theme::TEXT_MD * scale)
         .wrapping(advanced_text::Wrapping::None)]
     .spacing(theme::SPACE_HAIRLINE);
@@ -702,7 +702,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         button(centered_label("M", theme::TEXT_XS * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::MUTE_COLOR))
+            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::mute_color()))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
             "Mute (switched off by the M master, which brings it back)"
@@ -718,7 +718,7 @@ fn collapsed_strip<'a>(p: StripParams<'a>, w: f32) -> Element<'a, Message> {
         ))
         .width(Length::Fill)
         .height(btn_h)
-        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::SOLO_COLOR))
+        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::solo_color()))
         .on_press(Message::Solo(cid, !p.solo)),
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
@@ -923,7 +923,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         button(centered_label("M", theme::TEXT_SM * scale))
             .width(Length::Fill)
             .height(btn_h)
-            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::MUTE_COLOR))
+            .style(theme::armed_outline_toggle(p.mute, p.mute_armed, theme::mute_color()))
             .on_press(Message::Mute(cid, !p.mute)),
         if p.mute_armed {
             "Mute (switched off by the M master, which brings it back)"
@@ -943,7 +943,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         ))
         .width(Length::Fill)
         .height(btn_h)
-        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::SOLO_COLOR))
+        .style(theme::armed_outline_toggle(p.solo, p.solo_armed, theme::solo_color()))
         .on_press(Message::Solo(cid, !p.solo)),
         if p.pfl {
             "PFL (pre-fader listen) to the Cue/PFL target"
@@ -1065,7 +1065,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         scale,
         show_track: true,
         label: None,
-        label_color: theme::TEXT_SEC,
+        label_color: theme::text_sec(),
         // Unused: only matters when `show_meter: false` (see its own
         // doc comment) — this strip fader is never that.
         compact_width: 0.0,
@@ -1190,7 +1190,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             show_meter: false,
             // Same dark slot as the main fader, but a smaller body.
             fill: match cid {
-                ChannelId::Output(_) => theme::MGREEN,
+                ChannelId::Output(_) => theme::mgreen(),
                 _ => theme::PHANTOM,
             },
             slot_w: FX_SLOT_W,
@@ -1202,7 +1202,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             scale: scale * FX_FADER_SCALE,
             show_track: true,
             label: None,
-            label_color: theme::TEXT_SEC,
+            label_color: theme::text_sec(),
             compact_width: 26.0,
             on_press: Box::new(move |v, _| fx_message(cid, db_of(v))),
             on_drag: Box::new(move |v| fx_message(cid, db_of(v))),
@@ -1241,7 +1241,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             } else {
                 "-∞".into()
             })
-                .color(theme::TEXT_PRIMARY)
+                .color(theme::text_primary())
                 .size(theme::TEXT_XS * scale)
                 .wrapping(advanced_text::Wrapping::None),
         )

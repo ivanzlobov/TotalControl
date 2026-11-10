@@ -322,7 +322,7 @@
             "app_background": {
               "type": "string",
               "pattern": "^#[0-9a-fA-F]{6}$",
-              "default": "#18191d",
+              "default": "#0e0e10",
               "description": "Page background behind the strips."
             },
             "card": {
@@ -454,13 +454,13 @@
             "yellow": {
               "type": "string",
               "pattern": "^#[0-9a-fA-F]{6}$",
-              "default": "#d8c34a",
+              "default": "#f0b429",
               "description": "Meter bar above the green zone."
             },
             "red": {
               "type": "string",
               "pattern": "^#[0-9a-fA-F]{6}$",
-              "default": "#d94a4a",
+              "default": "#e5484d",
               "description": "Meter bar in the red zone and the +3 dB fader tick."
             }
           }

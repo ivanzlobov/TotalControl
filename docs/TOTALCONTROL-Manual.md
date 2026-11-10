@@ -1000,10 +1000,27 @@ packets; reset only clears the display baseline.
 - Layouts: `Layout <n>.json` in the layout directory.
 - Window, GUI state and the last workspace folder: `gui.json` in the
   `~/.config/totalcontrol/` directory.
+- Channel strip layout: `gui-layout.json` in the same directory.
 
 The workspace file is the portable one: it contains the current mixer,
 snapshots, labels, groups, layouts and view state. The other files are the
 working state of the current session.
+
+`gui-layout.json` is optional and applies to every view and workspace at once.
+It changes the appearance of the strips — their dimensions, text and control
+sizes, colours, and which controls each channel type shows. Without it the
+built-in layout is used. It is read once at startup, so restart TotalControl
+after editing it. An invalid file is ignored and the built-in layout is used;
+start TotalControl from a terminal to see the reason. The file never changes
+mixer state, routing or what a control does.
+
+Create a starting document with the layout preview:
+
+```sh
+cd ui/totalcontrol
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --example ~/.config/totalcontrol/gui-layout.json
+```
 
 ## 16. Running in the background
 

@@ -5,6 +5,8 @@ use iced::widget::overlay::menu;
 use iced::widget::slider::{self, Handle, HandleShape, Rail};
 use iced::widget::{button, container, progress_bar};
 use iced::{Background, Border, Color, Shadow};
+use std::sync::OnceLock;
+use totalcontrol_layout::ColorScheme;
 
 // Identity: the app icon is a pure-black tile with a monochrome silver
 // mark, so the UI is built from those same three ingredients and nothing
@@ -16,84 +18,186 @@ use iced::{Background, Border, Color, Shadow};
 // from RME TotalMix FX (cool blue-gray cards, orange accent, cyan mute,
 // see the reference-totalmix-ui-assets memory) and read as a different
 // product than the icon on the taskbar.
-pub const BG_DEEP: Color = Color::from_rgb8(0x0e, 0x0e, 0x10);
-/// The dark groove of a fader: just off the page black, so the slot reads
-/// as a channel without becoming a black cut-out.
-pub const FADER_SLOT: Color = Color::from_rgb8(0x13, 0x14, 0x17);
-/// Resting face of a black button.  One step above the page/rail black so
-/// controls read as raised without turning into grey blocks.
-pub const BUTTON_FACE: Color = Color::from_rgb8(0x19, 0x1a, 0x1e);
-/// Standard channel-strip surface.
-pub const SURFACE: Color = Color::from_rgb8(0x24, 0x25, 0x2a);
+struct Palette {
+    bg_deep: Color,
+    fader_slot: Color,
+    button_face: Color,
+    surface: Color,
+    submix_active: Color,
+    tab_face: Color,
+    border: Color,
+    text_primary: Color,
+    text_sec: Color,
+    knob_face: Color,
+    knob_border: Color,
+    mute: Color,
+    solo: Color,
+    cue: Color,
+    green: Color,
+    yellow: Color,
+    red: Color,
+}
+
+static PALETTE: OnceLock<Palette> = OnceLock::new();
+
+/// Install the colour scheme from the layout document.  Startup only: styles
+/// read the parsed palette through the accessors below.
+pub fn install_palette(scheme: ColorScheme) {
+    let _ = PALETTE.set(Palette::from(&scheme));
+}
+
+fn palette() -> &'static Palette {
+    PALETTE.get_or_init(|| Palette::from(&ColorScheme::default()))
+}
+
+impl From<&ColorScheme> for Palette {
+    fn from(scheme: &ColorScheme) -> Self {
+        Self {
+            bg_deep: hex(&scheme.surface.app_background),
+            fader_slot: hex(&scheme.control.fader_slot),
+            button_face: hex(&scheme.control.button_face),
+            surface: hex(&scheme.surface.card),
+            submix_active: hex(&scheme.surface.card_active),
+            tab_face: hex(&scheme.control.tab_face),
+            border: hex(&scheme.surface.border),
+            text_primary: hex(&scheme.text.primary),
+            text_sec: hex(&scheme.text.secondary),
+            knob_face: hex(&scheme.control.knob_face),
+            knob_border: hex(&scheme.control.knob_border),
+            mute: hex(&scheme.accent.mute),
+            solo: hex(&scheme.accent.solo),
+            cue: hex(&scheme.accent.cue),
+            green: hex(&scheme.meter.green),
+            yellow: hex(&scheme.meter.yellow),
+            red: hex(&scheme.meter.red),
+        }
+    }
+}
+
+/// Parse a `#rrggbb` literal.  The loader validates the document, so the
+/// fallback only covers a palette installed before validation.
+fn hex(value: &str) -> Color {
+    match u32::from_str_radix(value.trim_start_matches('#'), 16) {
+        Ok(rgb) => Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8),
+        Err(_) => Color::from_rgb8(0, 0, 0),
+    }
+}
+
+pub fn fader_slot() -> Color {
+    palette().fader_slot
+}
+
+pub fn button_face() -> Color {
+    palette().button_face
+}
+
+pub fn surface() -> Color {
+    palette().surface
+}
+
+pub fn submix_active() -> Color {
+    palette().submix_active
+}
+
+pub fn tab_face() -> Color {
+    palette().tab_face
+}
+
+pub fn border() -> Color {
+    palette().border
+}
+
+pub fn text_primary() -> Color {
+    palette().text_primary
+}
+
+pub fn text_sec() -> Color {
+    palette().text_sec
+}
+
+pub fn knob_face() -> Color {
+    palette().knob_face
+}
+
+pub fn knob_border() -> Color {
+    palette().knob_border
+}
+
+pub fn mute_color() -> Color {
+    palette().mute
+}
+
+pub fn solo_color() -> Color {
+    palette().solo
+}
+
+pub fn cue_color() -> Color {
+    palette().cue
+}
+
+pub fn mgreen() -> Color {
+    palette().green
+}
+
+pub fn mred() -> Color {
+    palette().red
+}
+
+pub fn ysim() -> Color {
+    palette().yellow
+}
+
+/// Band identity in the EQ panel, matching the three columns and their
+/// handles in the response plot.
+pub fn eq_band() -> [Color; 3] {
+    [mred(), mgreen(), mute_color()]
+}
+
+pub fn bg_deep() -> Color {
+    palette().bg_deep
+}
+
 /// Hover surface for controls and strips.
 pub const SURFACE_HI: Color = Color::from_rgb8(0x2d, 0x2e, 0x33);
-/// Active input, playback, and selected output strip surface.
-pub const SUBMIX_ACTIVE: Color = Color::from_rgb8(0x3a, 0x3b, 0x42);
-/// VU well on a normal strip: one shade below `SURFACE`, not a black cut-out.
+/// VU well on a normal strip: one shade below `surface()`, not a black cut-out.
 pub const METER_WELL: Color = Color::from_rgb8(0x1e, 0x1f, 0x23);
 /// VU well on an active input/playback strip: one shade below
-/// `SUBMIX_ACTIVE`.
+/// `submix_active()`.
 pub const METER_WELL_ACTIVE: Color = Color::from_rgb8(0x33, 0x34, 0x3a);
-/// Slideout-tab face when its panel is open.
-pub const SURFACE_LOW: Color = Color::from_rgb8(0x20, 0x21, 0x26);
 /// Slideout-tab face on hover: lighter than the open face, still darker
 /// than the channel surface.
 pub const TAB_FACE_HOVER: Color = Color::from_rgb8(0x22, 0x23, 0x28);
 /// VU scale labels: one step below the primary text tone.
 pub const VU_LABEL: Color = Color::from_rgb8(0xd5, 0xd6, 0xda);
-/// Hairlines and card borders.
-pub const BORDER: Color = Color::from_rgb8(0x36, 0x37, 0x3d);
-/// The mark's white, softened a touch for body text.
-pub const TEXT_PRIMARY: Color = Color::from_rgb8(0xf2, 0xf3, 0xf5);
-/// The mark's own silver (`#b4b4b4` in the icon's gradient), dimmed one
-/// step: labels, secondary text, inactive controls.
-pub const TEXT_SEC: Color = Color::from_rgb8(0xa3, 0xa5, 0xab);
 /// "Engaged": every lit toggle, the selected strip's border, the section
-/// ticks, the active nav pill. It is the icon's own white, so the
-/// loudest state on screen is always the same color as the mark.
+/// ticks, the active nav pill.
 pub const ACCENT: Color = Color::from_rgb8(0xf2, 0xf3, 0xf5);
 /// Quiet selected fill (menu highlight, text selection, the lit side of
 /// a sidebar switch): a graphite step, not a hue.
 pub const ACCENT_DIM: Color = Color::from_rgb8(0x37, 0x38, 0x3e);
-/// Fader cap and rail silver, from the icon's highlight (#d9d9d9
-/// family): the brightest neutral in the chrome.
+/// Fader cap and rail silver, from the icon's highlight: the brightest
+/// neutral in the chrome.
 pub const FADER: Color = Color::from_rgb8(0xc9, 0xcb, 0xd1);
 
-/// The filled part of a channel fader slot: only a little lighter than the
-/// channel card, so the level is visible without a bright white rail.
+/// The filled part of a channel fader slot: the card blended a step toward
+/// the cap, so it stays visible on both the normal and the active surface.
 pub fn fader_fill(active_surface: bool) -> Color {
     let base = if active_surface {
-        SUBMIX_ACTIVE
+        submix_active()
     } else {
-        SURFACE
+        surface()
     };
     blend(base, FADER, 0.12)
 }
-pub const MGREEN: Color = Color::from_rgb8(0x3d, 0xd6, 0x8c);
-pub const MRED: Color = Color::from_rgb8(0xe5, 0x48, 0x4d);
 /// 48V uses its own orange so phantom power is distinct from the
 /// white "engaged" toggles around it.
 pub const PHANTOM: Color = Color::from_rgb8(0xff, 0x9f, 0x43);
 pub const GCONN: Color = Color::from_rgb8(0x3d, 0xd6, 0x8c);
-/// Amber: attention without alarm - the Simulated / Class Compliant
-/// chip, solo, warnings that are not failures.
-pub const YSIM: Color = Color::from_rgb8(0xf0, 0xb4, 0x29);
-pub const MUTE_COLOR: Color = Color::from_rgb8(0x3d, 0x9d, 0xf6);
 
 /// Knob-rim colours: a shade under the button accents, so the arc reads as a
 /// colour against a dark strip instead of washing out next to the value text.
 pub const KNOB_BLUE: Color = Color::from_rgb8(0x2f, 0x7a, 0xc4);
-/// The knob's face: a step darker than `SURFACE`, so the rim and arc read as
-/// colour on the strip card instead of merging into it.
-pub const KNOB_FACE: Color = Color::from_rgb8(0x1a, 0x1b, 0x1f);
 pub const KNOB_GREEN: Color = Color::from_rgb8(0x2f, 0xa8, 0x6e);
-/// Band identity in the EQ panel, matching the three columns and their
-/// handles in the response plot. These reuse the palette's red/green/
-/// azure, but inside the EQ they mean band 1/2/3, not clip/signal/mute.
-pub const EQ_BAND: [Color; 3] = [MRED, MGREEN, MUTE_COLOR];
-pub const SOLO_COLOR: Color = Color::from_rgb8(0xf0, 0xb4, 0x29);
-/// Cue is the green member of the M/S/CUE outline family.
-pub const CUE_COLOR: Color = MGREEN;
 /// Text on an engaged (white) toggle and on the active nav pill: the
 /// near-black of the tile behind the mark.
 pub const ON_ACTIVE: Color = Color::from_rgb8(0x10, 0x10, 0x12);
@@ -206,16 +310,16 @@ pub const TOP_BAR_H: f32 = 48.0;
 /// width offset.  The outer surface still separates it from the window.
 pub fn panel_attached(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(SURFACE)),
+        background: Some(Background::Color(surface())),
         // Invisible border (same colour as the background) but the radius
         // still shapes the surface, giving the slideout the channel strips'
         // rounded top corners without drawing a line at the tab join.
         border: Border {
-            color: SURFACE,
+            color: surface(),
             width: 1.0,
             radius: RADIUS_MD.into(),
         },
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         shadow: Shadow::default(),
         snap: false,
     }
@@ -223,13 +327,13 @@ pub fn panel_attached(_theme: &iced::Theme) -> container::Style {
 
 pub fn panel(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(SURFACE)),
+        background: Some(Background::Color(surface())),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_MD.into(),
         },
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         shadow: Shadow::default(),
         snap: false,
     }
@@ -240,9 +344,9 @@ pub fn panel(_theme: &iced::Theme) -> container::Style {
 /// surface without adding a control today.
 pub fn display_face(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(BUTTON_FACE)),
+        background: Some(Background::Color(button_face())),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
@@ -255,7 +359,7 @@ pub fn empty_slot(_theme: &iced::Theme) -> container::Style {
     container::Style {
         background: None,
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
@@ -270,7 +374,7 @@ pub fn empty_slot(_theme: &iced::Theme) -> container::Style {
 pub fn fx_header(_theme: &iced::Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(SURFACE_HI)),
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         ..container::Style::default()
     }
 }
@@ -279,25 +383,25 @@ pub fn fx_header(_theme: &iced::Theme) -> container::Style {
 /// knobs sit in a well rather than on the same surface as the title.
 pub fn fx_controls(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(blend(SURFACE, BG_DEEP, 0.45))),
-        text_color: Some(TEXT_PRIMARY),
+        background: Some(Background::Color(blend(surface(), bg_deep(), 0.45))),
+        text_color: Some(text_primary()),
         ..container::Style::default()
     }
 }
 
 pub fn overload(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(MRED)),
+        background: Some(Background::Color(mred())),
         ..container::Style::default()
     }
 }
 
 pub fn fx_meter(_theme: &iced::Theme) -> progress_bar::Style {
     progress_bar::Style {
-        background: Background::Color(BG_DEEP),
-        bar: Background::Color(MGREEN),
+        background: Background::Color(bg_deep()),
+        bar: Background::Color(mgreen()),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
@@ -309,13 +413,13 @@ pub fn fx_meter(_theme: &iced::Theme) -> progress_bar::Style {
 /// into it. First user: the About modal (`about::about_modal`).
 pub fn dialog(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(SURFACE)),
+        background: Some(Background::Color(surface())),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_MD.into(),
         },
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         shadow: Shadow {
             color: Color {
                 a: 0.55,
@@ -378,7 +482,7 @@ pub fn strip_panel(
         let base = panel(theme);
         let base = match tint {
             Some(t) => container::Style {
-                background: Some(Background::Color(blend(SURFACE, t, STRIP_TINT_AMOUNT))),
+                background: Some(Background::Color(blend(surface(), t, STRIP_TINT_AMOUNT))),
                 ..base
             },
             None => base,
@@ -389,9 +493,9 @@ pub fn strip_panel(
         // the accent border used for a Ctrl/Shift multi-selection.
         let base = if active_surface {
             container::Style {
-                background: Some(Background::Color(SUBMIX_ACTIVE)),
+                background: Some(Background::Color(submix_active())),
                 border: Border {
-                    color: blend(BORDER, FADER, 0.35),
+                    color: blend(border(), FADER, 0.35),
                     ..base.border
                 },
                 ..base
@@ -428,7 +532,7 @@ pub fn strip_panel(
     }
 }
 
-/// A flat `BG_DEEP` read as an undifferentiated slab under the strip
+/// A flat `bg_deep()` read as an undifferentiated slab under the strip
 /// cards. A barely-there top-to-bottom falloff (a few percent of white
 /// blended in at the top, gone entirely by the bottom) reads as soft
 /// ambient light instead — the same trick most DAW backgrounds use — without
@@ -442,23 +546,23 @@ pub fn root(_theme: &iced::Theme) -> container::Style {
     // — a `FRAC_PI_2` first attempt rendered as a (barely visible,
     // near-flat) *horizontal* gradient instead.
     let gradient = Linear::new(std::f32::consts::PI)
-        .add_stop(0.0, blend(BG_DEEP, Color::WHITE, 0.035))
-        .add_stop(1.0, BG_DEEP);
+        .add_stop(0.0, blend(bg_deep(), Color::WHITE, 0.035))
+        .add_stop(1.0, bg_deep());
     container::Style {
         background: Some(Background::from(gradient)),
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         ..container::Style::default()
     }
 }
 
-/// Slightly darker than `SURFACE` (the strip-card background) — previously
+/// Slightly darker than `surface()` (the strip-card background) — previously
 /// identical, which flattened the top bar and the mixer strips into one
-/// undifferentiated slab. Receding it toward `BG_DEEP` reads as a frame the
+/// undifferentiated slab. Receding it toward `bg_deep()` reads as a frame the
 /// strip cards sit in front of, without introducing a third named color.
 pub fn top_bar(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(blend(SURFACE, BG_DEEP, 0.45))),
-        text_color: Some(TEXT_PRIMARY),
+        background: Some(Background::Color(blend(surface(), bg_deep(), 0.45))),
+        text_color: Some(text_primary()),
         ..container::Style::default()
     }
 }
@@ -485,15 +589,15 @@ pub fn db_slider(
     _theme: &iced::Theme,
     _status: slider::Status,
 ) -> slider::Style {
-    let fill = Background::Color(TEXT_PRIMARY);
+    let fill = Background::Color(text_primary());
     slider::Style {
         rail: Rail {
             // The empty part is the same near-black slot as a channel
             // fader; the filled part and handle carry the white chrome.
-            backgrounds: (Background::Color(BG_DEEP), fill),
+            backgrounds: (Background::Color(bg_deep()), fill),
             width: 6.0,
             border: Border {
-                color: BG_DEEP,
+                color: bg_deep(),
                 width: 0.0,
                 radius: RADIUS_SM.into(),
             },
@@ -502,7 +606,7 @@ pub fn db_slider(
             shape: HandleShape::Circle { radius: 8.0 },
             background: fill,
             border_width: 0.0,
-            border_color: TEXT_PRIMARY,
+            border_color: text_primary(),
         },
     }
 }
@@ -517,18 +621,18 @@ fn outline_toggle(
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let pressed = matches!(status, button::Status::Pressed);
-        let mut background = if hovered { SURFACE_HI } else { BUTTON_FACE };
+        let mut background = if hovered { SURFACE_HI } else { button_face() };
         if pressed {
             background = blend(background, Color::BLACK, PRESS_DARKEN);
         }
         button::Style {
             background: Some(Background::Color(background)),
             text_color: if matches!(status, button::Status::Disabled) {
-                Color { a: 0.4, ..TEXT_SEC }
+                Color { a: 0.4, ..text_sec() }
             } else if active {
                 color
             } else {
-                TEXT_SEC
+                text_sec()
             },
             border: Border {
                 color: if active {
@@ -536,7 +640,7 @@ fn outline_toggle(
                 } else if hovered {
                     FADER
                 } else {
-                    BORDER
+                    border()
                 },
                 width: 1.0,
                 radius: RADIUS_SM.into(),
@@ -558,7 +662,7 @@ pub fn phantom_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
 /// and border turn green while the face stays dark, so a phase-inverted
 /// channel reads as a signal-state warning rather than another bright pill.
 pub fn phase_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    outline_toggle(active, MGREEN)
+    outline_toggle(active, mgreen())
 }
 
 /// The STEREO link switch uses the same orange outline as the 48 V switch
@@ -569,7 +673,7 @@ pub fn stereo_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> b
 
 /// CUE uses the same outline language as Stereo, in green.
 pub fn cue_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    outline_toggle(active, CUE_COLOR)
+    outline_toggle(active, cue_color())
 }
 
 /// `stereo_button` with a locked form.  A Control Room channel's pair is
@@ -609,7 +713,7 @@ pub fn panel_tab(active: bool, lit: bool) -> impl Fn(&iced::Theme, button::Statu
         let background = if hovered {
             Some(Background::Color(TAB_FACE_HOVER))
         } else if active {
-            Some(Background::Color(SURFACE_LOW))
+            Some(Background::Color(tab_face()))
         } else {
             None
         };
@@ -619,9 +723,9 @@ pub fn panel_tab(active: bool, lit: bool) -> impl Fn(&iced::Theme, button::Statu
             text_color: if lit {
                 PHANTOM
             } else if hovered || active {
-                TEXT_PRIMARY
+                text_primary()
             } else {
-                TEXT_SEC
+                text_sec()
             },
             // No border: the active tab's surface must merge with the
             // borderless attached panel it opens.
@@ -647,15 +751,15 @@ pub fn armed_toggle_button(
     move |theme, status| {
         if armed && !active {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let mut background = blend(BG_DEEP, active_color, if hovered { 0.28 } else { 0.18 });
+            let mut background = blend(bg_deep(), active_color, if hovered { 0.28 } else { 0.18 });
             if matches!(status, button::Status::Pressed) {
                 background = blend(background, Color::BLACK, PRESS_DARKEN);
             }
             return button::Style {
                 background: Some(Background::Color(background)),
-                text_color: blend(TEXT_SEC, active_color, 0.65),
+                text_color: blend(text_sec(), active_color, 0.65),
                 border: Border {
-                    color: blend(BORDER, active_color, 0.6),
+                    color: blend(border(), active_color, 0.6),
                     width: 1.0,
                     radius: RADIUS_SM.into(),
                 },
@@ -680,15 +784,15 @@ pub fn armed_outline_toggle(
         if armed && !active {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let mut background =
-                blend(BUTTON_FACE, active_color, if hovered { 0.28 } else { 0.18 });
+                blend(button_face(), active_color, if hovered { 0.28 } else { 0.18 });
             if matches!(status, button::Status::Pressed) {
                 background = blend(background, Color::BLACK, PRESS_DARKEN);
             }
             return button::Style {
                 background: Some(Background::Color(background)),
-                text_color: blend(TEXT_SEC, active_color, 0.65),
+                text_color: blend(text_sec(), active_color, 0.65),
                 border: Border {
-                    color: blend(BORDER, active_color, 0.6),
+                    color: blend(border(), active_color, 0.6),
                     width: 1.0,
                     radius: RADIUS_SM.into(),
                 },
@@ -714,7 +818,7 @@ fn plain_toggle(
     } else if hovered {
         SURFACE_HI
     } else {
-        BUTTON_FACE
+        button_face()
     };
     if pressed {
         background = blend(background, Color::BLACK, PRESS_DARKEN);
@@ -724,7 +828,7 @@ fn plain_toggle(
     } else if hovered {
         FADER
     } else {
-        BORDER
+        border()
     };
     let shadow = if active {
         Shadow {
@@ -748,11 +852,11 @@ fn plain_toggle(
         // personality has no RME-protocol features). Before this they
         // rendered as live toggles that simply never lit.
         text_color: if matches!(status, button::Status::Disabled) {
-            Color { a: 0.4, ..TEXT_SEC }
+            Color { a: 0.4, ..text_sec() }
         } else if active {
             ON_ACTIVE
         } else {
-            TEXT_SEC
+            text_sec()
         },
         border: Border {
             color: border_color,
@@ -796,7 +900,7 @@ pub fn tab_toggle(active: bool) -> impl Fn(&iced::Theme, button::Status) -> butt
         };
         button::Style {
             background: Some(Background::Color(background)),
-            text_color: if active { ON_ACTIVE } else { TEXT_SEC },
+            text_color: if active { ON_ACTIVE } else { text_sec() },
             border: Border {
                 radius: RADIUS_SM.into(),
                 ..Border::default()
@@ -828,11 +932,11 @@ pub fn segment_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
         let background = if active {
             SURFACE_HI
         } else if hovered {
-            SURFACE
+            surface()
         } else {
-            BUTTON_FACE
+            button_face()
         };
-        let border_color = if active || hovered { FADER } else { BORDER };
+        let border_color = if active || hovered { FADER } else { border() };
 
         button::Style {
             background: Some(Background::Color(if pressed {
@@ -840,7 +944,7 @@ pub fn segment_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
             } else {
                 background
             })),
-            text_color: if active { TEXT_PRIMARY } else { TEXT_SEC },
+            text_color: if active { text_primary() } else { text_sec() },
             border: Border {
                 color: border_color,
                 width: 1.0,
@@ -858,9 +962,9 @@ pub fn segment_button(active: bool) -> impl Fn(&iced::Theme, button::Status) -> 
 /// unrelated pills.
 pub fn segment_track(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(BG_DEEP)),
+        background: Some(Background::Color(bg_deep())),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
@@ -879,7 +983,7 @@ pub fn segment_cell(active: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
         let background = if active {
             SURFACE_HI
         } else if hovered {
-            SURFACE
+            surface()
         } else {
             Color::TRANSPARENT
         };
@@ -893,12 +997,12 @@ pub fn segment_cell(active: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
             // disabled control, so a switch that cannot act does not look
             // like one that just did nothing.
             text_color: match (status, active) {
-                (button::Status::Disabled, _) => Color { a: 0.4, ..TEXT_SEC },
-                (_, true) => TEXT_PRIMARY,
-                (_, false) => TEXT_SEC,
+                (button::Status::Disabled, _) => Color { a: 0.4, ..text_sec() },
+                (_, true) => text_primary(),
+                (_, false) => text_sec(),
             },
             border: Border {
-                color: if active { BORDER } else { Color::TRANSPARENT },
+                color: if active { border() } else { Color::TRANSPARENT },
                 width: 1.0,
                 radius: (RADIUS_SM - 2.0).into(),
             },
@@ -912,13 +1016,13 @@ pub fn plain_button(_theme: &iced::Theme, status: button::Status) -> button::Sty
     let bg = match status {
         button::Status::Pressed => blend(SURFACE_HI, Color::BLACK, PRESS_DARKEN),
         button::Status::Hovered => SURFACE_HI,
-        _ => SURFACE,
+        _ => surface(),
     };
     button::Style {
         background: Some(Background::Color(bg)),
-        text_color: TEXT_PRIMARY,
+        text_color: text_primary(),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
@@ -935,8 +1039,8 @@ pub fn header_button(_theme: &iced::Theme, status: button::Status) -> button::St
     button::Style {
         background: None,
         text_color: match status {
-            button::Status::Hovered | button::Status::Pressed => TEXT_PRIMARY,
-            _ => TEXT_SEC,
+            button::Status::Hovered | button::Status::Pressed => text_primary(),
+            _ => text_sec(),
         },
         border: Border::default(),
         shadow: Shadow::default(),
@@ -950,15 +1054,15 @@ pub fn chip_button(open: bool) -> impl Fn(&iced::Theme, button::Status) -> butto
     move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let background = match status {
-            button::Status::Pressed => blend(BUTTON_FACE, Color::BLACK, PRESS_DARKEN),
-            button::Status::Hovered => blend(BUTTON_FACE, SURFACE_HI, 0.5),
-            _ => BUTTON_FACE,
+            button::Status::Pressed => blend(button_face(), Color::BLACK, PRESS_DARKEN),
+            button::Status::Hovered => blend(button_face(), SURFACE_HI, 0.5),
+            _ => button_face(),
         };
         button::Style {
             background: Some(Background::Color(background)),
-            text_color: TEXT_PRIMARY,
+            text_color: text_primary(),
             border: Border {
-                color: if open || hovered { FADER } else { BORDER },
+                color: if open || hovered { FADER } else { border() },
                 width: 1.0,
                 radius: RADIUS_MD.into(),
             },
@@ -983,15 +1087,15 @@ pub fn chip_button(open: bool) -> impl Fn(&iced::Theme, button::Status) -> butto
 pub fn ghost_button(_theme: &iced::Theme, status: button::Status) -> button::Style {
     let (background, text_color) = match status {
         button::Status::Pressed => (
-            Background::Color(blend(SURFACE, Color::BLACK, PRESS_DARKEN)),
-            TEXT_PRIMARY,
+            Background::Color(blend(surface(), Color::BLACK, PRESS_DARKEN)),
+            text_primary(),
         ),
-        button::Status::Hovered => (Background::Color(SURFACE_HI), TEXT_PRIMARY),
+        button::Status::Hovered => (Background::Color(SURFACE_HI), text_primary()),
         button::Status::Disabled => (
             Background::Color(Color::TRANSPARENT),
-            Color { a: 0.4, ..TEXT_SEC },
+            Color { a: 0.4, ..text_sec() },
         ),
-        _ => (Background::Color(Color::TRANSPARENT), TEXT_SEC),
+        _ => (Background::Color(Color::TRANSPARENT), text_sec()),
     };
     button::Style {
         background: Some(background),
@@ -1024,13 +1128,13 @@ pub fn accent_bar(_theme: &iced::Theme) -> container::Style {
 /// unused bottom margin of its knob.
 pub fn label_backdrop(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(SURFACE)),
+        background: Some(Background::Color(surface())),
         border: Border {
-            color: Color { a: 0.0, ..SURFACE },
+            color: Color { a: 0.0, ..surface() },
             width: 0.0,
             radius: 2.0.into(),
         },
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         shadow: Shadow::default(),
         snap: false,
     }
@@ -1038,13 +1142,13 @@ pub fn label_backdrop(_theme: &iced::Theme) -> container::Style {
 
 pub fn chip(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(BG_DEEP)),
+        background: Some(Background::Color(bg_deep())),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_MD.into(),
         },
-        text_color: Some(TEXT_PRIMARY),
+        text_color: Some(text_primary()),
         shadow: Shadow::default(),
         snap: false,
     }
@@ -1057,18 +1161,18 @@ pub fn text_input(
     use iced::widget::text_input::Status;
     let border_color = match status {
         Status::Focused { .. } => ACCENT,
-        _ => BORDER,
+        _ => border(),
     };
     iced::widget::text_input::Style {
-        background: Background::Color(SURFACE),
+        background: Background::Color(surface()),
         border: Border {
             color: border_color,
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
-        icon: TEXT_SEC,
-        placeholder: TEXT_SEC,
-        value: TEXT_PRIMARY,
+        icon: text_sec(),
+        placeholder: text_sec(),
+        value: text_primary(),
         selection: ACCENT_DIM,
     }
 }
@@ -1080,13 +1184,13 @@ pub fn pick_list(
     use iced::widget::pick_list::Status;
     let border_color = match status {
         Status::Opened { .. } | Status::Hovered => FADER,
-        Status::Active => BORDER,
+        Status::Active => border(),
     };
     iced::widget::pick_list::Style {
-        text_color: TEXT_PRIMARY,
-        placeholder_color: TEXT_SEC,
-        handle_color: TEXT_SEC,
-        background: Background::Color(SURFACE),
+        text_color: text_primary(),
+        placeholder_color: text_sec(),
+        handle_color: text_sec(),
+        background: Background::Color(surface()),
         border: Border {
             color: border_color,
             width: 1.0,
@@ -1157,7 +1261,7 @@ pub fn scrollable(
         background: Some(Background::Color(Color::TRANSPARENT)),
         border: Border::default(),
         scroller: Scroller {
-            background: Background::Color(if active { FADER } else { BORDER }),
+            background: Background::Color(if active { FADER } else { border() }),
             border: Border {
                 radius: RADIUS_SM.into(),
                 ..Border::default()
@@ -1171,24 +1275,24 @@ pub fn scrollable(
         horizontal_rail: rail(h_active),
         gap: None,
         auto_scroll: AutoScroll {
-            background: Background::Color(SURFACE),
+            background: Background::Color(surface()),
             border: Border::default(),
             shadow: Shadow::default(),
-            icon: TEXT_PRIMARY,
+            icon: text_primary(),
         },
     }
 }
 
 pub fn menu(_theme: &iced::Theme) -> menu::Style {
     menu::Style {
-        background: Background::Color(SURFACE),
+        background: Background::Color(surface()),
         border: Border {
-            color: BORDER,
+            color: border(),
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
-        text_color: TEXT_PRIMARY,
-        selected_text_color: TEXT_PRIMARY,
+        text_color: text_primary(),
+        selected_text_color: text_primary(),
         selected_background: Background::Color(ACCENT_DIM),
         shadow: Shadow::default(),
     }

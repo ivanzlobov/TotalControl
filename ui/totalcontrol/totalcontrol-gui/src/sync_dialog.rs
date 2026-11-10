@@ -34,7 +34,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
     for item in &mismatch.items {
         differences = differences.push(
             text(format!("• {item}"))
-                .color(theme::TEXT_PRIMARY)
+                .color(theme::text_primary())
                 .size(text_size),
         );
     }
@@ -56,14 +56,14 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
         container(
             column![
                 text("Mismatch detected")
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
                 text(if ucx {
                     "The device and TotalControl mixer states are different."
                 } else {
                     "Channel and FX settings of the device and TotalControl are different."
                 })
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(text_size),
                 differences,
                 text(if ucx {
@@ -78,7 +78,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                      Choosing Device -> TotalControl applies the readable values; the matrix, \
                      faders and loopback stay at the TotalControl scene."
                 })
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(text_size),
                 row![
                     button(
@@ -97,7 +97,7 @@ pub fn mismatch_modal(state: &TotalControl) -> Element<'_, Message> {
                 .align_y(Alignment::Center),
                 button(
                     text("Always use TotalControl settings and do not ask again")
-                        .color(theme::TEXT_SEC)
+                        .color(theme::text_sec())
                         .size(text_size)
                 )
                 .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])

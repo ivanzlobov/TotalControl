@@ -3092,6 +3092,7 @@ pub fn new_with_device(
     if let Some(error) = layout_error {
         eprintln!("layout: {error}; using the built-in layout");
     }
+    crate::theme::install_palette(layout.colors.clone());
 
     let state = TotalControl {
         device,
@@ -10926,12 +10927,12 @@ fn disconnected_banner(state: &TotalControl) -> Element<'_, Message> {
         .to_string();
     container(
         row![
-            text("\u{25CF}").size(theme::TEXT_XS * scale).color(theme::MRED),
+            text("\u{25CF}").size(theme::TEXT_XS * scale).color(theme::mred()),
             text(format!(
                 "{model} is disconnected. TotalControl reconnects on its own and restores the mix when it is back."
             ))
             .size(theme::TEXT_SM * scale)
-            .color(theme::TEXT_PRIMARY),
+            .color(theme::text_primary()),
         ]
         .spacing(theme::SPACE_MD * scale)
         .align_y(iced::Alignment::Center),
@@ -10940,8 +10941,8 @@ fn disconnected_banner(state: &TotalControl) -> Element<'_, Message> {
     .width(Length::Fill)
     .style(|_theme: &iced::Theme| container::Style {
         background: Some(iced::Background::Color(theme::blend(
-            theme::SURFACE,
-            theme::MRED,
+            theme::surface(),
+            theme::mred(),
             0.22,
         ))),
         ..container::Style::default()
@@ -10961,10 +10962,10 @@ fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let header = row![
         text("OSC DEBUG LOG")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(theme::TEXT_SM * scale),
         text(format!("{} lines", state.osc_log.len()))
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(theme::TEXT_XS * scale),
         iced::widget::Space::new().width(Length::Fill),
         iced::widget::button(text("Clear").size(theme::TEXT_XS * scale))
@@ -10981,7 +10982,7 @@ fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let body: Element<'_, Message> = if state.osc_log.is_empty() {
         text("No OSC traffic yet.")
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(theme::TEXT_XS * scale)
             .into()
     } else {
@@ -10990,7 +10991,7 @@ fn osc_log_panel(state: &TotalControl) -> Element<'_, Message> {
             lines = lines.push(
                 text(line.clone())
                     .font(iced::Font::MONOSPACE)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .size(theme::TEXT_XS * scale),
             );
         }
@@ -11064,7 +11065,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
             text(label)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
@@ -11075,7 +11076,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let header = row![
         text("Settings")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(text_size),
         iced::widget::Space::new().width(Length::Fill),
         iced::widget::button(text("Close").size(text_size))
@@ -11116,7 +11117,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
             column![
                 k,
                 text(label)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .size(text_size),
             ]
             .spacing(theme::SPACE_SM * scale)
@@ -11133,7 +11134,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     range: (-5.0, 5.0),
                     label: format!("{:+.1}%", settings.pitch_percent),
                     arc_from_center: true,
-                    level_arc_color: Some(theme::TEXT_PRIMARY),
+                    level_arc_color: Some(theme::text_primary()),
                     interactive: true,
                     log_scale: false,
                     modifiers,
@@ -11151,7 +11152,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                     range: (-1.0, 1.0),
                     label: format!("{:+.2}", settings.width),
                     arc_from_center: true,
-                    level_arc_color: Some(theme::TEXT_PRIMARY),
+                    level_arc_color: Some(theme::text_primary()),
                     interactive: true,
                     log_scale: false,
                     modifiers,
@@ -11221,7 +11222,7 @@ fn device_panel(state: &TotalControl) -> Element<'_, Message> {
                  strips drop EQ, Trim, Phase \u{00d8}, Split and Loopback for the \
                  same reason.",
             )
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size),
         );
     }
@@ -11313,7 +11314,7 @@ fn notice_toast(message: &str, scale: f32) -> Element<'_, Message> {
         container(
             text(message.to_string())
                 .size(theme::TEXT_SM * scale)
-                .color(theme::TEXT_PRIMARY),
+                .color(theme::text_primary()),
         )
         .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
         .style(theme::dialog),
@@ -11377,10 +11378,10 @@ fn workspace_confirm_modal(state: &TotalControl) -> Element<'_, Message> {
     let body = column![
         text(title)
             .size(theme::TEXT_XL * scale)
-            .color(theme::TEXT_PRIMARY),
+            .color(theme::text_primary()),
         text("Loading a workspace will overwrite the current workspace.")
             .size(theme::TEXT_DIALOG * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
         row![
             iced::widget::button(text("Cancel").size(theme::TEXT_DIALOG * scale))
                 .padding([theme::SPACE_SM * scale, theme::SPACE_LG * scale])
@@ -11480,7 +11481,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     let text_size = theme::TEXT_DIALOG * scale;
     let section = |label: &'static str| {
         row![
-            text(label).color(theme::TEXT_SEC).size(text_size),
+            text(label).color(theme::text_sec()).size(text_size),
             iced::widget::rule::horizontal(1),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -11499,11 +11500,11 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
     };
     let help = |text_value: &'static str| {
         text(text_value)
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size)
     };
     let header = text("TotalControl settings")
-        .color(theme::TEXT_PRIMARY)
+        .color(theme::text_primary())
         .size(text_size);
 
     let mut background = column![section("BACKGROUND")]
@@ -11538,7 +11539,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         sync = sync.push(
             row![
                 text("On first connect")
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
                 radio_choice(
                     "Device → GUI",
@@ -11580,14 +11581,14 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
 
     let osc_ports = row![
         text("Receive port")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(text_size),
         text_input("9000", &state.osc_recv_text)
             .on_input(Message::OscRecvPortChanged)
             .width(Length::Fixed(90.0 * scale))
             .size(text_size),
         text("Send port")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(text_size),
         text_input("9001", &state.osc_send_text)
             .on_input(Message::OscSendPortChanged)
@@ -11620,7 +11621,7 @@ fn settings_panel(state: &TotalControl) -> Element<'_, Message> {
         },
         row![
             text("Protocol")
-                .color(theme::TEXT_PRIMARY)
+                .color(theme::text_primary())
                 .size(text_size),
             radio_choice(
                 "Classic",
@@ -11757,7 +11758,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let section = |label: &'static str| -> Element<'static, Message> {
         row![
             text(label)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(text_size),
             iced::widget::rule::horizontal(1),
         ]
@@ -11767,7 +11768,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     };
     let caption = |label: &'static str| {
         text(label)
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
@@ -11886,7 +11887,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         } else {
             "Read from the unit at connect; written only when changed here."
         })
-        .color(theme::TEXT_SEC)
+        .color(theme::text_sec())
         .size(text_size),
         row![
             caption("Clock source"),
@@ -11911,7 +11912,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                  ADAT channels fall away (14 at 64-96 kHz, 12 at 128-192 kHz) and \
                  the remaining logical channels stay silent.",
             )
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size),
         );
     }
@@ -11964,7 +11965,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Firmware"),
                 text(firmware)
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
@@ -11976,7 +11977,7 @@ fn device_group(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Serial"),
                 text(serial)
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
@@ -11993,7 +11994,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     let text_size = theme::TEXT_DIALOG * scale;
     let caption = |label: &'static str| {
         text(label)
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size)
             .width(Length::Fixed(label_w * scale))
     };
@@ -12003,7 +12004,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         } else {
             "AUDIO ENGINE \u{00b7} PIPEWIRE"
         })
-        .color(theme::TEXT_SEC)
+        .color(theme::text_sec())
         .size(text_size),
         iced::widget::rule::horizontal(1),
     ]
@@ -12017,7 +12018,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
                 "PipeWire is not running: the sample rate and buffer size are \
                  set by whatever opens the card.",
             )
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(text_size),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -12085,7 +12086,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             row![
                 caption("Mode"),
                 text(RATE_MODE_FOLLOW)
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
@@ -12107,7 +12108,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         body = body.push(
             row![
                 caption("Source"),
-                text(source).color(theme::TEXT_PRIMARY).size(text_size),
+                text(source).color(theme::text_primary()).size(text_size),
             ]
             .spacing(theme::SPACE_MD * scale)
             .align_y(iced::Alignment::Center),
@@ -12119,7 +12120,7 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
         row![
             caption("Graph"),
             text(rate_label(current_graph_rate(state)))
-                .color(theme::TEXT_PRIMARY)
+                .color(theme::text_primary())
                 .size(text_size),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -12173,13 +12174,13 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
             ("events", delta.events_dropped.to_string(), delta.events_dropped),
         ] {
             let colour = if bad == 0 {
-                theme::TEXT_SEC
+                theme::text_sec()
             } else {
                 Color::from_rgb8(0xe0, 0x5a, 0x5a)
             };
             body = body.push(
                 row![
-                    text(label).size(text_size).color(theme::TEXT_SEC),
+                    text(label).size(text_size).color(theme::text_sec()),
                     iced::widget::Space::new().width(Length::Fill),
                     text(value).size(text_size).color(colour),
                 ]
@@ -12190,9 +12191,9 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     }
     if let Some((percent, db)) = state.host_volume {
         let colour = if db < -0.5 {
-            theme::YSIM
+            theme::ysim()
         } else {
-            theme::TEXT_PRIMARY
+            theme::text_primary()
         };
         body = body.push(
             row![
@@ -12263,12 +12264,12 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate: card.rate,
                         device_label: "endpoint",
                     };
-                    col = col.push(line(chain.summary(), theme::TEXT_PRIMARY));
-                    col = col.push(line(chain.breakdown(), theme::TEXT_SEC));
+                    col = col.push(line(chain.summary(), theme::text_primary()));
+                    col = col.push(line(chain.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::TEXT_PRIMARY,
+                        theme::text_primary(),
                     ));
                 }
             } else if state.device.is_ucx_model() {
@@ -12281,18 +12282,18 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         graph: card.period,
                         rate: card.rate,
                     };
-                    col = col.push(line(rtl.summary(), theme::TEXT_PRIMARY));
-                    col = col.push(line(rtl.breakdown(), theme::TEXT_SEC));
+                    col = col.push(line(rtl.summary(), theme::text_primary()));
+                    col = col.push(line(rtl.breakdown(), theme::text_sec()));
                 } else {
                     col = col.push(line(
                         ring_text(card.buffer, card.period, card.rate),
-                        theme::TEXT_PRIMARY,
+                        theme::text_primary(),
                     ));
                 }
             } else {
                 col = col.push(line(
                     ring_text(card.buffer, card.period, card.rate),
-                    theme::TEXT_PRIMARY,
+                    theme::text_primary(),
                 ));
             }
             // Only when the user asked for a size and the card ignores it
@@ -12300,7 +12301,7 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
             if clock.force_quantum != 0 && card.period != clock.effective_quantum() {
                 col = col.push(line(
                     "The card keeps its own fixed period.".into(),
-                    theme::YSIM,
+                    theme::ysim(),
                 ));
             }
             col.into()
@@ -12339,13 +12340,13 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         device_label: "endpoint",
                     };
                     return column![
-                        line(chain.summary(), theme::TEXT_PRIMARY),
-                        line(chain.breakdown(), theme::TEXT_SEC),
+                        line(chain.summary(), theme::text_primary()),
+                        line(chain.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
                     .into();
                 }
-                return line(ring_text(buffer, quantum, rate), theme::TEXT_PRIMARY).into();
+                return line(ring_text(buffer, quantum, rate), theme::text_primary()).into();
             }
             if state.device.is_ucx_model() {
                 if let Some(queue) = state.driver_queue {
@@ -12358,17 +12359,17 @@ fn latency_readout(state: &TotalControl, clock: PwClock) -> Element<'_, Message>
                         rate,
                     };
                     return column![
-                        line(rtl.summary(), theme::TEXT_PRIMARY),
-                        line(rtl.breakdown(), theme::TEXT_SEC),
+                        line(rtl.summary(), theme::text_primary()),
+                        line(rtl.breakdown(), theme::text_sec()),
                     ]
                     .spacing(theme::SPACE_TIGHT * scale)
                     .into();
                 }
-                return line(ring_text(buffer, quantum, rate), theme::TEXT_PRIMARY).into();
+                return line(ring_text(buffer, quantum, rate), theme::text_primary()).into();
             }
             line(
                 format!("{:.1} ms per buffer", clock.latency_ms()),
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
             )
             .into()
         }
@@ -12534,7 +12535,7 @@ fn section_header(label: &str, scale: f32) -> Element<'_, Message> {
     row![
         block(),
         text(label)
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(theme::TEXT_MD * scale),
         iced::widget::rule::horizontal(1),
         block(),
@@ -12636,7 +12637,7 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
     let targets_for_pick = targets.clone();
     let session = row![
             text("Device")
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(theme::TEXT_XS * scale),
             pick_list(
                 device_labels,
@@ -12655,7 +12656,7 @@ fn top_bar(state: &TotalControl) -> Element<'_, Message> {
             .padding([theme::SPACE_SM * scale, theme::SPACE_MD * scale])
             .text_size(theme::TEXT_MD * scale),
             text("Submix")
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(theme::TEXT_XS * scale),
             pick_list(
                 out_labels,
@@ -13582,7 +13583,7 @@ fn settings_reference_pick(
     let label = container(
         text(selected_label)
             .size(theme::TEXT_SM * scale)
-            .color(theme::TEXT_PRIMARY),
+            .color(theme::text_primary()),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -13597,7 +13598,7 @@ fn settings_reference_pick(
     let arrow = container(
         text("▾")
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -13785,7 +13786,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 container(
                     text(label)
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                 )
                 .width(Length::Fill)
                 .align_x(iced::Alignment::Center)
@@ -13918,10 +13919,10 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 column![
                     text("gain")
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                     text("dB")
                         .size(theme::TEXT_XS * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                 ]
                 .spacing(0.0)
                 .into(),
@@ -13954,7 +13955,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             settings_knob_row(
                 text("width")
                     .size(theme::TEXT_SM * scale)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .into(),
                 knob(Knob {
                     value,
@@ -13980,10 +13981,10 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 column![
                     text("send")
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                     text("FX")
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                 ]
                 .spacing(0.0)
                 .into(),
@@ -14062,7 +14063,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             settings_knob_row(
                 text("width")
                     .size(theme::TEXT_SM * scale)
-                    .color(theme::TEXT_SEC)
+                    .color(theme::text_sec())
                     .into(),
                 knob(Knob {
                     value,
@@ -14086,10 +14087,10 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
                 column![
                     text("send")
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                     text("FX")
                         .size(theme::TEXT_SM * scale)
-                        .color(theme::TEXT_SEC),
+                        .color(theme::text_sec()),
                 ]
                 .spacing(0.0)
                 .into(),
@@ -14144,7 +14145,7 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             container(
                 text("ref.")
                     .size(theme::TEXT_SM * scale)
-                    .color(theme::TEXT_SEC),
+                    .color(theme::text_sec()),
             )
             .width(Length::Fill)
             .align_x(iced::Alignment::Center)
@@ -14186,10 +14187,10 @@ fn settings_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32
             column![
                 text("return")
                     .size(theme::TEXT_SM * scale)
-                    .color(theme::TEXT_SEC),
+                    .color(theme::text_sec()),
                 text("FX")
                     .size(theme::TEXT_SM * scale)
-                    .color(theme::TEXT_SEC),
+                    .color(theme::text_sec()),
             ]
             .spacing(0.0)
             .into(),
@@ -14457,7 +14458,7 @@ fn dynamics_popover(
                 Some("gain"),
                 theme::KNOB_LABEL_GAP,
                 false,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.gain_db,
                 (-30.0, 30.0),
                 format!("{:+.1}", d.gain_db),
@@ -14468,7 +14469,7 @@ fn dynamics_popover(
                 Some("attack"),
                 theme::KNOB_LABEL_GAP,
                 false,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.attack_ms as f32,
                 (0.0, 200.0),
                 format!("{}", d.attack_ms),
@@ -14479,7 +14480,7 @@ fn dynamics_popover(
                 Some("release"),
                 theme::KNOB_LABEL_GAP,
                 false,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.release_ms as f32,
                 (100.0, 999.0),
                 format!("{}", d.release_ms),
@@ -14513,8 +14514,8 @@ fn dynamics_popover(
     comp_exp = comp_exp.push(
         row![
             blank(),
-            heading("compressor", theme::MRED),
-            heading("expander", theme::MGREEN),
+            heading("compressor", theme::mred()),
+            heading("expander", theme::mgreen()),
         ]
         .spacing(theme::SPACE_TIGHT * scale)
         .width(Length::Fill),
@@ -14522,8 +14523,8 @@ fn dynamics_popover(
     let row_label = |top: &'static str, bottom: &'static str| -> Element<'static, Message> {
         container(
             column![
-                text(top).size(theme::TEXT_XS * scale).color(theme::TEXT_SEC),
-                text(bottom).size(theme::TEXT_XS * scale).color(theme::TEXT_SEC),
+                text(top).size(theme::TEXT_XS * scale).color(theme::text_sec()),
+                text(bottom).size(theme::TEXT_XS * scale).color(theme::text_sec()),
             ]
             .width(Length::Fill),
         )
@@ -14538,7 +14539,7 @@ fn dynamics_popover(
                 None,
                 0.0,
                 false,
-                theme::MRED,
+                theme::mred(),
                 d.comp_threshold_db,
                 (-60.0, 0.0),
                 format!("{:.1}", d.comp_threshold_db),
@@ -14549,7 +14550,7 @@ fn dynamics_popover(
                 None,
                 0.0,
                 false,
-                theme::MGREEN,
+                theme::mgreen(),
                 d.exp_threshold_db,
                 (-99.0, -30.0),
                 format!("{:.1}", d.exp_threshold_db),
@@ -14566,7 +14567,7 @@ fn dynamics_popover(
             container(
                 text("ratio 1:")
                     .size(theme::TEXT_XS * scale)
-                    .color(theme::TEXT_SEC),
+                    .color(theme::text_sec()),
             )
             .width(Length::Fill)
             .align_x(iced::Alignment::Start),
@@ -14574,7 +14575,7 @@ fn dynamics_popover(
                 None,
                 0.0,
                 false,
-                theme::MRED,
+                theme::mred(),
                 d.comp_ratio,
                 (1.0, 10.0),
                 format!("{:.1}", d.comp_ratio),
@@ -14585,7 +14586,7 @@ fn dynamics_popover(
                 None,
                 0.0,
                 false,
-                theme::MGREEN,
+                theme::mgreen(),
                 d.exp_ratio,
                 (1.0, 10.0),
                 format!("{:.1}", d.exp_ratio),
@@ -14608,7 +14609,7 @@ fn dynamics_popover(
                 cid,
                 Dynamics { auto_level: !d.auto_level, ..d }
             )),
-            text("auto level").size(theme::TEXT_XS * scale).color(theme::TEXT_SEC),
+            text("auto level").size(theme::TEXT_XS * scale).color(theme::text_sec()),
             iced::widget::Space::new().width(Length::Fill),
         ]
         .spacing(theme::SPACE_SM * scale)
@@ -14621,7 +14622,7 @@ fn dynamics_popover(
                 Some("max gain"),
                 0.0,
                 true,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.auto_max_gain_db,
                 (0.0, 18.0),
                 format!("{:.1}", d.auto_max_gain_db),
@@ -14632,7 +14633,7 @@ fn dynamics_popover(
                 Some("headroom"),
                 0.0,
                 true,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.auto_headroom_db,
                 (3.0, 12.0),
                 format!("{:.1}", d.auto_headroom_db),
@@ -14643,7 +14644,7 @@ fn dynamics_popover(
                 Some("rise time"),
                 0.0,
                 true,
-                theme::TEXT_PRIMARY,
+                theme::text_primary(),
                 d.auto_rise_s,
                 (0.1, 9.9),
                 format!("{:.1}", d.auto_rise_s),
@@ -14683,13 +14684,13 @@ fn trim_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) ->
     let trim = channel_trim(state, cid);
 
     let col = column![
-        text("Trim").size(theme::TEXT_SM * scale).color(theme::TEXT_SEC),
+        text("Trim").size(theme::TEXT_SM * scale).color(theme::text_sec()),
         container(knob(Knob {
             value: trim,
             range: (-65.0, 0.0),
             label: knob_db_label(trim),
             arc_from_center: false,
-            level_arc_color: Some(theme::TEXT_PRIMARY),
+            level_arc_color: Some(theme::text_primary()),
             interactive: true,
             log_scale: false,
             modifiers,
@@ -14743,7 +14744,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                 .on_press(Message::EqEnabled(cid, !eq.enabled)),
             text(if eq.enabled { "enabled" } else { "bypassed" })
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                .color(theme::text_sec()),
         ]
         .spacing(theme::SPACE_SM * scale)
         .align_y(iced::Alignment::Center),
@@ -14768,7 +14769,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
         container(
             text(content)
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                .color(theme::text_sec()),
         )
         .width(Length::Fixed(label_w))
     };
@@ -14811,7 +14812,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
             _ => ("Off", "Off", EqBandType::Bell),
         };
         let number_color = if b.band_type == EqBandType::Off {
-            theme::EQ_BAND[band]
+            theme::eq_band()[band]
         } else {
             theme::ON_ACTIVE
         };
@@ -14831,7 +14832,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                 .width(Length::Fill)
                 .style(theme::toggle_button(
                     b.band_type != EqBandType::Off,
-                    theme::EQ_BAND[band],
+                    theme::eq_band()[band],
                 ))
                 .on_press(Message::EqBandType(cid, band, next_type)),
                 full,
@@ -14855,7 +14856,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                     range: (-20.0, 20.0),
                     label: format!("{:+.1}", b.gain_db),
                     arc_from_center: true,
-                    level_arc_color: Some(theme::EQ_BAND[band]),
+                    level_arc_color: Some(theme::eq_band()[band]),
                     interactive: true,
                     log_scale: false,
                     modifiers,
@@ -14886,7 +14887,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                     range: (20.0, 20_000.0),
                     label: freq_text(b.freq_hz),
                     arc_from_center: false,
-                    level_arc_color: Some(theme::TEXT_PRIMARY),
+                    level_arc_color: Some(theme::text_primary()),
                     interactive: true,
                     log_scale: true,
                     modifiers,
@@ -14917,7 +14918,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
                     range: (0.7, 5.0),
                     label: format!("{:.2}", b.q),
                     arc_from_center: false,
-                    level_arc_color: Some(theme::TEXT_PRIMARY),
+                    level_arc_color: Some(theme::text_primary()),
                     interactive: true,
                     log_scale: false,
                     modifiers,
@@ -14983,7 +14984,7 @@ fn eq_popover(state: &TotalControl, cid: ChannelId, width: f32, scale: f32) -> E
             range: (20.0, 500.0),
             label: freq_text(eq.low_cut_freq_hz),
             arc_from_center: false,
-            level_arc_color: Some(theme::TEXT_PRIMARY),
+            level_arc_color: Some(theme::text_primary()),
             interactive: true,
             log_scale: true,
             modifiers,
@@ -15178,7 +15179,7 @@ fn fx_header_row(
                 .padding([0.0, theme::SPACE_MD * scale])
                 .style(theme::toggle_button(on, theme::ACCENT))
                 .on_press(toggle),
-            text(name).size(theme::TEXT_SM * scale).color(theme::TEXT_SEC),
+            text(name).size(theme::TEXT_SM * scale).color(theme::text_sec()),
             iced::widget::Space::new().width(Length::Fill),
         ]
         .spacing(theme::SPACE_MD * scale)
@@ -15220,7 +15221,7 @@ fn fx_centered_pick(
     let label = container(
         text(selected_label)
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_PRIMARY),
+            .color(theme::text_primary()),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -15235,7 +15236,7 @@ fn fx_centered_pick(
     let arrow = container(
         text("▾")
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -15255,7 +15256,7 @@ fn fx_type_row(picker: Element<'static, Message>, scale: f32) -> Element<'static
         row![
             text("type")
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                .color(theme::text_sec()),
             picker,
         ]
         .spacing(theme::SPACE_SM * scale)
@@ -15315,7 +15316,7 @@ fn fx_knob_cell<'a, T: Copy + 'static>(
             .center_x(Length::Fill),
         text(label)
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .width(Length::Fill)
             .center(),
     ]
@@ -15351,7 +15352,7 @@ fn fx_delay_cell(
         container(
             text(format!("{bpm:.0}"))
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -15406,17 +15407,17 @@ fn fx_meter_column(state: &TotalControl, scale: f32) -> Element<'static, Message
     let captions = row![
         text("In")
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
         text("Out")
             .size(theme::TEXT_XS * scale)
-            .color(theme::TEXT_SEC),
+            .color(theme::text_sec()),
     ]
     .spacing(theme::SPACE_MD * scale);
     container(
         column![
             text("FX")
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                .color(theme::text_sec()),
             captions,
             bars
         ]
@@ -15899,7 +15900,7 @@ fn echo_panel(state: &TotalControl, scale: f32) -> Element<'_, Message> {
         row![
             text("HC")
                 .size(theme::TEXT_XS * scale)
-                .color(theme::TEXT_SEC),
+                .color(theme::text_sec()),
             container(fx_centered_pick(
                 ECHO_HIGH_CUTS
                     .iter()
@@ -16688,7 +16689,7 @@ fn db_control(value: f32, on_change: fn(f32) -> Message, scale: f32) -> Element<
             .width(Length::Fixed(250.0 * scale))
             .height(24.0 * scale),
         text(format!("{value:+.1} dB"))
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(theme::TEXT_DIALOG * scale)
             .width(Length::Fixed(84.0 * scale)),
     ]
@@ -16716,7 +16717,7 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
         container(
             row![
                 text(label)
-                    .color(theme::TEXT_PRIMARY)
+                    .color(theme::text_primary())
                     .size(text_size),
                 iced::widget::rule::horizontal(1),
             ]
@@ -16732,7 +16733,7 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
     };
     let label = |text_value: &'static str| -> Element<'static, Message> {
         text(text_value)
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(text_size)
             .width(Length::Fixed(150.0 * scale))
             .into()
@@ -16786,7 +16787,7 @@ fn control_room_settings_modal(state: &TotalControl) -> Element<'_, Message> {
 
     let body = column![
         text("CONTROL ROOM SETTINGS")
-            .color(theme::TEXT_PRIMARY)
+            .color(theme::text_primary())
             .size(text_size),
         section("TALKBACK"),
         row_with("Input", tb_pick.into()),
@@ -17415,12 +17416,12 @@ fn matrix_view(state: &TotalControl) -> Element<'_, Message> {
     // The caption reads out the cell under the pointer, and is the how-to
     // the rest of the time (the gestures are not discoverable otherwise).
     let caption = match matrix::hover_readout(state) {
-        Some(readout) => text(readout).color(theme::TEXT_PRIMARY),
+        Some(readout) => text(readout).color(theme::text_primary()),
         None => text(
             "Drag a cell up or down to set its gain (Shift: fine) \u{00b7} \
              Ctrl+click: 0 dB / off \u{00b7} double-click: reset \u{00b7} Tab for Quick",
         )
-        .color(theme::TEXT_SEC),
+        .color(theme::text_sec()),
     }
     .size(theme::TEXT_XS * scale);
     let body = column![
@@ -17681,7 +17682,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         // has to be changed from the top bar.
         let caption = |label: &'static str| {
             text(label)
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(theme::TEXT_XS * scale)
         };
         let source_block = quick_block(
@@ -17704,7 +17705,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         );
 
         let connector = text("\u{2192}")
-            .color(theme::TEXT_SEC)
+            .color(theme::text_sec())
             .size(theme::TEXT_XL * scale);
 
         let blocks = row![source_block, connector, dest_block]
@@ -17714,7 +17715,7 @@ fn quick_view(state: &TotalControl) -> Element<'_, Message> {
         column![
             section_header("QUICK CONTROL", scale),
             text("Choose a source and a destination, then set how loud the source is there. Tab switches to the Mixer.")
-                .color(theme::TEXT_SEC)
+                .color(theme::text_sec())
                 .size(theme::TEXT_XS * scale),
             blocks,
         ]
@@ -18842,7 +18843,7 @@ mod tests {
         assert_eq!(crate::sidebar::device_state(&state).1, "Disconnected");
         assert_eq!(
             crate::sidebar::device_state(&state).0,
-            crate::theme::MRED,
+            crate::theme::mred(),
             "a disconnect is the red state, not the amber ones"
         );
 

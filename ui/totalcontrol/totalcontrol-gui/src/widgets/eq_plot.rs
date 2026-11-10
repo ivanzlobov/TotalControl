@@ -298,11 +298,11 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
         frame.fill_rectangle(
             Point::new(plot.x, plot.y),
             Size::new(plot.width, plot.height),
-            theme::BG_DEEP,
+            theme::bg_deep(),
         );
 
         let grid = Stroke::default()
-            .with_color(theme::BORDER)
+            .with_color(theme::border())
             .with_width(scale);
         for db in [-24.0, -12.0, 0.0, 12.0, 24.0] {
             let y = db_to_y(db, plot);
@@ -361,7 +361,7 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
         // matching the manual's own EQ screenshot.
         let (low_mid, mid_high) = eq_band_boundaries(&self.eq);
         let edges = [F_MIN, low_mid, mid_high, F_MAX];
-        for (i, colour) in theme::EQ_BAND.iter().enumerate() {
+        for (i, colour) in theme::eq_band().iter().enumerate() {
             let (start, end) = (edges[i].max(F_MIN), edges[i + 1].min(F_MAX));
             if end <= start {
                 continue;
@@ -395,7 +395,7 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
             } else {
                 HANDLE_R * scale
             };
-            frame.fill(&Path::circle(point, radius), theme::BG_DEEP);
+            frame.fill(&Path::circle(point, radius), theme::bg_deep());
             frame.stroke(
                 &Path::circle(point, radius),
                 Stroke::default()
@@ -428,7 +428,7 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
                 frame.fill_text(Text {
                     content,
                     position,
-                    color: theme::TEXT_SEC,
+                    color: theme::text_sec(),
                     size: (theme::TEXT_MICRO * scale).into(),
                     align_x,
                     align_y,
@@ -485,7 +485,7 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
                                 b.q
                             ),
                             plot.x + 4.0 * scale,
-                            theme::EQ_BAND[band.min(theme::EQ_BAND.len() - 1)],
+                            theme::eq_band()[band.min(theme::eq_band().len() - 1)],
                         )
                     }
                     Drag::LowCut => (
@@ -531,7 +531,7 @@ impl<Message> canvas::Program<Message> for EqPlot<Message> {
 
 impl<Message> EqPlot<Message> {
     fn handle_color(&self, _state: &State, band: usize) -> Color {
-        theme::EQ_BAND[band.min(theme::EQ_BAND.len() - 1)]
+        theme::eq_band()[band.min(theme::eq_band().len() - 1)]
     }
 }
 
@@ -640,7 +640,7 @@ fn draw_low_cut(frame: &mut Frame, eq: &InputEq, plot: Rectangle, scale: f32, dr
     } else {
         Color {
             a: if eq.low_cut_enabled { 0.55 } else { 0.22 },
-            ..theme::TEXT_SEC
+            ..theme::text_sec()
         }
     };
     let dash = 3.0 * scale;

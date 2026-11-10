@@ -119,7 +119,7 @@ impl<Message> canvas::Program<Message> for Splitter<Message> {
                 &Path::line(Point::new(x, 0.0), Point::new(x, bounds.height)),
                 Stroke::default()
                     .with_width(self.scale.max(1.0))
-                    .with_color(theme::BORDER),
+                    .with_color(theme::border()),
             );
             return vec![frame.into_geometry()];
         }

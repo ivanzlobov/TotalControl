@@ -432,7 +432,9 @@ editors and is kept identical to the code by a test.  The example at
 `docs/examples/gui-layout.json` is written from the built-in defaults by
 `channel-preview --example`; it is a snapshot and a regression fixture, not a
 second source.  The layout preview and the runtime both read the user
-document; the runtime falls back to the built-in layout when none loads.
+document; the runtime falls back to the built-in layout when none loads.  The
+document's colour categories are installed into the runtime theme at startup;
+the tones derived from them stay in code.
 
 #### 2.8.2 Grid and scaling
 

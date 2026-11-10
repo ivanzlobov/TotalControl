@@ -54,7 +54,7 @@
   },
   "colors": {
     "surface": {
-      "app_background": "#18191d",
+      "app_background": "#0e0e10",
       "card": "#24252a",
       "card_active": "#3a3b42",
       "border": "#36373d"
@@ -80,8 +80,8 @@
     },
     "meter": {
       "green": "#3dd68c",
-      "yellow": "#d8c34a",
-      "red": "#d94a4a"
+      "yellow": "#f0b429",
+      "red": "#e5484d"
     }
   },
   "templates": [
