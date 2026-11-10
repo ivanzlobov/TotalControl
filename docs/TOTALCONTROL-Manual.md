@@ -330,7 +330,9 @@ gives them a slightly darker face; an open slideout keeps a dark face behind
 its tab.
 
 The strength readouts refresh four times a second; the meter bars keep moving
-smoothly. Mute silences a channel without moving its fader; unmuting restores
+smoothly. A readout shows one decimal place, except for levels of magnitude
+100 dB or more, which are printed without a fraction (`100`, `120`, `-150`).
+Silence — and anything below the unit's -150.5 dBFS floor — reads `-∞`. Mute silences a channel without moving its fader; unmuting restores
 the same level. Solo silences the other inputs and software playbacks while
 the soloed channel keeps its fader; releasing the last solo restores the
 others. The Cue button on a hardware output copies that output's submix into

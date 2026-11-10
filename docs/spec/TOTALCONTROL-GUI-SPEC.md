@@ -537,10 +537,11 @@ height behind it.
 M1 is drawn as text only, right-aligned inside each cell with a small inset
 so the values sit inside the edges of the T3 buttons above.  The left cell is
 the left channel and the right cell is the right channel; no `L` or `R`
-prefix is printed.  The cell width accommodates `-99.0`; values of 100 and
-above omit the fractional part (`100`, `120`).  The values refresh every
-0.25 s; the VU bars continue at the meter tick rate.  B2's label is always
-centred on the channel width and the arrow sits at the right edge.
+prefix is printed.  The cell width accommodates `-99.9`.  Values of magnitude
+100 and above omit the fractional part (`100`, `120`, `-150`).  Silence, and
+anything below the unit's -150.5 dBFS floor, reads `-∞`.  The values refresh
+every 0.25 s; the VU bars continue at the meter tick rate.  B2's label is
+always centred on the channel width and the arrow sits at the right edge.
 
 #### 2.8.5 Right-hand stack
 

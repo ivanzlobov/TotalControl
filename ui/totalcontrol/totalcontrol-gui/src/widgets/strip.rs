@@ -419,12 +419,21 @@ fn strength_cell<'a>(value: Option<f32>, w: f32, h: f32, scale: f32) -> Element<
     .into()
 }
 
+/// The lowest reading the readout shows.  The UCX's smallest non-silent
+/// power word is `power_dbfs(32)` = -150.5 dBFS (power 31 and below is
+/// "below range"), and TotalMix stops at the same place.  Anything lower is
+/// the bar's decay tail, not a measurement, and reads as silence.
+const READOUT_FLOOR_DB: f32 = -150.6;
+
 fn strength_text(linear: f32) -> String {
     if linear <= 0.0 {
         return "-∞".to_string();
     }
     let db = 20.0 * linear.log10();
-    if db >= 100.0 {
+    if db < READOUT_FLOOR_DB {
+        return "-∞".to_string();
+    }
+    if db.abs() >= 100.0 {
         format!("{db:.0}")
     } else {
         format!("{db:.1}")
@@ -1385,6 +1394,22 @@ mod tests {
     use super::*;
 
     use std::time::Duration;
+
+    #[test]
+    fn a_dead_meter_reads_silence_not_a_denormal_tail() {
+        // The UCX reports down to -150.5 dBFS (its smallest non-silent
+        // power word).  Readings below that are the bar's decay tail, which
+        // used to print -122.0 and -900.0; the useful range must survive,
+        // and magnitudes of 100 dB or more lose the fraction.
+        assert_eq!(strength_text(10f32.powf(-150.4 / 20.0)), "-150");
+        assert_eq!(strength_text(10f32.powf(-120.0 / 20.0)), "-120");
+        assert_eq!(strength_text(10f32.powf(-99.9 / 20.0)), "-99.9");
+        assert_eq!(strength_text(10f32.powf(-151.0 / 20.0)), "-∞");
+        assert_eq!(strength_text(1.0e-40), "-∞");
+        assert_eq!(strength_text(0.0), "-∞");
+        assert_eq!(strength_text(10f32.powf(-80.0 / 20.0)), "-80.0");
+        assert_eq!(strength_text(10f32.powf(-6.0 / 20.0)), "-6.0");
+    }
 
     #[test]
     fn collapsed_strip_fills_the_standard_strip_height() {
