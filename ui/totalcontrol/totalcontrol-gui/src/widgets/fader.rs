@@ -412,7 +412,7 @@ impl<Message> Fader<Message> {
 
 /// Read one channel (and, for a linked pair, its right neighbour) from the
 /// shared meter bus.
-fn bus_levels(
+pub(crate) fn bus_levels(
     snapshot: &MeterSnapshot,
     slot: BusSlot,
     stereo: bool,

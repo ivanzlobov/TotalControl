@@ -20,7 +20,7 @@ use totalcontrol_core::ChannelId;
 
 use crate::app::Message;
 use crate::theme;
-use crate::widgets::fader::{t_to_vol, vol_to_t};
+use crate::widgets::fader::{bus_levels, t_to_vol, vol_to_t};
 use crate::widgets::layout::{
     ChannelKind, ColorScheme, ElementPlacement, Features, GuiLayoutConfig, Panel, Rect, StripLayout,
     TemplateId, VISUAL,
@@ -100,6 +100,28 @@ impl Default for CanvasState {
             static_key: std::cell::Cell::new(u64::MAX),
             controls_key: std::cell::Cell::new(u64::MAX),
         }
+    }
+}
+
+/// The meter bars: two wells for a linked pair, one centred well otherwise.
+fn meter_wells(vu: Rectangle, scale: f32, stereo: bool) -> Vec<Rectangle> {
+    let gap = 2.0 * scale;
+    if stereo {
+        let bar_w = (vu.width - gap) / 2.0;
+        (0..2)
+            .map(|index| {
+                Rectangle::new(
+                    Point::new(vu.x + index as f32 * (bar_w + gap), vu.y),
+                    Size::new(bar_w, vu.height),
+                )
+            })
+            .collect()
+    } else {
+        let bar_w = vu.width * totalcontrol_layout::MONO_BAR_RATIO;
+        vec![Rectangle::new(
+            Point::new(vu.x + (vu.width - bar_w) / 2.0, vu.y),
+            Size::new(bar_w, vu.height),
+        )]
     }
 }
 
@@ -206,13 +228,7 @@ fn draw_static(frame: &mut Frame, layout: &StripLayout, p: &StripParams<'_>, sch
 
     // Meter wells: static; the bars are the dynamic layer.
     if let Some(vu) = at(layout, ElementPlacement::Meter) {
-        let gap = 2.0 * scale;
-        let bar_w = (vu.width - gap) / 2.0;
-        for index in 0..2 {
-            let well = Rectangle::new(
-                Point::new(vu.x + index as f32 * (bar_w + gap), vu.y),
-                Size::new(bar_w, vu.height),
-            );
+        for well in meter_wells(vu, scale, p.stereo_linked) {
             frame.fill(
                 &Path::rounded_rectangle(well.position(), well.size(), (2.0 * scale).into()),
                 iced::Color::from_rgb8(0x1e, 0x1f, 0x23),
@@ -275,7 +291,6 @@ fn draw_controls(
     layout: &StripLayout,
     p: &StripParams<'_>,
     scheme: &ColorScheme,
-    hover: Option<ElementPlacement>,
 ) {
     let scale = layout.scale;
 
@@ -304,18 +319,6 @@ fn draw_controls(
             frame.fill(
                 &Path::rounded_rectangle(r.position(), r.size(), (3.0 * scale).into()),
                 color,
-            );
-        }
-    }
-
-    // Hover outline.
-    if let Some(placement) = hover {
-        if let Some(r) = at(layout, placement) {
-            frame.stroke(
-                &Path::rounded_rectangle(r.position(), r.size(), (2.0 * scale).into()),
-                Stroke::default()
-                    .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.25))
-                    .with_width(1.0),
             );
         }
     }
@@ -363,27 +366,29 @@ fn draw_controls(
     }
 }
 
+/// Read the live levels: the shared bus when the device service owns
+/// metering, the view-fed frame otherwise.
+fn levels(p: &StripParams<'_>) -> (f32, Option<f32>) {
+    if let (Some(bus), Some(slot)) = (&p.meter_bus, p.meter_slot) {
+        if let Ok(snapshot) = bus.lock() {
+            let (level, _peak, right) = bus_levels(&snapshot, slot, p.stereo_linked);
+            return (level, right.map(|(right, _peak)| right));
+        }
+    }
+    (p.meter.value, p.meter2.map(|m| m.value))
+}
+
 fn draw_meters(frame: &mut Frame, layout: &StripLayout, p: &StripParams<'_>, scheme: &ColorScheme) {
     let scale = layout.scale;
+    let (left, right) = levels(p);
     if let Some(vu) = at(layout, ElementPlacement::Meter) {
-        let gap = 2.0 * scale;
-        let bar_w = (vu.width - gap) / 2.0;
-        for index in 0..2 {
-            let frame_level = if index == 0 {
-                p.meter
-            } else {
-                p.meter2.unwrap_or(p.meter)
-            };
-            let level = frame_level.value;
+        for (index, well) in meter_wells(vu, scale, p.stereo_linked).into_iter().enumerate() {
+            let level = if index == 0 { left } else { right.unwrap_or(left) };
             let filled = Rectangle::new(
-                Point::new(vu.x + index as f32 * (bar_w + gap), vu.y + vu.height * (1.0 - level)),
-                Size::new(bar_w, vu.height * level),
+                Point::new(well.x, well.y + well.height * (1.0 - level)),
+                Size::new(well.width, well.height * level),
             );
-            frame.fill_rectangle(
-                filled.position(),
-                filled.size(),
-                colour(&scheme.meter.green),
-            );
+            frame.fill_rectangle(filled.position(), filled.size(), colour(&scheme.meter.green));
         }
     }
 }
@@ -496,7 +501,14 @@ impl canvas::Program<Message> for StripCanvas<'_> {
                 }
             }
             canvas::Event::Window(window::Event::RedrawRequested(now)) => {
-                if self.p.meter_available {
+                // Only keep scheduling frames while something is moving;
+                // `meter_stream` wakes us when a new transient starts.
+                let live = if let (Some(bus), Some(_)) = (&self.p.meter_bus, self.p.meter_slot) {
+                    bus.lock().map(|snapshot| snapshot.active).unwrap_or(false)
+                } else {
+                    self.p.meter.value > 0.0005
+                };
+                if live {
                     return Some(canvas::Action::request_redraw_at(
                         *now + std::time::Duration::from_millis(50),
                     ));
@@ -529,7 +541,6 @@ impl canvas::Program<Message> for StripCanvas<'_> {
             self.p.vol.to_bits().hash(h);
             self.p.selected.hash(h);
             self.p.open_flyout.map(|f| f as u8).hash(h);
-            state.hover.map(|p| p.label()).hash(h);
             self.p.readout.map(|r| r.map(f32::to_bits)).hash(h);
         });
 
@@ -549,10 +560,22 @@ impl canvas::Program<Message> for StripCanvas<'_> {
         let controls_layer = state
             .controls_cache
             .draw(renderer, bounds.size(), |frame| {
-                draw_controls(frame, &self.layout, &self.p, &self.scheme, state.hover);
+                draw_controls(frame, &self.layout, &self.p, &self.scheme);
             });
         let mut frame = Frame::new(renderer, bounds.size());
         draw_meters(&mut frame, &self.layout, &self.p, &self.scheme);
+        // Hover is per-frame: clearing the controls cache on every pointer
+        // move would rebuild the cap and the lit buttons with it.
+        if let Some(placement) = state.hover {
+            if let Some(r) = at(&self.layout, placement) {
+                frame.stroke(
+                    &Path::rounded_rectangle(r.position(), r.size(), (2.0 * self.layout.scale).into()),
+                    Stroke::default()
+                        .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.25))
+                        .with_width(1.0),
+                );
+            }
+        }
         vec![static_layer, controls_layer, frame.into_geometry()]
     }
 }
