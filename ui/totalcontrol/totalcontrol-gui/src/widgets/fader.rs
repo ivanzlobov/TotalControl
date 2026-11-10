@@ -49,7 +49,7 @@ const METER_INTERP_MS: f32 = 120.0;
 /// reads as continuous motion for a VU and halves the window redraws a
 /// display-rate loop would cost; the bus itself is still updated at the
 /// device rate, so a frame always shows a current value.
-const METER_FRAME_MS: u64 = 33;
+const METER_FRAME_MS: u64 = 50;
 
 /// Which channel a fader's meter reads from the device-service bus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
