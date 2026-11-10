@@ -12038,9 +12038,15 @@ fn engine_section(state: &TotalControl, label_w: f32) -> Element<'_, Message> {
     const ALL_QUANTA: [u32; 11] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048];
     let floor = state.driver_floor.unwrap_or(32);
     let quanta: Vec<u32> = ALL_QUANTA.iter().copied().filter(|q| *q >= floor).collect();
-    // "Auto" without a number: the card follows the graph's quantum.
-    // The latency line below shows the resulting hardware buffer and chain.
-    let quantum_opts: Vec<String> = std::iter::once("Auto".to_string())
+    // "Auto" follows the graph.  Show what the graph actually runs, so the
+    // setting is not a blind choice; the latency line below adds the
+    // hardware buffer and chain.
+    let auto_label = if clock.effective_quantum() > 0 {
+        format!("Auto ({} samples)", clock.effective_quantum())
+    } else {
+        "Auto".to_string()
+    };
+    let quantum_opts: Vec<String> = std::iter::once(auto_label)
         .chain(quanta.iter().map(|q| format!("{q} samples")))
         .collect();
     let quantum_sel = if clock.force_quantum == 0 {
