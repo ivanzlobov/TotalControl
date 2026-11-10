@@ -18,6 +18,7 @@ jobs:
     outputs:
       kernel: ${{ steps.changes.outputs.kernel }}
       core: ${{ steps.changes.outputs.core }}
+      layout: ${{ steps.changes.outputs.layout }}
       gui: ${{ steps.changes.outputs.gui }}
       tui: ${{ steps.changes.outputs.tui }}
       usb: ${{ steps.changes.outputs.usb }}
@@ -53,6 +54,7 @@ jobs:
 
           echo "kernel=$(flag "$all" '^kernel/')" >> "$GITHUB_OUTPUT"
           echo "core=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-core/')" >> "$GITHUB_OUTPUT"
+          echo "layout=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-layout/')" >> "$GITHUB_OUTPUT"
           echo "gui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-gui/')" >> "$GITHUB_OUTPUT"
           echo "tui=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-tui/')" >> "$GITHUB_OUTPUT"
           echo "usb=$(flag "$rust_all" '^ui/totalcontrol/totalcontrol-(usb|sys)/')" >> "$GITHUB_OUTPUT"
@@ -98,9 +100,25 @@ jobs:
       - name: Test core
         run: cargo test -p totalcontrol-core --lib --features alsa
 
+  layout:
+    needs: changes
+    if: needs.changes.outputs.layout == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui/totalcontrol
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ui/totalcontrol
+      - name: Test layout
+        run: cargo test -p totalcontrol-layout
+
   gui:
     needs: changes
-    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.gui == 'true'
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.layout == 'true' || needs.changes.outputs.gui == 'true'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -195,6 +213,7 @@ jobs:
       - docs
       - kernel
       - core
+      - layout
       - gui
       - tui
       - usb
