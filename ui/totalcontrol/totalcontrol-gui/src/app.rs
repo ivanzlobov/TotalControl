@@ -4473,6 +4473,28 @@ fn finish_startup_setup(state: &mut TotalControl) {
     maybe_attach_device_service(state);
 }
 
+/// Write the whole mixer scene once the card stream has started.
+///
+/// The startup scene is applied while the card is still at its previous rate;
+/// opening the stream (or moving it to the forced rate) makes the unit reload
+/// its stored mixer.  That is the same reload a runtime rate change causes,
+/// and `#70` made those rewrite every register because the pre-connect dump no
+/// longer describes the unit.  The startup path reaches the same state, so it
+/// schedules the same full rewrite instead of trusting the connect write.
+fn schedule_startup_full_reapply(state: &mut TotalControl) {
+    if state.device.is_mock() || !state.device.rate_follows_sound_server() {
+        return;
+    }
+    if state.startup_scene.is_some() {
+        // The UC queues its own engine-start reapply; leave it alone.
+        return;
+    }
+    state.startup_scene = Some(state.device.capture_scene());
+    state.startup_scene_full_rewrite = true;
+    state.startup_scene_due = Some(Instant::now() + Duration::from_secs(1));
+    log::info!("reapplying the full Fireface mixer scene after the stream starts");
+}
+
 fn apply_startup_scene(state: &mut TotalControl, scene: &Scene) {
     match state.device.apply_scene_at_connect(scene) {
         Ok(()) => {
@@ -4520,11 +4542,18 @@ fn poll_startup_compare(state: &mut TotalControl) {
 
 fn schedule_mixer_reapply(state: &mut TotalControl, delay: Duration, reason: &str) {
     if state.startup_compare_pending {
+        // The dump is still arriving; a write now would interleave with it.
+        // `finish_startup_setup` rewrites the full scene once the stream is
+        // up, which covers the change this call was reporting.
         log::debug!("{reason}: the UCX startup restore is still waiting for its state dump");
         return;
     }
     if state.startup_scene.is_some() {
-        log::debug!("{reason}: a startup scene reapply is already pending");
+        // A scene is already queued.  A rate change or a stream restart means
+        // it must write every register, not only the ones that differ from
+        // the pre-connect dump.
+        state.startup_scene_full_rewrite = true;
+        log::debug!("{reason}: upgrading the pending scene reapply to a full rewrite");
         return;
     }
     state.startup_scene = Some(state.device.capture_scene());
@@ -4693,6 +4722,9 @@ pub fn release_engine(state: &mut TotalControl) {
     if let Err(e) = pw_clock::force_rate(0) {
         log::warn!("Releasing the PipeWire rate override failed: {e}");
     }
+    if let Err(e) = pw_clock::force_quantum(0) {
+        log::warn!("Releasing the PipeWire buffer override failed: {e}");
+    }
     restore_allowed_rates(state);
 }
 
@@ -4752,15 +4784,22 @@ pub fn restore_engine(state: &mut TotalControl) {
         if let Err(e) = pw_clock::force_quantum(state.engine_force_quantum) {
             log::warn!("Restoring the PipeWire buffer size failed: {e}");
         }
+    } else if pw_clock::read().is_some_and(|clock| clock.force_quantum != 0) {
+        // A previous session (or another tool) left a buffer override behind.
+        // TotalControl is the only graph-clock owner here, and the preference
+        // says "no override", so give the default back instead of inheriting
+        // it for the rest of the session.
+        if let Err(e) = pw_clock::force_quantum(0) {
+            log::warn!("Releasing a stale PipeWire buffer override failed: {e}");
+        }
     }
     state.engine = pw_clock::read();
     state.card_stream = pw_clock::card_stream(state.device.card_id());
-    // The scene was just written at this rate/stream state.  Seed the
-    // detectors so the first EnginePoll only reacts to a change made after
-    // the write; otherwise a sink that was already running at launch causes
-    // a second full scene push.
-    state.last_card_rate = state.card_stream.map(|stream| stream.rate);
-    state.last_sink_running = !state.device.is_mock() && pw_clock::fireface_sink_running();
+    // The scene was just written, but at the rate the card had before the
+    // stream opens.  The unit reloads its stored mixer when the stream starts
+    // (the `#70` case), so queue the same full rewrite a runtime rate change
+    // gets.  Every startup path goes through here, including a reconnect.
+    schedule_startup_full_reapply(state);
     state.driver_floor = pw_clock::driver_period_floor();
     state.driver_queue = pw_clock::driver_urb_queue();
 }

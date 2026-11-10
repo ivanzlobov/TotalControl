@@ -303,6 +303,12 @@ full scene instead: the unit may have reloaded its own state, so the startup
 dump no longer describes the registers, and skipping matching values can leave
 effects or routing from the old rate active.
 
+The startup restore follows the same rule once the card stream has started.
+The connect write happens at the card's previous rate; opening the stream
+makes the unit reload its stored mixer, so `restore_engine` queues a
+full-scene rewrite for one second later.  A launch therefore writes the scene
+twice: once at connect and once after the reload.
+
 ## 10. Driver and latency architecture
 
 The production transport is the kernel module `snd-fireface-uc`. It owns USB
