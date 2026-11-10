@@ -1679,6 +1679,32 @@ impl GuiLayoutConfig {
         Self::from_json(&text)
     }
 
+    /// The user's layout document:
+    /// `$XDG_CONFIG_HOME/totalcontrol/gui-layout.json`, normally
+    /// `~/.config/totalcontrol/gui-layout.json`.
+    pub fn default_path() -> Option<std::path::PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+            })?;
+        Some(base.join("totalcontrol").join("gui-layout.json"))
+    }
+
+    /// Load a document, or fall back to the built-in layout.
+    ///
+    /// A missing file is not an error.  An unreadable or invalid document is
+    /// returned as the message so the caller can report it.
+    pub fn load_or_default(path: &std::path::Path) -> (Self, Option<String>) {
+        if !path.exists() {
+            return (Self::default(), None);
+        }
+        match Self::load(path) {
+            Ok(config) => (config, None),
+            Err(error) => (Self::default(), Some(error)),
+        }
+    }
+
     pub fn to_pretty_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("layout config serializes")
     }
@@ -1990,6 +2016,32 @@ mod config_tests {
         let json = GuiLayoutConfig::default().to_pretty_json();
         let parsed = GuiLayoutConfig::from_json(&json).expect("round trip");
         assert_eq!(parsed, GuiLayoutConfig::default());
+    }
+
+    #[test]
+    fn a_missing_document_falls_back_without_a_message() {
+        let path = std::env::temp_dir().join(format!(
+            "totalcontrol-layout-{}-missing.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (config, error) = GuiLayoutConfig::load_or_default(&path);
+        assert!(error.is_none());
+        assert_eq!(config, GuiLayoutConfig::default());
+    }
+
+    #[test]
+    fn an_invalid_document_reports_and_falls_back() {
+        let path = std::env::temp_dir().join(format!(
+            "totalcontrol-layout-{}-invalid.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, r#"{"schema": 1}"#).expect("the fixture writes");
+        let (config, error) = GuiLayoutConfig::load_or_default(&path);
+        let message = error.expect("an invalid document reports");
+        assert!(message.contains("unsupported layout schema"), "{message}");
+        assert_eq!(config, GuiLayoutConfig::default());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

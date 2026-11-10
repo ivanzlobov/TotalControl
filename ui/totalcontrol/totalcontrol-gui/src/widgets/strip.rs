@@ -15,7 +15,10 @@ use crate::widgets::fader::{
     fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame, CHANNEL_SLOT_W, FX_FADER_SCALE,
     FX_SLOT_W,
 };
-use crate::widgets::layout::{ChannelKind, ElementPlacement, Features, Rect, StripLayout, SUBMIX_H};
+use crate::widgets::layout::{
+    ChannelKind, ElementPlacement, Features, GuiLayoutConfig, Panel, Rect, StripLayout, TemplateId,
+    SUBMIX_H,
+};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -178,6 +181,9 @@ impl CollapseAnim {
 
 pub struct StripParams<'a> {
     pub cid: ChannelId,
+    /// The layout source for this strip: the user document when it loads,
+    /// otherwise the built-in defaults.
+    pub layout: &'a GuiLayoutConfig,
     pub output_idx: usize,
     /// Human label of the current submix/output bus (device-derived).
     pub bus_label: String,
@@ -857,20 +863,6 @@ pub fn strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     }
 }
 
-/// Rect of a standard channel element.
-fn element(layout: &StripLayout, placement: ElementPlacement) -> Rect {
-    layout
-        .rect(placement)
-        .unwrap_or_else(|| panic!("the channel layout has no {} element", placement.label()))
-}
-
-/// Face of a standard channel element that reaches the card's right edge.
-fn face(layout: &StripLayout, placement: ElementPlacement) -> Rect {
-    layout
-        .face(placement)
-        .unwrap_or_else(|| panic!("the channel layout has no {} face", placement.label()))
-}
-
 fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let cid = p.cid;
     let out = p.output_idx;
@@ -880,16 +872,41 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         ChannelId::Playback(_) => ChannelKind::Playback,
         ChannelId::Output(_) => ChannelKind::Output,
     };
-    let layout = StripLayout::for_kind(
-        kind,
-        scale,
-        Features {
-            fx: p.fx_level.is_some(),
-            ..Features::default()
-        },
-    );
+    let template_id = match kind {
+        ChannelKind::Input => {
+            if p.stereo_linked {
+                TemplateId::InputStereo
+            } else {
+                TemplateId::InputMono
+            }
+        }
+        ChannelKind::Playback => TemplateId::PlaybackStereo,
+        ChannelKind::Output => {
+            if p.stereo_linked {
+                TemplateId::OutputStereo
+            } else {
+                TemplateId::OutputMono
+            }
+        }
+    };
+    let layout = p
+        .layout
+        .template(template_id)
+        .and_then(|template| p.layout.layout(template, scale).ok())
+        .unwrap_or_else(|| {
+            StripLayout::for_kind(
+                kind,
+                scale,
+                Features {
+                    fx: p.fx_level.is_some(),
+                    ..Features::default()
+                },
+            )
+        });
     let card = layout.card;
-    let btn_h = element(&layout, ElementPlacement::ButtonLeft).height;
+    let btn_h = layout
+        .rect(ElementPlacement::ButtonLeft)
+        .map_or(0.0, |rect| rect.height);
 
     let header = header_row(
         cid,
@@ -1014,7 +1031,9 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     // that failure mode doesn't apply and Gain moved in with the rest.
 
     let default_vol = p.default_vol;
-    let fader_h = element(&layout, ElementPlacement::Fader).height;
+    let fader_h = layout
+        .rect(ElementPlacement::Fader)
+        .map_or(0.0, |rect| rect.height);
     let fader_widget = fader(Fader {
         value: p.vol,
         range: p.drag_range.unwrap_or((0.0, 2.0)),
@@ -1204,7 +1223,11 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             .on_submit(Message::EditCommit)
             .style(theme::text_input)
             .size(theme::TEXT_SM * scale)
-            .width(Length::Fixed(element(&layout, ElementPlacement::Level).width))
+            .width(Length::Fixed(
+                layout
+                    .rect(ElementPlacement::Level)
+                    .map_or(0.0, |rect| rect.width),
+            ))
             .into()
     } else {
         let initial = if p.vol > 0.0 {
@@ -1234,9 +1257,15 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let collapse_btn = minimize_button(
         cid,
         scale,
-        element(&layout, ElementPlacement::Minimize).width,
-        face(&layout, ElementPlacement::Minimize).width,
-        face(&layout, ElementPlacement::Minimize).height,
+        layout
+            .rect(ElementPlacement::Minimize)
+            .map_or(0.0, |rect| rect.width),
+        layout
+            .face(ElementPlacement::Minimize)
+            .map_or(0.0, |rect| rect.width),
+        layout
+            .face(ElementPlacement::Minimize)
+            .map_or(0.0, |rect| rect.height),
     );
     // B2: full-width submix selector; the flyout opens from the right edge.
     let route_button = layout.rect(ElementPlacement::Submix).map(|rect| {
@@ -1266,48 +1295,56 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let mut stack = Stack::new()
         .width(Length::Fixed(card.width))
         .height(Length::Fixed(card.height));
-    stack = stack.push(pinned(header, element(&layout, ElementPlacement::Name), card));
-    stack = stack.push(pinned(pan_element, element(&layout, ElementPlacement::Pan), card));
-    stack = stack.push(pinned(
-        mute_btn,
-        element(&layout, ElementPlacement::ButtonLeft),
-        card,
-    ));
-    stack = stack.push(pinned(
-        second_button,
-        element(&layout, ElementPlacement::ButtonRight),
-        card,
-    ));
-    let readout_left = element(&layout, ElementPlacement::ReadoutLeft);
-    let readout_right = element(&layout, ElementPlacement::ReadoutRight);
-    stack = stack.push(pinned(
-        strength_cell(left_strength, readout_left.width, readout_left.height, scale),
-        readout_left,
-        card,
-    ));
-    stack = stack.push(pinned(
-        strength_cell(right_strength, readout_right.width, readout_right.height, scale),
-        readout_right,
-        card,
-    ));
-    stack = stack.push(pinned(fader_widget, layout.fader_canvas, card));
+    if let Some(rect) = layout.rect(ElementPlacement::Name) {
+        stack = stack.push(pinned(header, rect, card));
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::Pan) {
+        stack = stack.push(pinned(pan_element, rect, card));
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::ButtonLeft) {
+        stack = stack.push(pinned(mute_btn, rect, card));
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::ButtonRight) {
+        stack = stack.push(pinned(second_button, rect, card));
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::ReadoutLeft) {
+        stack = stack.push(pinned(
+            strength_cell(left_strength, rect.width, rect.height, scale),
+            rect,
+            card,
+        ));
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::ReadoutRight) {
+        stack = stack.push(pinned(
+            strength_cell(right_strength, rect.width, rect.height, scale),
+            rect,
+            card,
+        ));
+    }
+    if layout.rect(ElementPlacement::Fader).is_some()
+        || layout.rect(ElementPlacement::Meter).is_some()
+    {
+        stack = stack.push(pinned(fader_widget, layout.fader_canvas, card));
+    }
     if let (Some(fx), Some(rect)) = (fx_fader, fx_rect) {
         stack = stack.push(pinned(fx, rect, card));
     }
-    stack = stack.push(pinned(trim_el, faces[0], card));
-    stack = stack.push(pinned(gear_el, faces[1], card));
-    stack = stack.push(pinned(eq_el, faces[2], card));
-    stack = stack.push(pinned(dyn_el, faces[3], card));
-    stack = stack.push(pinned(
-        db_display,
-        element(&layout, ElementPlacement::Level),
-        card,
-    ));
-    stack = stack.push(pinned(
-        collapse_btn,
-        face(&layout, ElementPlacement::Minimize),
-        card,
-    ));
+    for (panel, element) in [
+        (Panel::Trim, trim_el),
+        (Panel::Settings, gear_el),
+        (Panel::Eq, eq_el),
+        (Panel::Dynamics, dyn_el),
+    ] {
+        if layout.rect(ElementPlacement::Stack(panel)).is_some() {
+            stack = stack.push(pinned(element, faces[panel.stack_index()], card));
+        }
+    }
+    if let Some(rect) = layout.rect(ElementPlacement::Level) {
+        stack = stack.push(pinned(db_display, rect, card));
+    }
+    if let Some(face) = layout.face(ElementPlacement::Minimize) {
+        stack = stack.push(pinned(collapse_btn, face, card));
+    }
     if let (Some(route), Some(rect)) = (route_button, layout.rect(ElementPlacement::Submix)) {
         stack = stack.push(pinned(route, rect, card));
     }
@@ -1383,7 +1420,9 @@ mod tests {
             + theme::SPACE_HAIRLINE * 2.0
             + COLLAPSED_METER_H
             + theme::SPACE_HAIRLINE;
-        let level = element(&full, ElementPlacement::Level);
+        let level = full
+            .rect(ElementPlacement::Level)
+            .expect("the built-in layout has a level readout");
         assert!((plus_y - level.y).abs() < f32::EPSILON);
         let bottom = plus_y
             + ICON_BTN_H

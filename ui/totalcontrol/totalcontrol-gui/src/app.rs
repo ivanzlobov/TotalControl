@@ -2280,6 +2280,8 @@ pub struct StartupMismatch {
 
 pub struct TotalControl {
     pub device: DeviceHandle,
+    /// The layout document, or the built-in defaults when none loads.
+    pub layout: crate::widgets::layout::GuiLayoutConfig,
     /// Stable identity of the selected unit, when the backend exposes one.
     /// The card index is deliberately not part of this.
     pub device_target: Option<DeviceTarget>,
@@ -3083,8 +3085,17 @@ pub fn new_with_device(
         }
     });
 
+    let (layout, layout_error) = match crate::widgets::layout::GuiLayoutConfig::default_path() {
+        Some(path) => crate::widgets::layout::GuiLayoutConfig::load_or_default(&path),
+        None => (crate::widgets::layout::GuiLayoutConfig::default(), None),
+    };
+    if let Some(error) = layout_error {
+        eprintln!("layout: {error}; using the built-in layout");
+    }
+
     let state = TotalControl {
         device,
+        layout,
         device_target,
         connected,
         sel_out: 0,
@@ -12859,6 +12870,7 @@ fn strip_params<'a>(
 
     let base = strip::StripParams {
         cid,
+        layout: &state.layout,
         output_idx,
         bus_label: state
             .pair_labels()

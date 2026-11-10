@@ -431,8 +431,8 @@ The schema at `docs/schema/gui-layout.schema.json` mirrors the values for
 editors and is kept identical to the code by a test.  The example at
 `docs/examples/gui-layout.json` is written from the built-in defaults by
 `channel-preview --example`; it is a snapshot and a regression fixture, not a
-second source.  The layout preview reads the user document; the runtime
-renders the compiled defaults.
+second source.  The layout preview and the runtime both read the user
+document; the runtime falls back to the built-in layout when none loads.
 
 #### 2.8.2 Grid and scaling
 

@@ -7,6 +7,9 @@
 #   tools/ui-shot.sh /tmp/outs.png --scale 0.75 \
 #       --flyouts settings:output:0,settings:output:2
 #
+# Set TOTALCONTROL_LAYOUT=/path/to/gui-layout.json to screenshot a candidate
+# layout document; it is copied into the throw-away config directory.
+#
 # Everything after the output path is passed to totalcontrol-gui, so the normal
 # automation flags work here: --view mixer|matrix|quick, --scale 0.75..1.75,
 # --select-out N and --flyouts kind:channel:index[,kind:channel:index...].
@@ -39,6 +42,13 @@ trap cleanup EXIT
 # A readable default; the caller can override with --scale.
 if [[ " $* " != *" --scale "* ]]; then
     set -- --scale 1.25 "$@"
+fi
+
+# A layout document under test is placed in the throw-away config directory,
+# so the shot shows the same strip definition the runtime reads.
+if [[ -n "${TOTALCONTROL_LAYOUT:-}" ]]; then
+    mkdir -p "$cfg/totalcontrol"
+    cp "$TOTALCONTROL_LAYOUT" "$cfg/totalcontrol/gui-layout.json"
 fi
 
 XDG_CONFIG_HOME="$cfg" DISPLAY="${DISPLAY:-:0}" \

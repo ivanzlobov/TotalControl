@@ -174,8 +174,8 @@ one colour scheme and the templates.  Each template declares the channel
 elements it contains and where each one sits; the bindings follow from the
 kinds (see [Elements and placement](#elements-and-placement)).
 
-The preview is the only consumer.  The runtime still renders the compiled
-defaults.
+The preview and the runtime read the same document.  The runtime starts from
+the built-in defaults when the file is absent or invalid.
 
 ### Document
 
@@ -396,9 +396,10 @@ The checked-in files are
 [`../examples/gui-layout.json`](../examples/gui-layout.json) and
 [`../schema/gui-layout.schema.json`](../schema/gui-layout.schema.json).
 
-The intended runtime location is
-`$XDG_CONFIG_HOME/totalcontrol/gui-layout.json`, normally
-`~/.config/totalcontrol/gui-layout.json`.
+The runtime reads `$XDG_CONFIG_HOME/totalcontrol/gui-layout.json`, normally
+`~/.config/totalcontrol/gui-layout.json`, at startup.  A missing file uses the
+built-in layout; an invalid one is reported and replaced by the built-in
+layout.  The document is read once per run.
 
 ### Editor support
 
