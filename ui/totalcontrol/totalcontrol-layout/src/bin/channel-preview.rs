@@ -9,20 +9,81 @@ use std::path::PathBuf;
 
 use totalcontrol_layout::{
     Action, ChannelKind, ChannelSide, ColorScheme, ElementKind, ElementPlacement, GuiLayoutConfig,
-    LayoutTemplate, Panel, Rect, TemplateId, VisualTokens, MONO_BAR_RATIO, VU_LABELS,
+    LayoutTemplate, Panel, Rect, StripLayout, TemplateId, VisualTokens, MONO_BAR_RATIO, VU_LABELS,
 };
+
+/// Preview-only width of the open-panel annotation.  The panel body is not
+/// part of the layout document.
+const PANEL_PREVIEW_W: f32 = 220.0;
+
+/// The element states the preview can show for one focused strip.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreviewState {
+    Rest,
+    Hover,
+    Open,
+    Active,
+}
+
+impl PreviewState {
+    fn parse(token: &str) -> Option<Self> {
+        match token {
+            "rest" => Some(Self::Rest),
+            "hover" => Some(Self::Hover),
+            "open" => Some(Self::Open),
+            "active" => Some(Self::Active),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rest => "rest",
+            Self::Hover => "hover",
+            Self::Open => "open panel",
+            Self::Active => "active",
+        }
+    }
+}
 
 fn main() {
     let mut positional = Vec::new();
     let mut config_path = None;
     let mut example_path = None;
+    let mut focus_name = None;
+    let mut state = PreviewState::Rest;
+    let mut state_given = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => config_path = args.next().map(PathBuf::from),
             "--example" => example_path = args.next().map(PathBuf::from),
+            "--focus" => focus_name = args.next(),
+            "--state" => {
+                state_given = true;
+                let token = args.next().unwrap_or_default();
+                state = PreviewState::parse(&token).unwrap_or_else(|| {
+                    eprintln!("unknown state {token:?}; expected rest, hover, open or active");
+                    std::process::exit(1);
+                });
+            }
             _ => positional.push(arg),
         }
+    }
+
+    let focus = match focus_name.as_deref() {
+        Some(name) => match TemplateId::parse(name) {
+            Some(id) => Some(id),
+            None => {
+                eprintln!("unknown template {name:?}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+    if focus.is_none() && state_given {
+        eprintln!("--state needs --focus");
+        std::process::exit(1);
     }
 
     if let Some(path) = example_path {
@@ -65,7 +126,10 @@ fn main() {
         .unwrap_or(2.0)
         .clamp(0.75, 3.0);
 
-    let svg = sheet(scale, &config);
+    let svg = match focus {
+        Some(id) => focus_sheet(scale, &config, id, state),
+        None => sheet(scale, &config),
+    };
     if let Err(error) = std::fs::write(&out, svg) {
         eprintln!("could not write {}: {error}", out.display());
         std::process::exit(1);
@@ -132,6 +196,116 @@ fn sheet(scale: f32, config: &GuiLayoutConfig) -> String {
     svg
 }
 
+fn focus_sheet(
+    scale: f32,
+    config: &GuiLayoutConfig,
+    id: TemplateId,
+    state: PreviewState,
+) -> String {
+    let template = config
+        .template(id)
+        .unwrap_or_else(|| panic!("template {:?} is not in the layout document", id));
+    let layout = config
+        .layout(template, scale)
+        .unwrap_or_else(|error| panic!("preview template {:?}: {error}", id));
+    let c = &config.colors;
+    let margin = 24.0 * scale;
+    let header = 56.0 * scale;
+    let gap = 16.0 * scale;
+    let panel = (state == PreviewState::Open).then_some(PANEL_PREVIEW_W * scale);
+    let footer = "Hover, active and open states use the semantic colours. Panel bodies and slideout geometry are not part of the layout document.";
+    let title = format!("{} — {}", template.id.label(), state.label());
+    let width = (margin * 2.0 + layout.card.width + panel.map_or(0.0, |width| width + gap))
+        .max(margin * 2.0 + title.chars().count() as f32 * 15.0 * scale * 0.55)
+        .max(margin * 2.0 + footer.chars().count() as f32 * 8.0 * scale * 0.52);
+    let height = margin * 2.0 + header + layout.card.height + 34.0 * scale;
+
+    let mut svg = String::new();
+    let _ = write!(
+        svg,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.1}" height="{height:.1}" viewBox="0 0 {width:.1} {height:.1}">"#
+    );
+    let _ = write!(
+        svg,
+        r#"<rect width="100%" height="100%" fill="{}"/>"#,
+        c.surface.app_background
+    );
+    let _ = write!(
+        svg,
+        r#"<text x="{margin:.1}" y="{y:.1}" fill="{}" font-family="sans-serif" font-size="{size:.1}" font-weight="600">{title}</text>"#,
+        c.text.primary,
+        y = margin + 18.0 * scale,
+        size = 15.0 * scale,
+    );
+
+    let card_y = margin + header;
+    draw_card(
+        &mut svg, template, &layout, margin, card_y, scale, config, state,
+    );
+
+    if let Some(panel_w) = panel {
+        let panel_rect = Rect::new(
+            margin + layout.card.width + gap,
+            card_y,
+            panel_w,
+            layout.card.height,
+        );
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}" stroke-dasharray="{dash:.1} {dash:.1}" rx="{r:.1}"/>"#,
+            x = panel_rect.x,
+            y = panel_rect.y,
+            w = panel_rect.width,
+            h = panel_rect.height,
+            color = &c.surface.border,
+            sw = 1.0 * scale,
+            dash = 5.0 * scale,
+            r = 8.0 * scale,
+        );
+        let label = state_panel(template)
+            .map(|panel| panel.label())
+            .unwrap_or("panel");
+        let _ = write!(
+            svg,
+            r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}">{label}</text>"#,
+            x = panel_rect.x + 12.0 * scale,
+            y = panel_rect.y + 20.0 * scale,
+            color = &c.text.secondary,
+            size = 11.0 * scale,
+        );
+        let _ = write!(
+            svg,
+            r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}">panel body is not modelled</text>"#,
+            x = panel_rect.x + 12.0 * scale,
+            y = panel_rect.y + 38.0 * scale,
+            color = &c.text.secondary,
+            size = 8.0 * scale,
+        );
+    }
+
+    let footer_y = margin + header + layout.card.height + 20.0 * scale;
+    let _ = write!(
+        svg,
+        r#"<text x="{margin:.1}" y="{footer_y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}">{footer}</text>"#,
+        color = &c.text.secondary,
+        size = 8.0 * scale,
+    );
+    let _ = write!(svg, "</svg>");
+    svg
+}
+
+/// The tab that carries the hover or open state in the focus view.
+fn state_panel(template: &LayoutTemplate) -> Option<Panel> {
+    [Panel::Eq, Panel::Settings, Panel::Trim, Panel::Dynamics]
+        .into_iter()
+        .find(|panel| {
+            template
+                .elements
+                .iter()
+                .any(|element| element.kind == ElementKind::Tab(*panel))
+        })
+}
+
 fn draw_template(
     svg: &mut String,
     template: &LayoutTemplate,
@@ -143,6 +317,29 @@ fn draw_template(
     let layout = config
         .layout(template, scale)
         .unwrap_or_else(|error| panic!("preview template {:?}: {error}", template.id));
+    draw_card(
+        svg,
+        template,
+        &layout,
+        ox,
+        oy,
+        scale,
+        config,
+        PreviewState::Rest,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_card(
+    svg: &mut String,
+    template: &LayoutTemplate,
+    layout: &StripLayout,
+    ox: f32,
+    oy: f32,
+    scale: f32,
+    config: &GuiLayoutConfig,
+    state: PreviewState,
+) {
     let c = &config.colors;
     let v = &config.visual;
     let card = translated(layout.card, ox, oy);
@@ -174,12 +371,15 @@ fn draw_template(
             ),
             ElementKind::Pan => draw_pan(svg, rect, c, v, scale),
             ElementKind::Button(action) => {
-                let label = match action {
-                    Action::Mute => "M",
-                    Action::Solo => "S",
-                    Action::Cue => "CUE",
-                };
-                draw_button(svg, rect, label, c, v, scale);
+                draw_button(
+                    svg,
+                    rect,
+                    action,
+                    state == PreviewState::Active,
+                    c,
+                    v,
+                    scale,
+                );
             }
             ElementKind::Readout(side) => {
                 let value = match side {
@@ -202,7 +402,12 @@ fn draw_template(
                 }
             }
             ElementKind::FxFader => draw_fx(svg, rect, template.kind, c, v, scale),
-            ElementKind::Tab(panel) => draw_tab(svg, rect, panel, c, v, scale),
+            ElementKind::Tab(panel) => {
+                let shape = translated(resolved.face.unwrap_or(resolved.rect), ox, oy);
+                let highlighted = matches!(state, PreviewState::Hover | PreviewState::Open)
+                    && state_panel(template) == Some(panel);
+                draw_tab(svg, rect, shape, panel, highlighted, c, v, scale);
+            }
             ElementKind::Level => {
                 draw_text(svg, rect, "0.0", &c.text.primary, v.readout_size * scale)
             }
@@ -269,25 +474,22 @@ fn draw_pan(svg: &mut String, pan: Rect, c: &ColorScheme, v: &VisualTokens, scal
 fn draw_button(
     svg: &mut String,
     rect: Rect,
-    label: &str,
+    action: Action,
+    lit: bool,
     c: &ColorScheme,
     v: &VisualTokens,
     scale: f32,
 ) {
-    fill_rect(
-        svg,
-        rect,
-        &c.control.button_face,
-        &c.surface.border,
-        3.0 * scale,
-    );
-    draw_text(
-        svg,
-        rect,
-        label,
-        &c.text.secondary,
-        v.button_text_size * scale,
-    );
+    let (label, face, text) = match (action, lit) {
+        (Action::Mute, false) => ("M", &c.control.button_face, &c.text.secondary),
+        (Action::Solo, false) => ("S", &c.control.button_face, &c.text.secondary),
+        (Action::Cue, false) => ("CUE", &c.control.button_face, &c.text.secondary),
+        (Action::Mute, true) => ("M", &c.accent.mute, &c.text.primary),
+        (Action::Solo, true) => ("S", &c.accent.solo, &c.text.primary),
+        (Action::Cue, true) => ("CUE", &c.accent.cue, &c.text.primary),
+    };
+    fill_rect(svg, rect, face, &c.surface.border, 3.0 * scale);
+    draw_text(svg, rect, label, text, v.button_text_size * scale);
 }
 
 fn draw_meter(
@@ -375,39 +577,6 @@ fn draw_fader(
     let cap_centre = track.bottom() - track.height * db_to_t(0.0);
     let fill = Rect::new(slot.x, cap_centre, slot.width, slot.bottom() - cap_centre);
     fill_rect(svg, fill, &c.control.fader_fill, &c.control.fader_fill, 0.0);
-    let cap = Rect::new(
-        track.centre_x() - 11.0 * scale,
-        cap_centre - v.fader_cap_h * scale / 2.0,
-        v.fader_cap_w * scale,
-        v.fader_cap_h * scale,
-    );
-    fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
-    for i in 1..=3 {
-        let y = cap.y + cap.height * i as f32 / 4.0;
-        let (x, w, h) = if i == 2 {
-            (cap.x, cap.width, (2.0 * scale).max(2.0))
-        } else {
-            (
-                cap.x + 3.0 * scale,
-                cap.width - 6.0 * scale,
-                (1.0 * scale).max(1.0),
-            )
-        };
-        let _ = write!(
-            svg,
-            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
-            x = x,
-            y = y - h / 2.0,
-            w = w,
-            h = h,
-            color = if i == 2 {
-                &c.control.cap_centre
-            } else {
-                &c.control.cap_ridge
-            },
-        );
-    }
-
     // Graduations sit to the left of the slot.  +3 / -3 are half length;
     // the white 0 dB mark is repeated at the right edge of the slot.
     let under = 5.0 * scale;
@@ -448,6 +617,40 @@ fn draw_fader(
         h = 1.0 * scale,
         color = "#f2f3f5",
     );
+    // The cap is painted over the graduations, like the printed scale on a
+    // real console: only the marks outside the cap stay visible.
+    let cap = Rect::new(
+        track.centre_x() - 11.0 * scale,
+        cap_centre - v.fader_cap_h * scale / 2.0,
+        v.fader_cap_w * scale,
+        v.fader_cap_h * scale,
+    );
+    fill_rect(svg, cap, "#c9cbd1", "#8b8e96", 2.0 * scale);
+    for i in 1..=3 {
+        let y = cap.y + cap.height * i as f32 / 4.0;
+        let (x, w, h) = if i == 2 {
+            (cap.x, cap.width, (2.0 * scale).max(2.0))
+        } else {
+            (
+                cap.x + 3.0 * scale,
+                cap.width - 6.0 * scale,
+                (1.0 * scale).max(1.0),
+            )
+        };
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
+            x = x,
+            y = y - h / 2.0,
+            w = w,
+            h = h,
+            color = if i == 2 {
+                &c.control.cap_centre
+            } else {
+                &c.control.cap_ridge
+            },
+        );
+    }
 }
 
 fn draw_fx(
@@ -494,20 +697,36 @@ fn draw_fx(
 fn draw_tab(
     svg: &mut String,
     glyph: Rect,
+    shape: Rect,
     panel: Panel,
+    highlighted: bool,
     c: &ColorScheme,
     v: &VisualTokens,
     scale: f32,
 ) {
     // At rest a tab shows only its glyph; the dark face is used for hover or
     // while its slideout is open.
+    if highlighted {
+        fill_rect(
+            svg,
+            shape,
+            &c.control.tab_face,
+            &c.surface.border,
+            3.0 * scale,
+        );
+    }
     let (label, size) = match panel {
         Panel::Trim => ("T", v.tab_glyph_size),
         Panel::Settings => ("⚙", v.gear_glyph_size),
         Panel::Eq => ("EQ", v.tab_glyph_size),
         Panel::Dynamics => ("D", v.tab_glyph_size),
     };
-    draw_text(svg, glyph, label, &c.text.secondary, size * scale);
+    let text = if highlighted {
+        &c.text.primary
+    } else {
+        &c.text.secondary
+    };
+    draw_text(svg, glyph, label, text, size * scale);
 }
 
 fn draw_submix(svg: &mut String, bar: Rect, c: &ColorScheme, v: &VisualTokens, scale: f32) {

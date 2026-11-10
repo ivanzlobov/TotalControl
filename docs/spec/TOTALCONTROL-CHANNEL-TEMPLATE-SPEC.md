@@ -375,6 +375,8 @@ cargo run -p totalcontrol-layout --bin channel-preview -- \
 ```
 
 The second positional argument is the zoom, clamped to `0.75..3.0`.
+`--focus <template>` renders one strip instead of the sheet, and `--state`
+selects its element state: `rest`, `hover`, `open` or `active`.
 
 `--example` writes a complete starting document and the matching schema
 beside it:

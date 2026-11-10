@@ -275,6 +275,36 @@ impl TemplateId {
             Self::ControlRoom => "Control Room",
         }
     }
+
+    pub const ALL: [Self; 7] = [
+        Self::InputMono,
+        Self::InputStereo,
+        Self::InputMonoNoFx,
+        Self::PlaybackStereo,
+        Self::OutputStereo,
+        Self::OutputMono,
+        Self::ControlRoom,
+    ];
+
+    /// The document token for this template.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::InputMono => "InputMono",
+            Self::InputStereo => "InputStereo",
+            Self::InputMonoNoFx => "InputMonoNoFx",
+            Self::PlaybackStereo => "PlaybackStereo",
+            Self::OutputStereo => "OutputStereo",
+            Self::OutputMono => "OutputMono",
+            Self::ControlRoom => "ControlRoom",
+        }
+    }
+
+    /// Parse a document token or the display label.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|id| id.token() == name || id.label() == name)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1456,6 +1486,15 @@ mod tests {
             approx(face.right(), STRIP_W * 1.5);
             approx(glyph.centre_x(), face.x + TAB_W * 1.5 / 2.0);
         }
+    }
+
+    #[test]
+    fn template_tokens_round_trip() {
+        for id in TemplateId::ALL {
+            assert_eq!(TemplateId::parse(id.token()), Some(id));
+            assert_eq!(TemplateId::parse(id.label()), Some(id));
+        }
+        assert_eq!(TemplateId::parse("Nope"), None);
     }
 
     #[test]

@@ -186,6 +186,17 @@ cargo run -p totalcontrol-layout --bin channel-preview -- \
     --example /tmp/gui-layout.json
 ```
 
+Render one template on its own with an element state:
+
+```sh
+cargo run -p totalcontrol-layout --bin channel-preview -- \
+    --focus InputMono --state hover /tmp/focus.svg 2
+```
+
+`--state` accepts `rest`, `hover`, `open` or `active`.  The open state draws a
+labelled placeholder beside the card, because a panel body is not part of the
+layout document.
+
 The command writes `/tmp/gui-layout.json` and the matching
 `gui-layout.schema.json` beside it; the document references that sibling file
 through `$schema` for editor validation and completion.  The checked-in files
