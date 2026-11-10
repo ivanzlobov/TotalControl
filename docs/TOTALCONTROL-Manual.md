@@ -280,6 +280,25 @@ A followed rate change is a runtime change, so it does not add an undo step or
 mark the workspace dirty. The chosen mode is remembered in the application
 preferences, not in a workspace.
 
+### Graphics and window size
+
+TotalControl draws the mixer window on the GPU. A redraw updates the whole
+window, so the window's size sets the cost of a frame rather than the part
+that changed.
+
+The VU meters animate at up to 20 frames per second and fall back to a slower
+poll while a level is steady; a held peak still appears. Channel strips,
+faders, knobs and meters are drawn with crisp edges rather than multisampling,
+which keeps the window's share of the GPU small enough for the desktop
+compositor to keep its frame rate on a shared or integrated GPU. Text is
+unaffected.
+
+On a small integrated GPU driving a 4K display, a window that covers most of
+the screen leaves the least headroom. If the desktop stutters while
+TotalControl is open, make the window smaller first; closing it to the tray
+stops the drawing entirely (see
+[16. Running in the background](#16-running-in-the-background)).
+
 ## 2. Views
 
 TotalControl offers three views:

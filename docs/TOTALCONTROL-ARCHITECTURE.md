@@ -62,6 +62,27 @@ or open questions. Unresolved work belongs in `work/`.
 The mixer model is the centre. Control surfaces do not talk to the device,
 and device backends do not know about control surfaces.
 
+### GUI rendering
+
+The GUI is iced 0.14 on wgpu, which selects a Vulkan adapter on Linux. One
+thread runs the event loop: every `Message` rebuilds the view, lays it out and
+records the frame; a build takes about a millisecond.
+
+Rendering is full-window. The wgpu backend keeps no damage region, so each
+redraw presents the whole surface and the compositor recomposites the window.
+The cost of a frame therefore follows the window area, not the part that
+changed, and the window is another client on the same GPU as the compositor.
+
+Canvas metering drives its own frames from the shared `MeterSnapshot`: at most
+one frame per `METER_FRAME_MS` (20 fps) while a level moves, a 10 Hz poll while
+a live level is steady, and none while the bus is idle. The `Tick`
+subscription (250 ms readout, 40 ms metered, 33 ms during drags) rebuilds the
+view.
+
+Antialiasing is off (`Settings::antialiasing`): iced maps it to MSAAx4, which
+renders and resolves every canvas layer and multiplies the per-frame GPU cost.
+Canvas shapes are tessellated either way; text comes from the glyph atlas.
+
 ## 3. Device model
 
 `totalcontrol-core` defines the model and the `RmeDevice` trait. The trait
