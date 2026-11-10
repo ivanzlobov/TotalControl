@@ -15,7 +15,7 @@ use crate::widgets::fader::{
     fader, vu_meter, BusSlot, Fader, FaderColumns, MeterFrame, CHANNEL_SLOT_W, FX_FADER_SCALE,
     FX_SLOT_W,
 };
-use crate::widgets::layout::{ChannelKind, Features, Rect, StripLayout, SUBMIX_H};
+use crate::widgets::layout::{ChannelKind, ElementPlacement, Features, Rect, StripLayout, SUBMIX_H};
 use crate::widgets::knob::{knob, Knob};
 
 /// Base sizes at `scale == 1.0` (`theme::SCALE_DEFAULT`) — every dimension
@@ -857,6 +857,20 @@ pub fn strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     }
 }
 
+/// Rect of a standard channel element.
+fn element(layout: &StripLayout, placement: ElementPlacement) -> Rect {
+    layout
+        .rect(placement)
+        .unwrap_or_else(|| panic!("the channel layout has no {} element", placement.label()))
+}
+
+/// Face of a standard channel element that reaches the card's right edge.
+fn face(layout: &StripLayout, placement: ElementPlacement) -> Rect {
+    layout
+        .face(placement)
+        .unwrap_or_else(|| panic!("the channel layout has no {} face", placement.label()))
+}
+
 fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let cid = p.cid;
     let out = p.output_idx;
@@ -875,7 +889,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
         },
     );
     let card = layout.card;
-    let btn_h = layout.buttons[0].height;
+    let btn_h = element(&layout, ElementPlacement::ButtonLeft).height;
 
     let header = header_row(
         cid,
@@ -1000,7 +1014,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     // that failure mode doesn't apply and Gain moved in with the rest.
 
     let default_vol = p.default_vol;
-    let fader_h = layout.fader.height;
+    let fader_h = element(&layout, ElementPlacement::Fader).height;
     let fader_widget = fader(Fader {
         value: p.vol,
         range: p.drag_range.unwrap_or((0.0, 2.0)),
@@ -1044,8 +1058,8 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
 
     // The four tab slots are fixed.  A slot with no control is still
     // reserved; its face does not extend to the edge.
-    let tabs = layout.tab_glyphs;
-    let faces = layout.tab_faces;
+    let tabs: [Rect; 4] = layout.stack_tabs.map(|(glyph, _)| glyph);
+    let faces: [Rect; 4] = layout.stack_tabs.map(|(_, face)| face);
     let trim_open = p.open_flyout == Some(FlyoutKind::Trim);
     let trim_el: Element<'a, Message> = if p.has_trim {
         slideout_tab(
@@ -1132,6 +1146,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     // The FX fader: send on inputs and playbacks, return on outputs. A thin
     // track to the right of the main fader, starting at the same height,
     // with a short line under it — orange for a send, green for a return.
+    let fx_rect = layout.rect(ElementPlacement::Fx);
     let fx_fader: Option<Element<'a, Message>> = p.fx_level.map(move |db| {
         let value = 10f32.powf(db / 20.0).clamp(0.0, 2.0);
         let inner = fader(Fader {
@@ -1151,7 +1166,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             // matches the main fader's own feel.  Every strip on an FX
             // unit grows by the same amount, so the symbol grid below it
             // keeps its shared height.
-            height: layout.fx.map_or(0.0, |r| r.height),
+            height: fx_rect.map_or(0.0, |r| r.height),
             top_inset: 0.0,
             show_meter: false,
             // Same dark slot as the main fader, but a smaller body.
@@ -1189,7 +1204,7 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
             .on_submit(Message::EditCommit)
             .style(theme::text_input)
             .size(theme::TEXT_SM * scale)
-            .width(Length::Fixed(layout.db_readout.width))
+            .width(Length::Fixed(element(&layout, ElementPlacement::Level).width))
             .into()
     } else {
         let initial = if p.vol > 0.0 {
@@ -1219,12 +1234,12 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let collapse_btn = minimize_button(
         cid,
         scale,
-        layout.collapse_glyph.width,
-        layout.collapse_face.width,
-        layout.collapse_face.height,
+        element(&layout, ElementPlacement::Minimize).width,
+        face(&layout, ElementPlacement::Minimize).width,
+        face(&layout, ElementPlacement::Minimize).height,
     );
     // B2: full-width submix selector; the flyout opens from the right edge.
-    let route_button = layout.submix.map(|rect| {
+    let route_button = layout.rect(ElementPlacement::Submix).map(|rect| {
         submix_button(
             cid,
             p.bus_label.clone(),
@@ -1251,41 +1266,49 @@ fn full_strip<'a>(p: StripParams<'a>) -> Element<'a, Message> {
     let mut stack = Stack::new()
         .width(Length::Fixed(card.width))
         .height(Length::Fixed(card.height));
-    stack = stack.push(pinned(header, layout.name, card));
-    stack = stack.push(pinned(pan_element, layout.pan, card));
-    stack = stack.push(pinned(mute_btn, layout.buttons[0], card));
-    stack = stack.push(pinned(second_button, layout.buttons[1], card));
+    stack = stack.push(pinned(header, element(&layout, ElementPlacement::Name), card));
+    stack = stack.push(pinned(pan_element, element(&layout, ElementPlacement::Pan), card));
     stack = stack.push(pinned(
-        strength_cell(
-            left_strength,
-            layout.readouts[0].width,
-            layout.readouts[0].height,
-            scale,
-        ),
-        layout.readouts[0],
+        mute_btn,
+        element(&layout, ElementPlacement::ButtonLeft),
         card,
     ));
     stack = stack.push(pinned(
-        strength_cell(
-            right_strength,
-            layout.readouts[1].width,
-            layout.readouts[1].height,
-            scale,
-        ),
-        layout.readouts[1],
+        second_button,
+        element(&layout, ElementPlacement::ButtonRight),
+        card,
+    ));
+    let readout_left = element(&layout, ElementPlacement::ReadoutLeft);
+    let readout_right = element(&layout, ElementPlacement::ReadoutRight);
+    stack = stack.push(pinned(
+        strength_cell(left_strength, readout_left.width, readout_left.height, scale),
+        readout_left,
+        card,
+    ));
+    stack = stack.push(pinned(
+        strength_cell(right_strength, readout_right.width, readout_right.height, scale),
+        readout_right,
         card,
     ));
     stack = stack.push(pinned(fader_widget, layout.fader_canvas, card));
-    if let (Some(fx), Some(rect)) = (fx_fader, layout.fx) {
+    if let (Some(fx), Some(rect)) = (fx_fader, fx_rect) {
         stack = stack.push(pinned(fx, rect, card));
     }
-    stack = stack.push(pinned(trim_el, layout.tab_faces[0], card));
-    stack = stack.push(pinned(gear_el, layout.tab_faces[1], card));
-    stack = stack.push(pinned(eq_el, layout.tab_faces[2], card));
-    stack = stack.push(pinned(dyn_el, layout.tab_faces[3], card));
-    stack = stack.push(pinned(db_display, layout.db_readout, card));
-    stack = stack.push(pinned(collapse_btn, layout.collapse_face, card));
-    if let (Some(route), Some(rect)) = (route_button, layout.submix) {
+    stack = stack.push(pinned(trim_el, faces[0], card));
+    stack = stack.push(pinned(gear_el, faces[1], card));
+    stack = stack.push(pinned(eq_el, faces[2], card));
+    stack = stack.push(pinned(dyn_el, faces[3], card));
+    stack = stack.push(pinned(
+        db_display,
+        element(&layout, ElementPlacement::Level),
+        card,
+    ));
+    stack = stack.push(pinned(
+        collapse_btn,
+        face(&layout, ElementPlacement::Minimize),
+        card,
+    ));
+    if let (Some(route), Some(rect)) = (route_button, layout.rect(ElementPlacement::Submix)) {
         stack = stack.push(pinned(route, rect, card));
     }
 
@@ -1360,7 +1383,8 @@ mod tests {
             + theme::SPACE_HAIRLINE * 2.0
             + COLLAPSED_METER_H
             + theme::SPACE_HAIRLINE;
-        assert!((plus_y - full.db_readout.y).abs() < f32::EPSILON);
+        let level = element(&full, ElementPlacement::Level);
+        assert!((plus_y - level.y).abs() < f32::EPSILON);
         let bottom = plus_y
             + ICON_BTN_H
             + theme::SPACE_HAIRLINE
@@ -1372,7 +1396,7 @@ mod tests {
     fn compact_icon_column_leaves_room_for_the_fader_group() {
         let l = StripLayout::for_kind(ChannelKind::Input, 1.0, Features::default());
         assert!(l.fader_canvas.width >= crate::widgets::fader::FADER_GROUP_W);
-        assert!(l.fader_canvas.x + l.fader_canvas.width <= l.tab_glyphs[0].x);
+        assert!(l.fader_canvas.x + l.fader_canvas.width <= l.stack_tabs[0].0.x);
     }
 
     #[test]

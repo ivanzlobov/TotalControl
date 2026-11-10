@@ -8,7 +8,9 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use totalcontrol_layout::{
-    ChannelKind, GuiLayoutConfig, Rect, TemplateSpec, MONO_BAR_RATIO, VU_LABELS,
+    Action, ChannelKind, ChannelSide, ChannelTemplate, ColorScheme, ElementKind, ElementPlacement,
+    GuiLayoutConfig, Panel, Rect, StripLayout, TemplateSpec, VisualTokens, MONO_BAR_RATIO,
+    VU_LABELS,
 };
 
 fn main() {
@@ -139,7 +141,9 @@ fn draw_template(
     scale: f32,
     config: &GuiLayoutConfig,
 ) {
-    let layout = config.layout(spec, scale);
+    let template = ChannelTemplate::of(spec);
+    let layout = StripLayout::for_template(&template, &config.geometry, scale)
+        .unwrap_or_else(|error| panic!("preview template {:?}: {error}", spec.id));
     let c = &config.colors;
     let v = &config.visual;
     let card = translated(layout.card, ox, oy);
@@ -156,15 +160,91 @@ fn draw_template(
         8.0 * scale,
     );
 
-    draw_text(
-        svg,
-        translated(layout.name, ox, oy),
-        sample_name(spec),
-        &c.text.primary,
-        v.name_size * scale,
-    );
+    let vu = layout
+        .rect(ElementPlacement::Meter)
+        .map(|rect| translated(rect, ox, oy));
+    for resolved in &layout.elements {
+        let rect = translated(resolved.rect, ox, oy);
+        match resolved.element.kind {
+            ElementKind::Name => draw_text(
+                svg,
+                rect,
+                sample_name(spec),
+                &c.text.primary,
+                v.name_size * scale,
+            ),
+            ElementKind::Pan => draw_pan(svg, rect, c, v, scale),
+            ElementKind::Button(action) => {
+                let label = match action {
+                    Action::Mute => "M",
+                    Action::Solo => "S",
+                    Action::Cue => "CUE",
+                };
+                draw_button(svg, rect, label, c, v, scale);
+            }
+            ElementKind::Readout(side) => {
+                let value = match side {
+                    ChannelSide::Left => "-12.3",
+                    ChannelSide::Right => "-9.8",
+                };
+                draw_text_aligned(
+                    svg,
+                    rect,
+                    value,
+                    &c.text.secondary,
+                    v.readout_size * scale,
+                    "end",
+                );
+            }
+            ElementKind::Meter => draw_meter(svg, rect, spec.stereo, c, v, scale),
+            ElementKind::Fader => {
+                if let Some(vu) = vu {
+                    draw_fader(svg, rect, vu, c, v, scale);
+                }
+            }
+            ElementKind::FxFader => draw_fx(svg, rect, spec.kind, c, v, scale),
+            ElementKind::Tab(panel) => draw_tab(svg, rect, panel, c, v, scale),
+            ElementKind::Level => {
+                draw_text(svg, rect, "0.0", &c.text.primary, v.readout_size * scale)
+            }
+            ElementKind::Minimize => {
+                let face = translated(resolved.face.unwrap_or(resolved.rect), ox, oy);
+                fill_rect(
+                    svg,
+                    face,
+                    &c.control.button_face,
+                    &c.surface.border,
+                    3.0 * scale,
+                );
+                draw_text(svg, face, "−", &c.text.secondary, 8.0 * scale);
+            }
+            ElementKind::Submix => draw_submix(svg, rect, c, v, scale),
+        }
+    }
 
-    let pan = translated(layout.pan, ox, oy);
+    // An absent tab keeps its reserved row; outline it so the sheet shows
+    // which tabs the template does not have.
+    for panel in Panel::ALL {
+        if layout.element(ElementKind::Tab(panel)).is_some() {
+            continue;
+        }
+        let (glyph, _) = layout.stack_tabs[panel.stack_index()];
+        let glyph = translated(glyph, ox, oy);
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}" rx="{r:.1}"/>"#,
+            x = glyph.x,
+            y = glyph.y,
+            w = glyph.width,
+            h = glyph.height,
+            color = &c.surface.border,
+            sw = 0.8 * scale,
+            r = 2.0 * scale,
+        );
+    }
+}
+
+fn draw_pan(svg: &mut String, pan: Rect, c: &ColorScheme, v: &VisualTokens, scale: f32) {
     let _ = write!(
         svg,
         r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="{face}" stroke="{border}" stroke-width="{sw:.1}"/>"#,
@@ -185,39 +265,42 @@ fn draw_template(
         sw = 1.0 * scale,
     );
     draw_text(svg, pan, "C", &c.text.primary, v.knob_label_size * scale);
+}
 
-    let labels = if matches!(spec.kind, ChannelKind::Output) {
-        ["M", "CUE"]
-    } else {
-        ["M", "S"]
-    };
-    for (slot, label) in layout.buttons.iter().zip(labels) {
-        let r = translated(*slot, ox, oy);
-        fill_rect(
-            svg,
-            r,
-            &c.control.button_face,
-            &c.surface.border,
-            3.0 * scale,
-        );
-        draw_text(svg, r, label, &c.text.secondary, v.button_text_size * scale);
-    }
+fn draw_button(
+    svg: &mut String,
+    rect: Rect,
+    label: &str,
+    c: &ColorScheme,
+    v: &VisualTokens,
+    scale: f32,
+) {
+    fill_rect(
+        svg,
+        rect,
+        &c.control.button_face,
+        &c.surface.border,
+        3.0 * scale,
+    );
+    draw_text(
+        svg,
+        rect,
+        label,
+        &c.text.secondary,
+        v.button_text_size * scale,
+    );
+}
 
-    for (slot, value) in layout.readouts.iter().zip(["-12.3", "-9.8"]) {
-        let r = translated(*slot, ox, oy);
-        draw_text_aligned(
-            svg,
-            r,
-            value,
-            &c.text.secondary,
-            v.readout_size * scale,
-            "end",
-        );
-    }
-
-    let vu = translated(layout.vu, ox, oy);
+fn draw_meter(
+    svg: &mut String,
+    vu: Rect,
+    stereo: bool,
+    c: &ColorScheme,
+    v: &VisualTokens,
+    scale: f32,
+) {
     fill_rect(svg, vu, "#1e1f23", "#1e1f23", 2.0 * scale);
-    let bars = if spec.stereo { 2 } else { 1 };
+    let bars = if stereo { 2 } else { 1 };
     let gap = 2.0 * scale;
     let bar_w = if bars == 2 {
         (vu.width - gap) / 2.0
@@ -266,8 +349,16 @@ fn draw_template(
             size = v.micro_size * scale,
         );
     }
+}
 
-    let track = translated(layout.fader, ox, oy);
+fn draw_fader(
+    svg: &mut String,
+    track: Rect,
+    vu: Rect,
+    c: &ColorScheme,
+    v: &VisualTokens,
+    scale: f32,
+) {
     let slot_w = v.fader_slot_w * scale;
     let slot = Rect::new(
         track.centre_x() - slot_w / 2.0,
@@ -321,7 +412,6 @@ fn draw_template(
     // Graduations sit to the left of the slot.  +3 / -3 are half length;
     // the white 0 dB mark is repeated at the right edge of the slot.
     let under = 5.0 * scale;
-    let vu = translated(layout.vu, ox, oy);
     let mark_w = ((track.x + under - vu.right()).max(1.0)) * 0.60;
     for db in [-60.0f32, -40.0, -20.0, -10.0, -6.0, -3.0, 0.0, 3.0] {
         let y = track.bottom() - track.height * db_to_t(db);
@@ -359,121 +449,91 @@ fn draw_template(
         h = 1.0 * scale,
         color = "#f2f3f5",
     );
+}
 
-    if let Some(fx) = layout.fx {
-        let fx = translated(fx, ox, oy);
-        let fx_slot_w = v.fader_slot_w * scale;
-        let fx_slot = Rect::new(fx.centre_x() - fx_slot_w / 2.0, fx.y, fx_slot_w, fx.height);
-        fill_rect(
-            svg,
-            fx_slot,
-            &c.control.fader_slot,
-            &c.control.fader_slot,
-            1.0 * scale,
-        );
-        let fx_cap_h = v.fx_cap_h * scale;
-        let fx_cap_w = v.fx_cap_w * scale;
-        let fx_cap_centre = fx.y + fx.height * 0.38;
-        let fx_fill = Rect::new(
-            fx_slot.x,
-            fx_cap_centre,
-            fx_slot.width,
-            fx_slot.bottom() - fx_cap_centre,
-        );
-        let fx_color = if matches!(spec.kind, ChannelKind::Output) {
-            c.accent.cue.as_str()
-        } else {
-            "#ff9f43"
-        };
-        fill_rect(svg, fx_fill, fx_color, fx_color, 0.0);
-        let fx_cap = Rect::new(
-            fx.centre_x() - fx_cap_w / 2.0,
-            fx_cap_centre - fx_cap_h / 2.0,
-            fx_cap_w,
-            fx_cap_h,
-        );
-        fill_rect(svg, fx_cap, "#c9cbd1", "#8b8e96", 1.0 * scale);
-    }
-
-    let tab_labels = ["T", "⚙", "EQ", "D"];
-    let tab_present = [
-        spec.features.trim,
-        true,
-        spec.features.eq,
-        spec.features.dynamics,
-    ];
-    for index in 0..4 {
-        let face = translated(layout.tab_faces[index], ox, oy);
-        let glyph = translated(layout.tab_glyphs[index], ox, oy);
-        if tab_present[index] {
-            // At rest a tab shows only its glyph; the dark face is used for
-            // hover or while its slideout is open.
-            let _ = face;
-            let glyph_size = if index == 1 {
-                v.gear_glyph_size
-            } else {
-                v.tab_glyph_size
-            };
-            draw_text(
-                svg,
-                glyph,
-                tab_labels[index],
-                &c.text.secondary,
-                glyph_size * scale,
-            );
-        } else {
-            let outline = Rect::new(glyph.x, glyph.y, glyph.width, glyph.height);
-            let _ = write!(
-                svg,
-                r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="none" stroke="{color}" stroke-width="{sw:.1}" rx="{r:.1}"/>"#,
-                x = outline.x,
-                y = outline.y,
-                w = outline.width,
-                h = outline.height,
-                color = &c.surface.border,
-                sw = 0.8 * scale,
-                r = 2.0 * scale,
-            );
-        }
-    }
-
-    let db = translated(layout.db_readout, ox, oy);
-    draw_text(svg, db, "0.0", &c.text.primary, v.readout_size * scale);
-    let minus = translated(layout.collapse_face, ox, oy);
+fn draw_fx(
+    svg: &mut String,
+    fx: Rect,
+    kind: ChannelKind,
+    c: &ColorScheme,
+    v: &VisualTokens,
+    scale: f32,
+) {
+    let fx_slot_w = v.fader_slot_w * scale;
+    let fx_slot = Rect::new(fx.centre_x() - fx_slot_w / 2.0, fx.y, fx_slot_w, fx.height);
     fill_rect(
         svg,
-        minus,
+        fx_slot,
+        &c.control.fader_slot,
+        &c.control.fader_slot,
+        1.0 * scale,
+    );
+    let fx_cap_h = v.fx_cap_h * scale;
+    let fx_cap_w = v.fx_cap_w * scale;
+    let fx_cap_centre = fx.y + fx.height * 0.38;
+    let fx_fill = Rect::new(
+        fx_slot.x,
+        fx_cap_centre,
+        fx_slot.width,
+        fx_slot.bottom() - fx_cap_centre,
+    );
+    let fx_color = if matches!(kind, ChannelKind::Output) {
+        c.accent.cue.as_str()
+    } else {
+        "#ff9f43"
+    };
+    fill_rect(svg, fx_fill, fx_color, fx_color, 0.0);
+    let fx_cap = Rect::new(
+        fx.centre_x() - fx_cap_w / 2.0,
+        fx_cap_centre - fx_cap_h / 2.0,
+        fx_cap_w,
+        fx_cap_h,
+    );
+    fill_rect(svg, fx_cap, "#c9cbd1", "#8b8e96", 1.0 * scale);
+}
+
+fn draw_tab(
+    svg: &mut String,
+    glyph: Rect,
+    panel: Panel,
+    c: &ColorScheme,
+    v: &VisualTokens,
+    scale: f32,
+) {
+    // At rest a tab shows only its glyph; the dark face is used for hover or
+    // while its slideout is open.
+    let (label, size) = match panel {
+        Panel::Trim => ("T", v.tab_glyph_size),
+        Panel::Settings => ("⚙", v.gear_glyph_size),
+        Panel::Eq => ("EQ", v.tab_glyph_size),
+        Panel::Dynamics => ("D", v.tab_glyph_size),
+    };
+    draw_text(svg, glyph, label, &c.text.secondary, size * scale);
+}
+
+fn draw_submix(svg: &mut String, bar: Rect, c: &ColorScheme, v: &VisualTokens, scale: f32) {
+    fill_rect(
+        svg,
+        bar,
         &c.control.button_face,
         &c.surface.border,
-        3.0 * scale,
+        4.0 * scale,
     );
-    draw_text(svg, minus, "−", &c.text.secondary, 8.0 * scale);
-
-    if let Some(submix) = layout.submix {
-        let bar = translated(submix, ox, oy);
-        fill_rect(
-            svg,
-            bar,
-            &c.control.button_face,
-            &c.surface.border,
-            4.0 * scale,
-        );
-        draw_text(
-            svg,
-            bar,
-            "Phones 7/8",
-            &c.text.secondary,
-            v.readout_size * scale,
-        );
-        let _ = write!(
-            svg,
-            r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="end" dominant-baseline="middle">▸</text>"#,
-            x = bar.right() - 5.0 * scale,
-            y = bar.centre_y(),
-            color = &c.text.secondary,
-            size = v.readout_size * scale,
-        );
-    }
+    draw_text(
+        svg,
+        bar,
+        "Phones 7/8",
+        &c.text.secondary,
+        v.readout_size * scale,
+    );
+    let _ = write!(
+        svg,
+        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="end" dominant-baseline="middle">▸</text>"#,
+        x = bar.right() - 5.0 * scale,
+        y = bar.centre_y(),
+        color = &c.text.secondary,
+        size = v.readout_size * scale,
+    );
 }
 
 fn sample_name(spec: TemplateSpec) -> &'static str {

@@ -366,44 +366,440 @@ pub const TEMPLATES: &[TemplateSpec] = &[
     ),
 ];
 
-/// Resolved geometry for one full channel template at one zoom.
+/// A panel that opens beside the strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Panel {
+    Trim,
+    Settings,
+    Eq,
+    Dynamics,
+}
+
+impl Panel {
+    pub const ALL: [Self; 4] = [Self::Trim, Self::Settings, Self::Eq, Self::Dynamics];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Trim => "Trim",
+            Self::Settings => "Settings",
+            Self::Eq => "EQ",
+            Self::Dynamics => "Dynamics",
+        }
+    }
+
+    /// Index in the right-hand stack, `MR2` to `MR5`.
+    pub fn stack_index(self) -> usize {
+        match self {
+            Self::Trim => 0,
+            Self::Settings => 1,
+            Self::Eq => 2,
+            Self::Dynamics => 3,
+        }
+    }
+}
+
+/// The logical position of a channel element in the strip grid.
+///
+/// Labels follow `TOTALCONTROL-GUI-SPEC.md` §2.8: `T` rows on top, `M` in the
+/// middle and `B` at the bottom; `L`, `C` and `R` are the left, centre and
+/// right columns.  The middle area has a readout row (`M1L`, `M1R`) and a
+/// second row whose columns are the VU (`ML`), the fader (`MC`) and the
+/// right-hand stack (`MR1` to `MR5`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ElementPlacement {
+    /// T1: channel name and type tag.
+    Name,
+    /// T2: pan or balance knob.
+    Pan,
+    /// TL3: left button.
+    ButtonLeft,
+    /// TR3: right button.
+    ButtonRight,
+    /// M1L: left channel readout.
+    ReadoutLeft,
+    /// M1R: right channel readout.
+    ReadoutRight,
+    /// ML: the VU element.
+    Meter,
+    /// MC: the channel fader.
+    Fader,
+    /// MR1: the FX send or return fader.
+    Fx,
+    /// MR2 to MR5: a tab in the right-hand stack.
+    Stack(Panel),
+    /// B1: the dB readout.
+    Level,
+    /// B1R: the minimize face.
+    Minimize,
+    /// B2: the submix bar of an input or playback.
+    Submix,
+}
+
+impl ElementPlacement {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "T1",
+            Self::Pan => "T2",
+            Self::ButtonLeft => "TL3",
+            Self::ButtonRight => "TR3",
+            Self::ReadoutLeft => "M1L",
+            Self::ReadoutRight => "M1R",
+            Self::Meter => "ML",
+            Self::Fader => "MC",
+            Self::Fx => "MR1",
+            Self::Stack(Panel::Trim) => "MR2",
+            Self::Stack(Panel::Settings) => "MR3",
+            Self::Stack(Panel::Eq) => "MR4",
+            Self::Stack(Panel::Dynamics) => "MR5",
+            Self::Level => "B1",
+            Self::Minimize => "B1R",
+            Self::Submix => "B2",
+        }
+    }
+}
+
+/// A channel side, for the two-segment readouts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChannelSide {
+    Left,
+    Right,
+}
+
+/// The action of a button element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Action {
+    Mute,
+    Solo,
+    Cue,
+}
+
+/// What a channel element is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ElementKind {
+    /// The channel name and type tag.
+    Name,
+    /// The pan or balance knob.
+    Pan,
+    /// A mute, solo or cue button.
+    Button(Action),
+    /// A channel-strength readout cell.
+    Readout(ChannelSide),
+    /// The VU element.
+    Meter,
+    /// The channel fader.
+    Fader,
+    /// The FX send or return fader.
+    FxFader,
+    /// A tab that opens a panel.
+    Tab(Panel),
+    /// The dB readout of the fader level.
+    Level,
+    /// The strip collapse face.
+    Minimize,
+    /// The submix selector.
+    Submix,
+}
+
+impl ElementKind {
+    /// What the element shows or controls.
+    pub fn binding(self) -> Binding {
+        match self {
+            Self::Name => Binding::Name,
+            Self::Pan => Binding::Pan,
+            Self::Button(action) => Binding::Toggle(action),
+            Self::Readout(side) => Binding::Strength(side),
+            Self::Meter => Binding::Meter,
+            Self::Fader => Binding::Level,
+            Self::FxFader => Binding::Fx,
+            Self::Tab(panel) => Binding::Panel(panel),
+            Self::Level => Binding::Output,
+            Self::Minimize => Binding::Collapse,
+            Self::Submix => Binding::Submix,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Pan => "pan",
+            Self::Button(Action::Mute) => "mute",
+            Self::Button(Action::Solo) => "solo",
+            Self::Button(Action::Cue) => "cue",
+            Self::Readout(_) => "readout",
+            Self::Meter => "meter",
+            Self::Fader => "fader",
+            Self::FxFader => "FX fader",
+            Self::Tab(panel) => panel.label(),
+            Self::Level => "level readout",
+            Self::Minimize => "minimize",
+            Self::Submix => "submix",
+        }
+    }
+}
+
+/// The state a channel element is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Binding {
+    /// The channel name.
+    Name,
+    /// The pan or balance value.
+    Pan,
+    /// An on/off state.
+    Toggle(Action),
+    /// A channel-strength readout.
+    Strength(ChannelSide),
+    /// The live meter level.
+    Meter,
+    /// The send or output level the fader sets.
+    Level,
+    /// The FX send or return level.
+    Fx,
+    /// The panel the tab opens.
+    Panel(Panel),
+    /// The dB readout of the fader level.
+    Output,
+    /// The strip collapse.
+    Collapse,
+    /// The submix assignment.
+    Submix,
+}
+
+/// One element of a channel template.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelElement {
+    pub kind: ElementKind,
+    pub placement: ElementPlacement,
+}
+
+impl ChannelElement {
+    pub const fn new(kind: ElementKind, placement: ElementPlacement) -> Self {
+        Self { kind, placement }
+    }
+
+    pub fn binding(self) -> Binding {
+        self.kind.binding()
+    }
+
+    pub fn label(self) -> &'static str {
+        self.placement.label()
+    }
+}
+
+/// A channel template: which channel elements exist and where they sit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelTemplate {
+    pub spec: TemplateSpec,
+    pub elements: Vec<ChannelElement>,
+}
+
+impl ChannelTemplate {
+    /// The standard composition of one template.
+    pub fn of(spec: TemplateSpec) -> Self {
+        Self {
+            spec,
+            elements: standard_elements(spec.kind, spec.features),
+        }
+    }
+
+    pub fn has_fx(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|element| element.kind == ElementKind::FxFader)
+    }
+
+    pub fn element(&self, placement: ElementPlacement) -> Option<&ChannelElement> {
+        self.elements
+            .iter()
+            .find(|element| element.placement == placement)
+    }
+}
+
+/// The elements of a standard template.
+///
+/// An absent feature leaves its row empty: the tab is missing from the list
+/// but the rows below it keep their position.
+pub fn standard_elements(kind: ChannelKind, features: Features) -> Vec<ChannelElement> {
+    use ElementKind as K;
+    use ElementPlacement as P;
+
+    let button = match kind {
+        ChannelKind::Output => Action::Cue,
+        ChannelKind::Input | ChannelKind::Playback => Action::Solo,
+    };
+    let mut elements = vec![
+        ChannelElement::new(K::Name, P::Name),
+        ChannelElement::new(K::Pan, P::Pan),
+        ChannelElement::new(K::Button(Action::Mute), P::ButtonLeft),
+        ChannelElement::new(K::Button(button), P::ButtonRight),
+        ChannelElement::new(K::Readout(ChannelSide::Left), P::ReadoutLeft),
+        ChannelElement::new(K::Readout(ChannelSide::Right), P::ReadoutRight),
+        ChannelElement::new(K::Meter, P::Meter),
+        ChannelElement::new(K::Fader, P::Fader),
+        ChannelElement::new(K::Level, P::Level),
+        ChannelElement::new(K::Minimize, P::Minimize),
+    ];
+    if features.fx {
+        elements.push(ChannelElement::new(K::FxFader, P::Fx));
+    }
+    for (panel, present) in [
+        (Panel::Trim, features.trim),
+        (Panel::Settings, true),
+        (Panel::Eq, features.eq),
+        (Panel::Dynamics, features.dynamics),
+    ] {
+        if present {
+            elements.push(ChannelElement::new(K::Tab(panel), P::Stack(panel)));
+        }
+    }
+    if kind != ChannelKind::Output {
+        elements.push(ChannelElement::new(K::Submix, P::Submix));
+    }
+    elements
+}
+
+/// The resolved rectangle of one channel element at one zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedElement {
+    pub element: ChannelElement,
+    /// Content or glyph rectangle of the element.
+    pub rect: Rect,
+    /// Face of an element that reaches the card's right edge.
+    pub face: Option<Rect>,
+}
+
+/// Resolved geometry for one channel template at one zoom.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripLayout {
     pub scale: f32,
     pub card: Rect,
     pub content: Rect,
-    pub name: Rect,
-    pub pan: Rect,
-    pub buttons: [Rect; 2],
-    pub readouts: [Rect; 2],
-    pub vu: Rect,
-    /// Full meter+grab+track canvas; `fader` is the track inside it.
+    /// Drawing surface of the channel fader, from the VU through the cap.
     pub fader_canvas: Rect,
-    pub fader: Rect,
-    pub fx: Option<Rect>,
-    /// Glyph columns for T, gear, EQ, D.
-    pub tab_glyphs: [Rect; 4],
-    /// Faces for T, gear, EQ, D; each reaches the card's right edge.
-    pub tab_faces: [Rect; 4],
-    pub db_readout: Rect,
-    pub collapse_glyph: Rect,
-    pub collapse_face: Rect,
-    pub submix: Option<Rect>,
+    /// Resolved elements in template order.
+    pub elements: Vec<ResolvedElement>,
+    /// Glyph and face of `MR2` to `MR5`, drawn even when the template has no
+    /// tab there so the reserved row stays visible.
+    pub stack_tabs: [(Rect, Rect); 4],
 }
 
 impl StripLayout {
-    pub fn for_kind(kind: ChannelKind, scale: f32, features: Features) -> Self {
-        Self::for_metrics(kind, scale, features, &LayoutMetrics::default())
+    /// Resolve every element of a template, or report the first element the
+    /// channel kind cannot place.
+    pub fn for_template(
+        template: &ChannelTemplate,
+        m: &LayoutMetrics,
+        scale: f32,
+    ) -> Result<Self, String> {
+        Self::resolve(template.spec.kind, &template.elements, m, scale)
     }
 
-    /// Resolve one template against explicit logical metrics.  This is the
-    /// entry point used by the JSON configuration loader and the preview.
+    /// Resolve the standard composition of a channel kind.
     pub fn for_metrics(
         kind: ChannelKind,
         scale: f32,
         features: Features,
         m: &LayoutMetrics,
     ) -> Self {
+        Self::resolve(kind, &standard_elements(kind, features), m, scale)
+            .expect("a standard template always resolves")
+    }
+
+    pub fn for_kind(kind: ChannelKind, scale: f32, features: Features) -> Self {
+        Self::for_metrics(kind, scale, features, &LayoutMetrics::default())
+    }
+
+    fn resolve(
+        kind: ChannelKind,
+        elements: &[ChannelElement],
+        m: &LayoutMetrics,
+        scale: f32,
+    ) -> Result<Self, String> {
+        let has_fx = elements
+            .iter()
+            .any(|element| element.kind == ElementKind::FxFader);
+        let grid = Grid::resolve(kind, has_fx, m, scale);
+        let mut resolved = Vec::with_capacity(elements.len());
+        for element in elements {
+            let (rect, face) = grid.placement(element.placement).ok_or_else(|| {
+                format!(
+                    "a {} has no {} element",
+                    kind.label(),
+                    element.placement.label()
+                )
+            })?;
+            resolved.push(ResolvedElement {
+                element: *element,
+                rect,
+                face,
+            });
+        }
+        Ok(Self {
+            scale,
+            card: grid.card,
+            content: grid.content,
+            fader_canvas: grid.fader_canvas,
+            elements: resolved,
+            stack_tabs: grid
+                .tab_glyphs
+                .into_iter()
+                .zip(grid.tab_faces)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("four tab rows"),
+        })
+    }
+
+    /// Rect of an element by placement.
+    pub fn rect(&self, placement: ElementPlacement) -> Option<Rect> {
+        self.elements
+            .iter()
+            .find(|element| element.element.placement == placement)
+            .map(|element| element.rect)
+    }
+
+    /// Face of an element by placement, for elements that reach the right edge.
+    pub fn face(&self, placement: ElementPlacement) -> Option<Rect> {
+        self.elements
+            .iter()
+            .find(|element| element.element.placement == placement)
+            .and_then(|element| element.face)
+    }
+
+    /// The element of a given kind.
+    pub fn element(&self, kind: ElementKind) -> Option<&ResolvedElement> {
+        self.elements
+            .iter()
+            .find(|element| element.element.kind == kind)
+    }
+
+    /// Content centre line in this layout's coordinate space.
+    pub fn centre_x(&self) -> f32 {
+        self.content.centre_x()
+    }
+}
+
+/// Candidate rectangles for every placement, at one zoom.
+struct Grid {
+    card: Rect,
+    content: Rect,
+    name: Rect,
+    pan: Rect,
+    buttons: [Rect; 2],
+    readouts: [Rect; 2],
+    vu: Rect,
+    fader_canvas: Rect,
+    fader: Rect,
+    fx: Option<Rect>,
+    tab_glyphs: [Rect; 4],
+    tab_faces: [Rect; 4],
+    db_readout: Rect,
+    collapse_glyph: Rect,
+    collapse_face: Rect,
+    submix: Option<Rect>,
+}
+
+impl Grid {
+    fn resolve(kind: ChannelKind, has_fx: bool, m: &LayoutMetrics, scale: f32) -> Self {
         let r =
             |x: f32, y: f32, w: f32, h: f32| Rect::new(x * scale, y * scale, w * scale, h * scale);
 
@@ -440,7 +836,7 @@ impl StripLayout {
         let vu = r(m.content_x + m.vu_x, middle_y, m.vu_w, m.middle_h);
         let fader_canvas = r(m.content_x, middle_y, m.fader_canvas_w, m.middle_h);
         let fader = r(m.content_x + m.track_x, middle_y, m.track_w, m.middle_h);
-        let fx = features.fx.then(|| {
+        let fx = has_fx.then(|| {
             r(
                 m.content_x + m.tab_x + (m.tab_w - m.fx_w) / 2.0,
                 middle_y,
@@ -448,7 +844,7 @@ impl StripLayout {
                 m.fx_h,
             )
         });
-        let tab_y = middle_y + if features.fx { m.tab_top_with_fx } else { 0.0 };
+        let tab_y = middle_y + if has_fx { m.tab_top_with_fx } else { 0.0 };
         let tab_glyphs = [
             r(m.content_x + m.tab_x, tab_y, m.tab_w, m.tab_h),
             r(
@@ -495,7 +891,6 @@ impl StripLayout {
         };
 
         Self {
-            scale,
             card: r(0.0, 0.0, m.strip_w, m.strip_h),
             content,
             name,
@@ -515,59 +910,27 @@ impl StripLayout {
         }
     }
 
-    /// Content centre line in this layout's coordinate space.
-    pub fn centre_x(&self) -> f32 {
-        self.content.centre_x()
-    }
-
-    /// All visible element rectangles, for preview and invariant checks.
-    pub fn element_rects(&self) -> Vec<Rect> {
-        self.elements().into_iter().map(|(_, rect)| rect).collect()
-    }
-
-    /// Visible elements with stable names, used by the invariant checks and
-    /// the configuration diagnostics.
-    pub fn elements(&self) -> Vec<(&'static str, Rect)> {
-        let mut elements = vec![
-            ("name", self.name),
-            ("pan", self.pan),
-            ("button_left", self.buttons[0]),
-            ("button_right", self.buttons[1]),
-            ("readout_left", self.readouts[0]),
-            ("readout_right", self.readouts[1]),
-            ("vu", self.vu),
-            ("fader_canvas", self.fader_canvas),
-            ("fader", self.fader),
-            ("db_readout", self.db_readout),
-            ("collapse_glyph", self.collapse_glyph),
-            ("collapse_face", self.collapse_face),
-        ];
-        if let Some(fx) = self.fx {
-            elements.push(("fx", fx));
+    fn placement(&self, placement: ElementPlacement) -> Option<(Rect, Option<Rect>)> {
+        match placement {
+            ElementPlacement::Name => Some((self.name, None)),
+            ElementPlacement::Pan => Some((self.pan, None)),
+            ElementPlacement::ButtonLeft => Some((self.buttons[0], None)),
+            ElementPlacement::ButtonRight => Some((self.buttons[1], None)),
+            ElementPlacement::ReadoutLeft => Some((self.readouts[0], None)),
+            ElementPlacement::ReadoutRight => Some((self.readouts[1], None)),
+            ElementPlacement::Meter => Some((self.vu, None)),
+            ElementPlacement::Fader => Some((self.fader, None)),
+            ElementPlacement::Fx => self.fx.map(|rect| (rect, None)),
+            ElementPlacement::Stack(panel) => {
+                let index = panel.stack_index();
+                Some((self.tab_glyphs[index], Some(self.tab_faces[index])))
+            }
+            ElementPlacement::Level => Some((self.db_readout, None)),
+            ElementPlacement::Minimize => Some((self.collapse_glyph, Some(self.collapse_face))),
+            ElementPlacement::Submix => self.submix.map(|rect| (rect, None)),
         }
-        for (index, glyph) in self.tab_glyphs.iter().enumerate() {
-            elements.push((TAB_GLYPH_NAMES[index], *glyph));
-            elements.push((TAB_FACE_NAMES[index], self.tab_faces[index]));
-        }
-        if let Some(submix) = self.submix {
-            elements.push(("submix", submix));
-        }
-        elements
     }
 }
-
-const TAB_GLYPH_NAMES: [&str; 4] = [
-    "tab_glyph_trim",
-    "tab_glyph_settings",
-    "tab_glyph_eq",
-    "tab_glyph_dynamics",
-];
-const TAB_FACE_NAMES: [&str; 4] = [
-    "tab_face_trim",
-    "tab_face_settings",
-    "tab_face_eq",
-    "tab_face_dynamics",
-];
 
 /// Shared visual tokens used by the preview and checked against the GUI by
 /// parity tests.  Keeping them here prevents the preview from quietly
@@ -750,106 +1113,153 @@ mod tests {
         StripLayout::for_kind(kind, 1.0, Features::default())
     }
 
+    fn rect(layout: &StripLayout, placement: ElementPlacement) -> Rect {
+        layout
+            .rect(placement)
+            .unwrap_or_else(|| panic!("{} is missing", placement.label()))
+    }
+
+    fn tab(layout: &StripLayout, panel: Panel) -> Rect {
+        rect(layout, ElementPlacement::Stack(panel))
+    }
+
+    fn standard(id: TemplateId) -> StripLayout {
+        let spec = TEMPLATES
+            .iter()
+            .copied()
+            .find(|spec| spec.id == id)
+            .expect("a standard template");
+        StripLayout::for_template(&ChannelTemplate::of(spec), &LayoutMetrics::default(), 1.0)
+            .expect("a standard template resolves")
+    }
+
     fn approx(a: f32, b: f32) {
         assert!((a - b).abs() < 0.01, "expected {b}, got {a}");
+    }
+
+    fn every_rect(layout: &StripLayout) -> Vec<(&'static str, Rect)> {
+        let mut rects: Vec<(&'static str, Rect)> = layout
+            .elements
+            .iter()
+            .map(|element| (element.element.label(), element.rect))
+            .collect();
+        rects.extend(
+            layout
+                .elements
+                .iter()
+                .filter_map(|element| element.face.map(|face| (element.element.label(), face))),
+        );
+        rects.push(("fader canvas", layout.fader_canvas));
+        rects
     }
 
     #[test]
     fn rows_sum_to_the_standard_height() {
         let l = layout(ChannelKind::Input);
         approx(l.card.height, STRIP_H);
-        approx(l.name.y, CONTENT_Y);
-        approx(l.pan.y, 18.0);
-        approx(l.buttons[0].y, 73.0);
-        approx(l.readouts[0].y, 92.0);
-        approx(l.vu.y, 111.0);
-        approx(l.fader.y, 111.0);
-        approx(l.db_readout.y, 317.0);
-        approx(l.submix.unwrap().y, 332.0);
-        approx(l.submix.unwrap().bottom(), STRIP_H);
+        approx(rect(&l, ElementPlacement::Name).y, CONTENT_Y);
+        approx(rect(&l, ElementPlacement::Pan).y, 18.0);
+        approx(rect(&l, ElementPlacement::ButtonLeft).y, 73.0);
+        approx(rect(&l, ElementPlacement::ReadoutLeft).y, 92.0);
+        approx(rect(&l, ElementPlacement::Meter).y, 111.0);
+        approx(rect(&l, ElementPlacement::Fader).y, 111.0);
+        approx(rect(&l, ElementPlacement::Level).y, 317.0);
+        let submix = rect(&l, ElementPlacement::Submix);
+        approx(submix.y, 332.0);
+        approx(submix.bottom(), STRIP_H);
     }
 
     #[test]
     fn vu_and_fader_share_top_bottom_height_and_centre() {
         let l = layout(ChannelKind::Input);
-        approx(l.vu.y, l.fader.y);
-        approx(l.vu.bottom(), l.fader.bottom());
-        approx(l.vu.width, VU_W);
-        approx(l.fader.width, TRACK_W);
+        let vu = rect(&l, ElementPlacement::Meter);
+        let fader = rect(&l, ElementPlacement::Fader);
+        approx(vu.y, fader.y);
+        approx(vu.bottom(), fader.bottom());
+        approx(vu.width, VU_W);
+        approx(fader.width, TRACK_W);
         approx(l.fader_canvas.x, CONTENT_X);
         approx(l.fader_canvas.width, FADER_CANVAS_W);
-        assert!(l.fader_canvas.contains(l.vu));
-        assert!(l.fader_canvas.contains(l.fader));
-        approx(l.fader.x, CONTENT_X + TRACK_X);
-        assert!(l.vu.right() < l.fader.x);
-        approx(l.fader.centre_x(), l.centre_x());
+        assert!(l.fader_canvas.contains(vu));
+        assert!(l.fader_canvas.contains(fader));
+        approx(fader.x, CONTENT_X + TRACK_X);
+        assert!(vu.right() < fader.x);
+        approx(fader.centre_x(), l.centre_x());
     }
 
     #[test]
     fn top_rows_and_readout_share_the_centre_line() {
         let l = layout(ChannelKind::Input);
-        approx(l.name.centre_x(), l.centre_x());
-        approx(l.pan.centre_x(), l.centre_x());
-        approx((l.buttons[0].right() + l.buttons[1].x) / 2.0, l.centre_x());
-        approx(
-            (l.readouts[0].right() + l.readouts[1].x) / 2.0,
-            l.centre_x(),
-        );
-        approx(l.db_readout.centre_x(), l.centre_x());
+        approx(rect(&l, ElementPlacement::Name).centre_x(), l.centre_x());
+        approx(rect(&l, ElementPlacement::Pan).centre_x(), l.centre_x());
+        let left = rect(&l, ElementPlacement::ButtonLeft);
+        let right = rect(&l, ElementPlacement::ButtonRight);
+        approx((left.right() + right.x) / 2.0, l.centre_x());
+        let readout_left = rect(&l, ElementPlacement::ReadoutLeft);
+        let readout_right = rect(&l, ElementPlacement::ReadoutRight);
+        approx((readout_left.right() + readout_right.x) / 2.0, l.centre_x());
+        approx(rect(&l, ElementPlacement::Level).centre_x(), l.centre_x());
     }
 
     #[test]
     fn tab_faces_reach_the_right_edge_and_keep_the_glyph_centred() {
         let l = layout(ChannelKind::Input);
-        for (glyph, face) in l.tab_glyphs.iter().zip(l.tab_faces.iter()) {
+        for panel in Panel::ALL {
+            let glyph = tab(&l, panel);
+            let face = l
+                .face(ElementPlacement::Stack(panel))
+                .unwrap_or_else(|| panic!("{} has no face", panel.label()));
             approx(face.right(), STRIP_W);
             approx(glyph.centre_x(), face.x + TAB_W / 2.0);
-            assert!(face.contains(*glyph));
+            assert!(face.contains(glyph));
         }
-        approx(l.collapse_face.right(), STRIP_W);
-        approx(
-            l.collapse_glyph.centre_x(),
-            l.collapse_face.x + COLLAPSE_W / 2.0,
+        let minimize = rect(&l, ElementPlacement::Minimize);
+        let minimize_face = l.face(ElementPlacement::Minimize).expect("minimize face");
+        approx(minimize_face.right(), STRIP_W);
+        approx(minimize.centre_x(), minimize_face.x + COLLAPSE_W / 2.0);
+    }
+
+    #[test]
+    fn every_tab_row_reaches_the_right_edge_without_an_element() {
+        // A playback has no Trim tab; the reserved row still has geometry.
+        let l = standard(TemplateId::PlaybackStereo);
+        assert!(
+            l.rect(ElementPlacement::Stack(Panel::Trim)).is_none(),
+            "the playback template has no Trim tab"
         );
+        for (glyph, face) in l.stack_tabs {
+            approx(face.right(), STRIP_W);
+            assert!(face.contains(glyph));
+        }
     }
 
     #[test]
     fn the_submix_bar_is_full_width_and_flush_with_the_bottom() {
         for kind in [ChannelKind::Input, ChannelKind::Playback] {
             let l = layout(kind);
-            let s = l.submix.unwrap();
+            let s = rect(&l, ElementPlacement::Submix);
             approx(s.x, 0.0);
             approx(s.width, STRIP_W);
             approx(s.bottom(), STRIP_H);
         }
-        assert!(layout(ChannelKind::Output).submix.is_none());
+        assert!(layout(ChannelKind::Output)
+            .rect(ElementPlacement::Submix)
+            .is_none());
     }
 
     #[test]
     fn visible_elements_do_not_overlap() {
         let l = layout(ChannelKind::Input);
-        let slots = vec![
-            l.name,
-            l.pan,
-            l.buttons[0],
-            l.buttons[1],
-            l.readouts[0],
-            l.readouts[1],
-            l.vu,
-            l.fader,
-            l.db_readout,
-            l.collapse_glyph,
-            l.submix.unwrap(),
-        ];
-        for i in 0..slots.len() {
-            for j in (i + 1)..slots.len() {
+        let rects: Vec<Rect> = l.elements.iter().map(|element| element.rect).collect();
+        for i in 0..rects.len() {
+            for j in (i + 1)..rects.len() {
                 assert!(
-                    !slots[i].overlaps(slots[j]),
-                    "slots {} and {} overlap: {:?} / {:?}",
-                    i,
-                    j,
-                    slots[i],
-                    slots[j]
+                    !rects[i].overlaps(rects[j]),
+                    "{} and {} overlap: {:?} / {:?}",
+                    l.elements[i].element.label(),
+                    l.elements[j].element.label(),
+                    rects[i],
+                    rects[j]
                 );
             }
         }
@@ -863,8 +1273,8 @@ mod tests {
             ChannelKind::Output,
         ] {
             let l = layout(kind);
-            for slot in l.element_rects() {
-                assert!(l.card.contains(slot), "{slot:?} leaves the card");
+            for (label, rect) in every_rect(&l) {
+                assert!(l.card.contains(rect), "{label} leaves the card: {rect:?}");
             }
         }
     }
@@ -874,20 +1284,101 @@ mod tests {
         let l = StripLayout::for_kind(ChannelKind::Input, 1.5, Features::default());
         approx(l.card.width, STRIP_W * 1.5);
         approx(l.card.height, STRIP_H * 1.5);
-        approx(l.vu.height, MIDDLE_H * 1.5);
-        approx(l.fader.centre_x(), l.centre_x());
-        for (glyph, face) in l.tab_glyphs.iter().zip(l.tab_faces.iter()) {
+        approx(rect(&l, ElementPlacement::Meter).height, MIDDLE_H * 1.5);
+        approx(rect(&l, ElementPlacement::Fader).centre_x(), l.centre_x());
+        for panel in Panel::ALL {
+            let glyph = tab(&l, panel);
+            let face = l.face(ElementPlacement::Stack(panel)).expect("tab face");
             approx(face.right(), STRIP_W * 1.5);
             approx(glyph.centre_x(), face.x + TAB_W * 1.5 / 2.0);
         }
     }
 
     #[test]
-    fn an_output_has_no_submix_and_no_trim_slot_in_the_spec() {
-        let l = layout(ChannelKind::Output);
-        assert!(l.fx.is_some());
-        assert!(l.submix.is_none());
-        approx(l.tab_glyphs[0].y, l.vu.y + FX_H + 8.0);
+    fn an_output_has_no_submix_and_no_trim_tab() {
+        let l = standard(TemplateId::ControlRoom);
+        assert!(l.rect(ElementPlacement::Fx).is_some());
+        assert!(l.rect(ElementPlacement::Submix).is_none());
+        assert!(l.rect(ElementPlacement::Stack(Panel::Trim)).is_none());
+        approx(
+            l.stack_tabs[Panel::Trim.stack_index()].0.y,
+            rect(&l, ElementPlacement::Meter).y + FX_H + 8.0,
+        );
+    }
+
+    #[test]
+    fn a_template_declares_each_element_and_placement_once() {
+        for spec in TEMPLATES {
+            let template = ChannelTemplate::of(*spec);
+            let mut placements: Vec<ElementPlacement> = template
+                .elements
+                .iter()
+                .map(|element| element.placement)
+                .collect();
+            let before = placements.len();
+            placements.sort_by_key(|placement| placement.label());
+            placements.dedup();
+            assert_eq!(
+                before,
+                placements.len(),
+                "{:?} repeats a placement",
+                spec.id
+            );
+
+            let mut kinds: Vec<ElementKind> = template
+                .elements
+                .iter()
+                .map(|element| element.kind)
+                .collect();
+            let before = kinds.len();
+            kinds.sort_by_key(|kind| kind.label());
+            kinds.dedup();
+            assert_eq!(before, kinds.len(), "{:?} repeats an element", spec.id);
+        }
+    }
+
+    #[test]
+    fn every_standard_template_resolves_to_the_same_grid() {
+        for spec in TEMPLATES {
+            let template = ChannelTemplate::of(*spec);
+            let layouts = StripLayout::for_template(&template, &LayoutMetrics::default(), 1.0)
+                .expect("a standard template resolves");
+            let direct = StripLayout::for_kind(spec.kind, 1.0, spec.features);
+            assert_eq!(layouts.elements, direct.elements, "{:?}", spec.id);
+        }
+    }
+
+    #[test]
+    fn an_element_outside_the_channel_kind_is_reported() {
+        let spec = TEMPLATES
+            .iter()
+            .copied()
+            .find(|spec| spec.kind == ChannelKind::Output)
+            .expect("an output template");
+        let mut template = ChannelTemplate::of(spec);
+        template.elements.push(ChannelElement::new(
+            ElementKind::Submix,
+            ElementPlacement::Submix,
+        ));
+        let error = StripLayout::for_template(&template, &LayoutMetrics::default(), 1.0)
+            .expect_err("an output has no submix");
+        assert!(error.contains("no B2"), "{error}");
+    }
+
+    #[test]
+    fn the_standard_elements_bind_to_the_expected_state() {
+        let template = ChannelTemplate::of(TEMPLATES[0]);
+        let bindings: Vec<Binding> = template
+            .elements
+            .iter()
+            .map(|element| element.binding())
+            .collect();
+        assert!(bindings.contains(&Binding::Name));
+        assert!(bindings.contains(&Binding::Meter));
+        assert!(bindings.contains(&Binding::Level));
+        assert!(bindings.contains(&Binding::Toggle(Action::Mute)));
+        assert!(bindings.contains(&Binding::Toggle(Action::Solo)));
+        assert!(bindings.contains(&Binding::Panel(Panel::Eq)));
     }
 }
 
@@ -1101,11 +1592,19 @@ impl GuiLayoutConfig {
         }
         for template in &self.templates {
             let layout = self.layout(*template, 1.0);
-            for (name, rect) in layout.elements() {
+            for (label, rect) in layout
+                .elements
+                .iter()
+                .flat_map(|element| {
+                    std::iter::once((element.element.label(), element.rect))
+                        .chain(element.face.map(|face| (element.element.label(), face)))
+                })
+                .chain(std::iter::once(("fader canvas", layout.fader_canvas)))
+            {
                 if !layout.card.contains(rect) {
                     return Err(format!(
-                        "template {:?}: the {} element leaves the {} x {} card",
-                        template.id, name, m.strip_w, m.strip_h
+                        "template {:?}: the {label} element leaves the {} x {} card",
+                        template.id, m.strip_w, m.strip_h
                     ));
                 }
             }
@@ -1118,27 +1617,28 @@ impl GuiLayoutConfig {
                 }
                 Ok(())
             };
+            let placement = |placement: ElementPlacement| layout.rect(placement);
             centred(
                 "geometry.pan_x and pan_w",
-                layout.pan,
+                placement(ElementPlacement::Pan).expect("a standard template has a pan knob"),
                 "pan_x = (content_w - pan_w) / 2",
             )?;
             centred(
                 "geometry.db_x and db_w",
-                layout.db_readout,
+                placement(ElementPlacement::Level)
+                    .expect("a standard template has a level readout"),
                 "db_x = (content_w - db_w) / 2",
             )?;
             centred(
                 "geometry.track_x and track_w",
-                layout.fader,
+                placement(ElementPlacement::Fader).expect("a standard template has a fader"),
                 "track_x = (content_w - track_w) / 2",
             )?;
-            let pair = Rect::new(
-                layout.buttons[0].x,
-                layout.buttons[0].y,
-                layout.buttons[1].right() - layout.buttons[0].x,
-                layout.buttons[0].height,
-            );
+            let left = placement(ElementPlacement::ButtonLeft)
+                .expect("a standard template has a left button");
+            let right = placement(ElementPlacement::ButtonRight)
+                .expect("a standard template has a right button");
+            let pair = Rect::new(left.x, left.y, right.right() - left.x, left.height);
             centred(
                 "geometry.button_w and button_gap",
                 pair,

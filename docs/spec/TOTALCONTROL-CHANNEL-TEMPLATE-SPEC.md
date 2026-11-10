@@ -10,9 +10,11 @@ GUI and the layout preview.  It is the developer-facing form of
 |---|---|
 | `Features` | Which optional controls exist: FX, Trim, EQ, Dynamics |
 | `TemplateSpec` | A named standard channel: kind, features, mono/stereo |
+| `ChannelElement` | One element: kind, placement and the binding its kind implies |
+| `ChannelTemplate` | The elements of one template and where they sit |
 | `StripLayout` | Logical rectangles resolved for one template and one zoom |
-| Preview | Renders the resolved rectangles and the semantic colour scheme |
-| Runtime | Selects a standard channel and fills its dynamic slots |
+| Preview | Renders the resolved elements and the semantic colour scheme |
+| Runtime | Selects a standard channel and fills its element bindings |
 
 The specification remains the design authority.  `totalcontrol-layout` is
 the executable form of the geometry and the template list.
@@ -29,8 +31,76 @@ the executable form of the geometry and the template list.
 | Output mono | output | no | yes | no | yes | yes |
 | Control Room | output | yes | yes | no | yes | yes |
 
-A template owns the presence of its optional slots.  The runtime must not
-independently decide that a channel has a different set of slots.
+A template owns the presence of its optional elements.  The runtime must not
+independently decide that a channel has a different set of elements.
+
+## Elements and placement
+
+A channel template is a list of channel elements.  An element is a kind and a
+placement; the kind fixes the binding.  `totalcontrol-layout` resolves the
+list to one `StripLayout`, so the preview and the runtime render the same
+composition.
+
+### Placements
+
+Each placement is one position of the strip grid, using the references of
+`TOTALCONTROL-GUI-SPEC.md` §2.8.
+
+| Placement | Reference | Position |
+|---|---|---|
+| `Name` | T1 | name and type tag |
+| `Pan` | T2 | pan or balance knob |
+| `ButtonLeft` | TL3 | left button |
+| `ButtonRight` | TR3 | right button |
+| `ReadoutLeft` | M1L | left channel readout |
+| `ReadoutRight` | M1R | right channel readout |
+| `Meter` | ML | VU element |
+| `Fader` | MC | channel fader |
+| `Fx` | MR1 | FX send or return fader |
+| `Stack(Trim)` | MR2 | Trim tab |
+| `Stack(Settings)` | MR3 | settings gear |
+| `Stack(Eq)` | MR4 | EQ tab |
+| `Stack(Dynamics)` | MR5 | Dynamics tab |
+| `Level` | B1 | dB readout |
+| `Minimize` | B1R | collapse face |
+| `Submix` | B2 | submix bar |
+
+The five right-hand rows keep their positions even when a template places no
+element in them, so the rows below a missing tab do not move.
+
+### Kinds and bindings
+
+| Kind | Binding | Drawn as |
+|---|---|---|
+| `Name` | channel name | name text |
+| `Pan` | pan or balance value | knob |
+| `Button(Mute)` | mute | `M` |
+| `Button(Solo)` | solo | `S` |
+| `Button(Cue)` | cue | `CUE` |
+| `Readout(Left)` | left channel strength | text readout |
+| `Readout(Right)` | right channel strength | text readout |
+| `Meter` | meter level | VU bars and ruler |
+| `Fader` | send or output level | fader slot, fill and cap |
+| `FxFader` | FX send or return level | thin fader |
+| `Tab(panel)` | the panel it opens | `T`, gear, `EQ`, `D` |
+| `Level` | output level | dB text |
+| `Minimize` | collapse | `−` |
+| `Submix` | submix assignment | bottom bar |
+
+### Standard composition
+
+Every template places the name, the pan knob, both buttons, both readouts, the
+meter, the fader, the level readout and the minimize face.  Inputs and
+playbacks add the submix bar.  The FX fader follows the FX feature.  The four
+tab rows follow Trim, EQ and Dynamics; the settings gear is always present.
+An absent tab leaves its row empty.
+
+### Resolution
+
+Elements resolve in template order.  `StripLayout` exposes the rectangle and
+the right-edge face per placement, the element per kind, and the four tab rows
+whether or not a template occupies them.  A placement the channel kind cannot
+hold, such as a submix bar on an output, is an error.
 
 ## Geometry
 
@@ -79,8 +149,8 @@ The schema tests enforce:
 
 ### Developer workflow
 
-1. Change the logical defaults or slot rules in
-   `ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
+1. Change the logical defaults, the element composition of a template or the
+   row rules in `ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
 2. Add or update the relevant invariant test.
 3. Render the preview:
 
@@ -92,7 +162,7 @@ The schema tests enforce:
    The second argument is the zoom.  The SVG can be converted to PNG with
    `magick preview.svg preview.png`.
 4. Review the rendered sheet.
-5. Only then change runtime slot filling.
+5. Only then change runtime element filling.
 
 ## Layout configuration
 
@@ -100,9 +170,11 @@ The schema tests enforce:
 is the configuration form of this specification: one geometry, one visual
 token set, one colour scheme and a list of channel templates.
 
-The document describes the whole sheet, not the placement of an individual
-channel element.  Placing each channel element and binding it to data is the
-next step.
+The document describes the whole sheet: one geometry, one visual token set,
+one colour scheme and the standard templates.  It cannot yet place an
+individual channel element; the composition of a template is compiled into
+the crate (see [Elements and placement](#elements-and-placement)).  Placing
+elements and their bindings through the document is the next step.
 
 The preview is the only consumer.  The runtime still renders the compiled
 defaults.
@@ -388,10 +460,11 @@ test compares the preview tokens with the runtime constants so a live tweak
 cannot silently diverge.
 
 The preview is a layout proof, not a pixel copy of the iced renderer.  It
-shares geometry, dimensions, semantic colours and text sizes.  Font
-rasterisation, shadows, hover timing, meter interpolation and open slideouts
-are not reproduced.  Use the preview to approve structure; use
-`ui/totalcontrol/tools/ui-shot.sh` or the live GUI to approve final pixels.
+draws each resolved element by kind; a right-hand row with no tab is outlined
+so the sheet shows the reserved space.  Font rasterisation, shadows, hover
+timing, meter interpolation and open slideouts are not reproduced.  Use the
+preview to approve structure; use `ui/totalcontrol/tools/ui-shot.sh` or the
+live GUI to approve final pixels.
 
 The next fidelity step, if needed, is to extract a shared draw list from the
 live canvas widgets and have both the iced renderer and the SVG preview
