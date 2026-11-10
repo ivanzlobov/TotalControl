@@ -685,6 +685,25 @@ The user document changes the same values at runtime for the preview.  It
 does not change behaviour: the action of an element is bound to its kind in
 code, not to the document.
 
+#### 2.8.11 Layout preview
+
+`channel-preview` renders a resolved layout to SVG: the template sheet, or one
+strip with `--focus` and an element state.  It shares the geometry, the
+element composition, the visual tokens and the semantic colour scheme with the
+runtime, so a difference in geometry or composition is a defect.
+
+| Reproduced | Approximated or absent |
+|---|---|
+| card and element rectangles, zoom scaling | font rasterisation, weights, anti-aliasing |
+| element presence, placement and states | text metrics: the SVG baseline differs from the widget's box centring |
+| tab and minimize faces, B2 bar | meter animation, peak hold, motion, hover timing |
+| the semantic colours | slideout panel bodies: a labelled placeholder |
+| each bar's meter well, colour zones and the level labels behind them | sample names, readouts and levels |
+
+The preview reads no runtime state: names, readouts and levels are samples.
+Its zoom range is `0.75..3.0`; the runtime uses `0.75..1.75`.  Approve
+structure in the preview and pixels in the window.
+
 ## 3. Runtime reference
 
 The device-service boundary, command queue, model snapshots and meter bus are

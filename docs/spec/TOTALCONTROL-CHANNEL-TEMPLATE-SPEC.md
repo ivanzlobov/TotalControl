@@ -514,7 +514,9 @@ not a second runtime theme.
 ## Fidelity
 
 `VisualTokens` in the schema holds the tuned visual values: text sizes, tab
-glyph sizes, knob size, fader slot width and main/FX cap dimensions.  A GUI
+glyph sizes, knob size, fader slot width and main/FX cap dimensions.  What the
+preview reproduces and what it approximates is listed in
+[`TOTALCONTROL-GUI-SPEC.md` §2.8.11](TOTALCONTROL-GUI-SPEC.md#2811-layout-preview).  A GUI
 test compares the preview tokens with the runtime constants so a live tweak
 cannot silently diverge.
 

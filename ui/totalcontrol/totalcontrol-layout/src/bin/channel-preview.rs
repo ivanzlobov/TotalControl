@@ -500,55 +500,78 @@ fn draw_meter(
     v: &VisualTokens,
     scale: f32,
 ) {
-    fill_rect(svg, vu, "#1e1f23", "#1e1f23", 2.0 * scale);
-    let bars = if stereo { 2 } else { 1 };
+    // Each bar has its own recessed well, like the live meter: a mono bar is
+    // centred and just covers the level text, a linked pair splits the VU
+    // element into two wells with a gap.
     let gap = 2.0 * scale;
-    let bar_w = if bars == 2 {
-        (vu.width - gap) / 2.0
+    let bars = if stereo { 2 } else { 1 };
+    let bar_w = if stereo {
+        ((vu.width - gap) / 2.0).max(0.0)
     } else {
         vu.width * MONO_BAR_RATIO
     };
-    for index in 0..bars {
-        let bx = if bars == 2 {
-            vu.x + index as f32 * (bar_w + gap)
-        } else {
-            vu.centre_x() - bar_w / 2.0
-        };
-        let bar = Rect::new(bx, vu.y, bar_w, vu.height);
-        let level = 0.72 - index as f32 * 0.08;
-        let filled = Rect::new(
-            bar.x,
-            bar.y + bar.height * (1.0 - level),
-            bar.width,
-            bar.height * level,
-        );
-        let color = if level > 0.88 {
-            &c.meter.red
-        } else if level > 0.65 {
-            &c.meter.yellow
-        } else {
-            &c.meter.green
-        };
-        let _ = write!(
+    let wells: Vec<Rect> = (0..bars)
+        .map(|index| {
+            let x = if stereo {
+                vu.x + index as f32 * (bar_w + gap)
+            } else {
+                vu.centre_x() - bar_w / 2.0
+            };
+            Rect::new(x, vu.y, bar_w, vu.height)
+        })
+        .collect();
+
+    for well in &wells {
+        fill_rect(svg, *well, "#1e1f23", "#1e1f23", 2.0 * scale);
+        // Dim OVR segment at the top of the well, as the live meter draws it.
+        let clip_h = (6.0 * scale).min(well.height);
+        fill_rect(
             svg,
-            r#"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="{color}"/>"#,
-            x = filled.x,
-            y = filled.y,
-            w = filled.width,
-            h = filled.height,
+            Rect::new(well.x, well.y, well.width, clip_h),
+            "#3a1616",
+            "#3a1616",
+            0.0,
         );
     }
+
+    // Printed marks sit behind the bars, so a raised bar covers them.
     for (db, label) in VU_LABELS {
         let t = db_to_t(db);
         let y = vu.bottom() - vu.height * t;
         let _ = write!(
             svg,
-            r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="middle" dominant-baseline="middle">{label}</text>"#,
+            r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="middle" dominant-baseline="central">{label}</text>"#,
             x = vu.centre_x(),
             y = y,
             color = &c.text.primary,
             size = v.micro_size * scale,
         );
+    }
+
+    // Fixed colour zones, each filled only as far as the sample level
+    // reaches: green to -3 dB, amber to 0 dB, red above.
+    let zones = [
+        (-65.0, -3.0, &c.meter.green),
+        (-3.0, 0.0, &c.meter.yellow),
+        (0.0, 6.0, &c.meter.red),
+    ];
+    for (index, well) in wells.iter().enumerate() {
+        let level_db = -18.0 - index as f32 * 6.0;
+        let level_y = well.bottom() - well.height * db_to_t(level_db);
+        for (low, high, color) in zones {
+            let low_y = well.bottom() - well.height * db_to_t(low);
+            let high_y = well.bottom() - well.height * db_to_t(high);
+            let top = high_y.max(level_y);
+            if top < low_y {
+                fill_rect(
+                    svg,
+                    Rect::new(well.x, top, well.width, low_y - top),
+                    color,
+                    color,
+                    0.0,
+                );
+            }
+        }
     }
 }
 
@@ -746,7 +769,7 @@ fn draw_submix(svg: &mut String, bar: Rect, c: &ColorScheme, v: &VisualTokens, s
     );
     let _ = write!(
         svg,
-        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="end" dominant-baseline="middle">▸</text>"#,
+        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="end" dominant-baseline="central">▸</text>"#,
         x = bar.right() - 5.0 * scale,
         y = bar.centre_y(),
         color = &c.text.secondary,
@@ -804,7 +827,7 @@ fn draw_text_aligned(svg: &mut String, r: Rect, text: &str, color: &str, size: f
     };
     let _ = write!(
         svg,
-        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="{align}" dominant-baseline="middle">{text}</text>"#,
+        r#"<text x="{x:.1}" y="{y:.1}" fill="{color}" font-family="sans-serif" font-size="{size:.1}" text-anchor="{align}" dominant-baseline="central">{text}</text>"#,
         x = x,
         y = r.centre_y(),
         size = size,
