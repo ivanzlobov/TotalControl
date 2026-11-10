@@ -149,20 +149,19 @@ The schema tests enforce:
 
 ### Developer workflow
 
-1. Change the logical defaults, the element composition of a template or the
-   row rules in `ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
-2. Add or update the relevant invariant test.
-3. Render the preview:
+The change workflow, the file for each kind of value, and the checks that
+follow are in
+[`TOTALCONTROL-GUI-SPEC.md` §2.8.10](TOTALCONTROL-GUI-SPEC.md#2810-changing-the-layout).
 
-   ```sh
-   cd ui/totalcontrol
-   cargo run -p totalcontrol-layout --bin channel-preview -- preview.svg 2
-   ```
+The preview renders the sheet:
 
-   The second argument is the zoom.  The SVG can be converted to PNG with
-   `magick preview.svg preview.png`.
-4. Review the rendered sheet.
-5. Only then change runtime element filling.
+```sh
+cd ui/totalcontrol
+cargo run -p totalcontrol-layout --bin channel-preview -- preview.svg 2
+```
+
+The second argument is the zoom.  The SVG can be converted to PNG with
+`magick preview.svg preview.png`.
 
 ## Layout configuration
 
@@ -204,6 +203,10 @@ is a complete template object.
 
 Pixels at zoom 1.0.  The resolver multiplies each value by the zoom exactly
 once.  Widths and heights must be greater than zero; offsets may be zero.
+
+`Default` is the shipped value.  The live values are `LayoutMetrics` in
+`ui/totalcontrol/totalcontrol-layout/src/lib.rs`, and the schema carries the
+same defaults for editors; a test keeps the two in step.
 
 **Card and content**
 
@@ -262,6 +265,9 @@ once.  Widths and heights must be greater than zero; offsets may be zero.
 ### Visual tokens
 
 Pixels at zoom 1.0; every value must be greater than zero.
+
+`Default` is the shipped value; the live values are `VISUAL` in
+`ui/totalcontrol/totalcontrol-layout/src/lib.rs`.
 
 | Field | Default | Meaning |
 |---|---:|---|

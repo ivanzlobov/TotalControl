@@ -402,7 +402,39 @@ is visible without a bright white rail; the cap stays light.
 The executable template schema and the layout preview are defined in
 [`TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md).
 
-#### 2.8.1 Grid and scaling
+#### 2.8.1 Definition and sources
+
+A strip is described at three levels:
+
+| Level | Meaning | Defined by |
+|---|---|---|
+| Channel kind | input, software playback, hardware output | `ChannelKind` |
+| Channel template | a kind plus its linkage and optional elements: input mono, playback stereo, output mono | `standard_elements` in `totalcontrol-layout` |
+| Channel | one instance: AN1, SW1/2, OUT3, MAIN | the runtime channel list |
+
+The layout is global.  One set of dimensions, visual tokens and colours
+applies to every strip in every view, workspace and scene; no workspace and
+no device scene stores its own layout.
+
+Three sources answer three different questions:
+
+| Question | Source |
+|---|---|
+| What must hold: rules, invariants, element vocabulary | this specification |
+| What the values are: dimensions, font sizes, colours | `LayoutMetrics`, `VISUAL` and `ColorScheme` in `ui/totalcontrol/totalcontrol-layout/src/lib.rs` |
+| What a user changed | `$XDG_CONFIG_HOME/totalcontrol/gui-layout.json` |
+
+This section states the rules and does not repeat the values, so a tuning
+change touches the code and its generated files only.
+
+The schema at `docs/schema/gui-layout.schema.json` mirrors the values for
+editors and is kept identical to the code by a test.  The example at
+`docs/examples/gui-layout.json` is written from the built-in defaults by
+`channel-preview --example`; it is a snapshot and a regression fixture, not a
+second source.  The layout preview reads the user document; the runtime
+renders the compiled defaults.
+
+#### 2.8.2 Grid and scaling
 
 A channel is a three-area (Top, Middle, Bottom) by three-column (Left,
 Centre, Right) grid.  An element is named `ACr`, where `A` is the area, `C`
@@ -410,17 +442,19 @@ the column and `r` the row within that area; `r` is omitted when the area has
 one row.  `TC1` is the name, `TL3` the left button of the third Top row and
 `MR4` the fourth element of the right Middle stack.
 
-The full strip is 90 × 350 px at zoom 1.0.  The Top, Middle and B1 rows use a
-78 px-wide content box with 6 px left and right padding and 4 px top padding;
-there is no bottom padding.  B2 spans the full 90 px card width at the bottom
-edge.  The slideout-tab and minimize faces are the right-hand exception:
-their glyphs stay in the content box, but the face extends through the right
-padding to the card edge.  The collapsed strip is 44 × 350 px.  Every dimension, font size and gap
-is multiplied by the UI zoom (`0.75..1.75`); the aspect ratio is invariant.
+The shipped strip is 90 px wide and 350 px tall at zoom 1.0.  The Top, Middle
+and B1 rows use a content box inset on the left, right and top; there is no
+bottom inset.  B2 spans the full card width at the bottom edge.  The
+slideout-tab and minimize faces are the right-hand exception: their glyphs
+stay in the content box, but the face extends through the right padding to
+the card edge.  The collapsed strip is a separate narrow layout.
 
-Rows are separated by 1 px.  The Centre column is the reference centre line
+Every dimension, font size and gap is multiplied by the UI zoom
+(`0.75..1.75`); the aspect ratio is invariant.
+
+Rows are separated by a gap.  The Centre column is the reference centre line
 for the Top rows and the Bottom readout.  Columns are centred on their own
-line.  A feature that is absent keeps its slot, so an element below it does
+line.  An element that is absent keeps its row, so an element below it does
 not move.
 
 Channel elements never overlap, and every part of an element is inside its
@@ -436,96 +470,86 @@ When vertical space is short, the VU element and the channel fader are
 scaled down together by the same factor; their level scales stay aligned and
 no other element changes size.
 
-#### 2.8.2 Vertical rows
+#### 2.8.3 Vertical rows
 
-| Ref | Element | Column | Nominal height at zoom 1 |
-|---|---|---|---:|
-| T1 | channel name and type tag | C | 13 |
-| T2 | pan or balance knob | C | 54 |
-| T3 | `M`/`S` pair, or `M`/`CUE` pair | L / R | 18 |
-| M1 | channel strength readouts, L and R | L / R | 18 |
-| M2 | VU, fader and right-hand stack | L / C / R | 205 |
-| B1 | dB readout and collapse button | C / R | 14 |
-| B2 | submix selector, input and playback only | C | 18 |
+| Ref | Element | Column |
+|---|---|---|
+| T1 | channel name and type tag | C |
+| T2 | pan or balance knob | C |
+| T3 | `M`/`S` pair, or `M`/`CUE` pair | L / R |
+| M1 | channel strength readouts, L and R | L / R |
+| M2 | VU, fader and right-hand stack | L / C / R |
+| B1 | dB readout and collapse button | C / R |
+| B2 | submix selector, input and playback only | C |
 
-The nominal rows plus their six gaps and the 4 px top padding total 350 px;
-there is no bottom padding.  M1 is two 38 px readout cells with a 2 px gap,
-matching the T3 buttons, but drawn as text only.  The VU element, fader track
-and FX fader all start at the top of M2.  The VU OVR segment is inside the VU
-element at its top.  B1 sits directly below M2 and the fader track ends above
-it, so the cap never covers the readout.  B2 is a full-width 18 px
-bar flush with the card's bottom edge and clipped by the card radius.
-A hardware-output strip has no B2 and leaves that 18 px row and its gap empty,
-so B1 keeps the same height on every channel kind.
+The rows plus their gaps and the top padding fill the card height; there is
+no bottom padding.  M1 has two readout cells that match the T3 buttons, but
+is drawn as text only.  The VU element, fader track and FX fader all start at
+the top of M2.  The VU OVR segment is inside the VU element at its top.  B1
+sits directly below M2 and the fader track ends above it, so the cap never
+covers the readout.
 
-#### 2.8.3 Horizontal columns
+B2 is a full-width bar flush with the card's bottom edge and clipped by the
+card radius.  A hardware-output strip has no B2 and leaves that row and its
+gap empty, so B1 keeps the same height on every channel kind.
 
-These positions are content-local x coordinates at zoom 1.0; multiply by the
-zoom.  The content box is 78 px wide.
+#### 2.8.4 Horizontal columns
 
-| Element | x | Width |
-|---|---:|---:|
-| VU element, labels centred | 0 | 13 |
-| fader track area | 26 | 26 |
-| fader slot | 36.8 | 4.3 |
-| fader cap | 28 | 22 |
-| right-hand control column | 56 | 20 |
-| pan or balance knob box | 12 | 54 |
-| T3 left button | 0 | 38 |
-| T3 right button | 40 | 38 |
-| M1 left readout | 0 | 38 |
-| M1 right readout | 40 | 38 |
-| B1 collapse glyph | 59 | 19 |
-| B2 submix selector | 0 | 90 |
+| Element | Position |
+|---|---|
+| VU element | left column, labels centred |
+| fader track | centre column, centred on the content centre line |
+| fader slot | inside the track |
+| fader cap | centred on the slot |
+| right-hand control column | glyph column in the content box, faces to the card edge |
+| pan or balance knob | centre column box |
+| T3 buttons | left and right cells |
+| M1 readouts | the same cells as T3, text only |
+| B1 collapse glyph | right column, face to the card edge |
+| B2 submix selector | full card width |
 
-The T1, T2, T3, M1 and B1 rows centre on x = 39; M1 uses the same two 38 px
-cells as T3, but with no outline or fill.  The VU element occupies the left
-column at x = 0 and is 13 px wide.  The fader track is at x = 26 and centres
-on x = 39.  The 13 px between the VU element's right edge and the track is
-the level-mark lane; each mark occupies 60% of the lane-to-cap span, anchored
-at the cap end and clear of the VU.  The level labels are centred in the VU
-channel; the moving bars cover them.
+The lane between the VU element and the fader track carries the level marks;
+each mark occupies a fixed fraction of the lane-to-cap span, anchored at the
+cap end and clear of the VU.  The level labels are centred in the VU channel;
+the moving bars cover them.
 
-A linked pair draws two bars with a 2 px gap; a split or mono channel shows
-one centred bar just wide enough to cover the level text.  The labels stay
-centred in the element in both cases.
-The OVR segment occupies the top 6 px of the VU element, inside its bounds;
-the level scale runs the full element height behind it.
+A linked pair draws two bars with a gap; a split or mono channel shows one
+centred bar just wide enough to cover the level text.  The labels stay
+centred in the element in both cases.  The OVR segment occupies the top of
+the VU element, inside its bounds; the level scale runs the full element
+height behind it.
 
-M1 is drawn as text only, right-aligned inside each cell with a 2 px right
-inset so the values sit inside the edges of the T3 buttons above.  The left
-cell is the left channel and the right cell is the right channel; no `L` or `R`
+M1 is drawn as text only, right-aligned inside each cell with a small inset
+so the values sit inside the edges of the T3 buttons above.  The left cell is
+the left channel and the right cell is the right channel; no `L` or `R`
 prefix is printed.  The cell width accommodates `-99.0`; values of 100 and
 above omit the fractional part (`100`, `120`).  The values refresh every
-0.25 s; the VU bars continue at the meter tick rate.  B2 spans the full
-90 px card width at the bottom edge; its label is always centred on the
-channel width and the arrow sits at the right edge.
+0.25 s; the VU bars continue at the meter tick rate.  B2's label is always
+centred on the channel width and the arrow sits at the right edge.
 
-#### 2.8.4 Right-hand stack
+#### 2.8.5 Right-hand stack
 
 The right-hand column starts level with the top of the VU element and the
 fader track.  It holds:
 
-| Ref | Element | Height at zoom 1 | Present on |
-|---|---|---:|---|
-| MR1 | FX send or FX return fader | 66 | every strip with an FX bus |
-| MR2 | `T` trim tab | 22 | inputs and software playback |
-| MR3 | settings gear | 26 | every strip |
-| MR4 | `EQ` tab | 22 | UCX inputs and outputs |
-| MR5 | `D` dynamics tab | 22 | UCX inputs and outputs |
+| Ref | Element | Present on |
+|---|---|---|
+| MR1 | FX send or FX return fader | every strip with an FX bus |
+| MR2 | `T` trim tab | inputs and software playback |
+| MR3 | settings gear | every strip |
+| MR4 | `EQ` tab | UCX inputs and outputs |
+| MR5 | `D` dynamics tab | UCX inputs and outputs |
 
-The 20 px column is the glyph column.  The `T`/gear/`EQ`/`D` tab faces extend
-from x = 56 to the card's right edge (x = 90); the glyph stays centred at
-x = 66.  The B1 minimize button follows the same rule: its glyph column is
-x = 59..78 and its face reaches x = 90.
+The glyph column keeps its glyphs in the content box; the `T`/gear/`EQ`/`D`
+tab faces and the B1 minimize face reach the card's right edge.
 
 The FX fader has no level marks and no ruler: no tick marks, no 0 dB
-reference tick; only its coloured slot fill and cap are drawn.  The gap under
-MR1 is 8 px and the tabs inside MR3–MR5 use 6 px spacing.  A missing tab keeps
-its slot where a later element depends on it: an output gets an empty MR2,
-so the gear and the UCX tabs stay on the input grid.
+reference tick; only its coloured slot fill and cap are drawn.  The FX fader
+is followed by a gap, and the tabs below it are evenly spaced.  A missing tab
+keeps its row where a later element depends on it: an output gets an empty
+MR2, so the gear and the UCX tabs stay on the input grid.
 
-#### 2.8.5 Channel kinds
+#### 2.8.6 Channel kinds
 
 | Ref | Input | Software playback | Hardware output |
 |---|---|---|---|
@@ -547,7 +571,7 @@ A linked pair is one strip and shows two VU bars with a small gap.  A split
 pair is two adjacent strips; each has one VU bar and its own fader.  The Control Room
 output strips use the hardware-output layout; their stereo link is locked.
 
-#### 2.8.6 Examples
+#### 2.8.7 Examples
 
 Input, linked pair, UCX:
 
@@ -603,7 +627,7 @@ Hardware output, linked pair, UCX:
 └──────────────────────────────────────┘
 ```
 
-#### 2.8.7 Knobs
+#### 2.8.8 Knobs
 
 All strip and panel knobs use the same widget and print their value in the
 knob face.  Drag vertically to turn, scroll over the knob to nudge, hold
@@ -612,16 +636,54 @@ gain knob prints the left value above the right value; it remains one
 control, so dragging or scrolling changes the left value and moves the right
 value by the same delta.
 
-#### 2.8.8 Collapsed strip
+#### 2.8.9 Collapsed strip
 
-The collapsed strip is a separate 44 × 350 layout: rotated name, `M`, `S` or
+The collapsed strip is a separate narrow layout: rotated name, `M`, `S` or
 `CUE`, a VU element, a `+` expand button and a dark bottom display face.  It
-does not use the T/M/B grid.  The face is 18 px high, spans the collapsed
-card width, and uses the normal button face shape and colour; it carries no
+does not use the T/M/B grid.  The face is short, spans the collapsed card
+width, and uses the normal button face shape and colour; it carries no
 control yet.  It puts the `+` button on the B1 line.  The VU element keeps
 the normal well colour: a linked pair shows two bars, a mono or split
 channel shows one centred bar covering the level text, and the labels stay
 centred in the element.
+
+#### 2.8.10 Changing the layout
+
+The layout is defined once, in `totalcontrol-layout`.  This table names the
+place to change and what follows from it:
+
+| Change | Where | Also update |
+|---|---|---|
+| row heights, content box, column positions | `LayoutMetrics` in `ui/totalcontrol/totalcontrol-layout/src/lib.rs` | the example document, the invariant tests |
+| font sizes, knob, fader slot and cap dimensions | `VISUAL`, same file | the example document |
+| colours | `ColorScheme::default()`, same file | the example document |
+| which elements a template contains | `standard_elements`, same file | the template table in [`TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md`](TOTALCONTROL-CHANNEL-TEMPLATE-SPEC.md) |
+| a new element kind or placement | `ElementKind` and `ElementPlacement`, and `Grid::placement` | the schema enumerations, the template specification, the preview draw arm |
+| a visual state such as hover, active or an open panel | the strip widgets, and `draw_card` in the preview | this section |
+| the hand-drawn preview annotations | `totalcontrol-layout/src/bin/channel-preview.rs` | — |
+
+After changing values:
+
+```sh
+cd ui/totalcontrol
+cargo test -p totalcontrol-layout
+cargo run -p totalcontrol-layout --bin channel-preview -- /tmp/layout.svg 2
+cargo run -p totalcontrol-layout --bin channel-preview -- --example /tmp/gui-layout.json
+python3 ../../scripts/check-docs.py
+```
+
+The second command renders the sheet for review.  The third writes an example
+document plus its schema into a scratch directory; the checked-in
+`docs/examples/gui-layout.json` carries the same values and keeps its
+`../schema/gui-layout.schema.json` reference, because the schema lives in
+`docs/schema`.  A checked-in example that differs from the compiled defaults
+fails, as does a layout whose elements overlap, leave the card, leave the
+content centre line, or whose tab and minimize faces no longer reach the card
+edge.
+
+The user document changes the same values at runtime for the preview.  It
+does not change behaviour: the action of an element is bound to its kind in
+code, not to the document.
 
 ## 3. Runtime reference
 
